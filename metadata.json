@@ -1,0 +1,6 @@
+{
+  "name": "TradeMatrix Central Admin Panel",
+  "description": "Multi-Tenant Trading Platform and Central Admin Panel with real-time trading, KYC compliance, fund management, and hierarchical user control.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
