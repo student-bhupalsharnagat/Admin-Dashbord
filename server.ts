@@ -5,29 +5,33 @@ import { createServer as createViteServer } from 'vite';
 import { activeTradingDataProvider } from './server/providers/TradingDataProvider.ts';
 import { assetStorage } from './server/providers/AssetStorageProvider.ts';
 import { UserRole } from './src/types.ts';
-
-interface AuthSessionUser {
-  id: string;
-  name: string;
-  email: string;
-  role: UserRole;
-  tenant_id: string | null; // null for global SUPER_ADMIN unless simulating
-  tenant_name?: string;
-  simulated_tenant_id?: string | null; // Super Admin can filter by tenant
-}
-
-// In-memory session store for demonstrated secure cookie auth
-const sessions: Record<string, AuthSessionUser> = {};
-
-// Default initial admin session
-const defaultAdminUser: AuthSessionUser = {
-  id: 'usr-admin-01',
-  name: 'Admin User',
-  email: 'admin@tradepro.io',
-  role: 'SUPER_ADMIN',
-  tenant_id: null,
-  simulated_tenant_id: null
-};
+import {
+  authenticate,
+  requireRole,
+  requirePermission,
+  requireTenantAccess,
+  resolveStrictTenantScope
+} from './server/auth/middleware.ts';
+import {
+  filterMastersForUser,
+  filterBrokersForUser,
+  filterSubBrokersForUser,
+  filterClientsForUser,
+  filterClientScopedItems
+} from './server/auth/hierarchyFilter.ts';
+import {
+  hashPassword,
+  verifyPassword,
+  createAuthenticatedSession,
+  invalidateSession,
+  writeSecurityAuditLog
+} from './server/auth/authService.ts';
+import { getPermissionsForRole } from './server/auth/rbac.ts';
+import { runMigrations } from './server/db/migrate.ts';
+import { seedDatabase } from './server/db/seed.ts';
+import { seedAuthAndRbac } from './server/db/seedAuthUsers.ts';
+import { query } from './server/db/connection.ts';
+import { HierarchyLevel } from './server/auth/types.ts';
 
 async function startServer() {
   const app = express();
@@ -44,62 +48,16 @@ async function startServer() {
     next();
   });
 
-  // Authentication & Tenant Scoping Middleware
-  const authMiddleware = (req: Request, res: Response, next: NextFunction) => {
-    // In production we verify JWT in HttpOnly cookie or Authorization: Bearer
-    const token = req.cookies?.tradepro_session || req.headers.authorization?.replace('Bearer ', '');
-    
-    // For seamless immediate access in preview while upholding strict backend security:
-    let user = token && sessions[token] ? sessions[token] : defaultAdminUser;
-    (req as any).user = user;
-    next();
-  };
-
-  // RBAC Middleware: Enforces that role is authorized on the backend
-  const requireRoles = (allowedRoles: UserRole[]) => {
-    return (req: Request, res: Response, next: NextFunction) => {
-      const user = (req as any).user as AuthSessionUser;
-      if (!user) {
-        return res.status(401).json({ error: 'Unauthorized: No active session' });
-      }
-      if (!allowedRoles.includes(user.role)) {
-        return res.status(403).json({ 
-          error: `Forbidden: Role '${user.role}' lacks permission for this resource` 
-        });
-      }
-      next();
-    };
-  };
-
-  // Tenant Isolation Helper
-  // Ensures tenant scope is derived from backend user token and never spoofed by query params
-  const resolveTenantScope = (req: Request): string | undefined => {
-    const user = (req as any).user as AuthSessionUser;
-    if (!user) return undefined;
-    
-    // If not SUPER_ADMIN or PLATFORM_OWNER, user is strictly locked to their own tenant_id
-    if (user.role !== 'SUPER_ADMIN' && user.role !== 'PLATFORM_OWNER') {
-      return user.tenant_id || undefined;
-    }
-
-    // If SUPER_ADMIN has chosen to scope/simulate a specific tenant via header or cookie
-    if (user.simulated_tenant_id) {
-      return user.simulated_tenant_id;
-    }
-
-    // Optional filter query param allowed ONLY for SUPER_ADMIN
-    if (req.query.tenantId && typeof req.query.tenantId === 'string' && req.query.tenantId !== 'ALL') {
-      return req.query.tenantId;
-    }
-
-    return undefined;
-  };
+  // Production JWT authentication and authorization helpers
+  const authMiddleware = authenticate;
+  const requireRoles = (roles: (UserRole | string)[]) => requireRole(roles as any);
+  const resolveTenantScope = (req: Request) => resolveStrictTenantScope(req);
 
   // ----------------------------------------------------
-  // AUTH API
+  // CENTRAL AUTHENTICATION & JWT APIS (Phase 4 Production)
   // ----------------------------------------------------
-  app.get('/api/auth/me', authMiddleware, (req, res) => {
-    const user = (req as any).user;
+  app.get('/api/auth/me', authenticate, async (req, res) => {
+    const user = req.user!;
     res.json({
       user: {
         id: user.id,
@@ -107,59 +65,373 @@ async function startServer() {
         email: user.email,
         role: user.role,
         tenant_id: user.tenant_id,
+        tenant_name: user.tenant_name,
+        hierarchy_level: user.hierarchy_level,
+        hierarchy_id: user.hierarchy_id,
+        status: user.status,
+        permissions: user.permissions,
         simulated_tenant_id: user.simulated_tenant_id
       }
     });
   });
 
-  app.post('/api/auth/login', (req, res) => {
-    const { email, role, tenantId } = req.body;
-    const sessionToken = `sess_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-    
-    const userSession: AuthSessionUser = {
-      id: `usr-${Date.now()}`,
-      name: email ? email.split('@')[0] : 'Admin User',
-      email: email || 'admin@tradepro.io',
-      role: (role as UserRole) || 'SUPER_ADMIN',
-      tenant_id: role === 'SUPER_ADMIN' ? null : (tenantId || 'TNT-001'),
-      simulated_tenant_id: null
-    };
+  app.post('/api/auth/login', async (req, res) => {
+    try {
+      const { email, password } = req.body;
+      const ipAddress = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
+      const userAgent = req.headers['user-agent'] || 'Desktop Browser';
 
-    sessions[sessionToken] = userSession;
-    res.cookie('tradepro_session', sessionToken, {
-      httpOnly: true,
-      sameSite: 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000
-    });
+      if (!email || !password) {
+        return res.status(400).json({
+          error: 'MISSING_CREDENTIALS',
+          message: 'Email and password are required.'
+        });
+      }
 
-    res.json({ success: true, user: userSession, token: sessionToken });
+      // Query user from PostgreSQL database
+      const { rows } = await query<{
+        id: string;
+        tenant_id: string | null;
+        name: string;
+        email: string;
+        role: string;
+        status: string;
+        password_hash: string | null;
+        hierarchy_level: string | null;
+        hierarchy_id: string | null;
+        is_suspended: boolean | null;
+      }>(
+        `SELECT id, tenant_id, name, email, role, status, password_hash, hierarchy_level, hierarchy_id, is_suspended
+         FROM users
+         WHERE LOWER(email) = LOWER($1) LIMIT 1`,
+        [email.trim()]
+      );
+
+      let userRecord = rows[0];
+
+      // If user not found on first boot, re-run auth seeder in case database was freshly migrated
+      if (!userRecord) {
+        await seedAuthAndRbac();
+        const recheck = await query<any>(
+          `SELECT id, tenant_id, name, email, role, status, password_hash, hierarchy_level, hierarchy_id, is_suspended
+           FROM users
+           WHERE LOWER(email) = LOWER($1) LIMIT 1`,
+          [email.trim()]
+        );
+        userRecord = recheck.rows[0];
+      }
+
+      if (!userRecord) {
+        await writeSecurityAuditLog({
+          tenantId: null,
+          userName: email,
+          action: 'LOGIN_FAILURE',
+          module: 'AUTH',
+          details: `Sign in failed: Account '${email}' does not exist`,
+          ipAddress
+        });
+        return res.status(401).json({
+          error: 'INVALID_CREDENTIALS',
+          message: 'Invalid email or password.'
+        });
+      }
+
+      // Check account suspension status
+      if (userRecord.status === 'SUSPENDED' || userRecord.is_suspended === true) {
+        await writeSecurityAuditLog({
+          tenantId: userRecord.tenant_id,
+          userName: userRecord.name,
+          action: 'LOGIN_REJECTED_SUSPENDED',
+          module: 'AUTH',
+          details: `Login blocked for suspended account: ${userRecord.email}`,
+          ipAddress
+        });
+        return res.status(403).json({
+          error: 'ACCOUNT_SUSPENDED',
+          message: 'Your account has been suspended. Please contact platform administration.'
+        });
+      }
+
+      // Verify password
+      const isPasswordValid = await verifyPassword(password, userRecord.password_hash || '');
+      if (!isPasswordValid) {
+        await writeSecurityAuditLog({
+          tenantId: userRecord.tenant_id,
+          userName: userRecord.name,
+          action: 'LOGIN_FAILURE',
+          module: 'AUTH',
+          details: `Password verification failed for user: ${userRecord.email}`,
+          ipAddress
+        });
+        return res.status(401).json({
+          error: 'INVALID_CREDENTIALS',
+          message: 'Invalid email or password.'
+        });
+      }
+
+      // Update last_login
+      await query(`UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = $1`, [userRecord.id]);
+
+      // Resolve tenant name
+      let tenantName: string | undefined;
+      if (userRecord.tenant_id) {
+        const tenantRes = await query<{ name: string }>('SELECT name FROM tenants WHERE id = $1', [userRecord.tenant_id]);
+        tenantName = tenantRes.rows[0]?.name;
+      }
+
+      // Create session in database and sign JWT
+      const { token, sessionId, expiresAt } = await createAuthenticatedSession({
+        userId: userRecord.id,
+        tenantId: userRecord.tenant_id,
+        userName: userRecord.name,
+        role: userRecord.role as UserRole,
+        hierarchyLevel: (userRecord.hierarchy_level as HierarchyLevel) || (userRecord.tenant_id ? 'TENANT' : 'PLATFORM'),
+        hierarchyId: userRecord.hierarchy_id,
+        email: userRecord.email,
+        ipAddress,
+        device: userAgent.substring(0, 128)
+      });
+
+      // Write login success audit log
+      await writeSecurityAuditLog({
+        tenantId: userRecord.tenant_id,
+        userName: userRecord.name,
+        action: 'LOGIN_SUCCESS',
+        module: 'AUTH',
+        details: `Successful sign in as ${userRecord.role} (Session: ${sessionId})`,
+        ipAddress
+      });
+
+      // Issue secure HTTP-Only cookie
+      res.cookie('tradepro_session', token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 24 * 60 * 60 * 1000
+      });
+
+      const permissions = await getPermissionsForRole(userRecord.role as UserRole);
+
+      res.json({
+        success: true,
+        user: {
+          id: userRecord.id,
+          name: userRecord.name,
+          email: userRecord.email,
+          role: userRecord.role,
+          tenant_id: userRecord.tenant_id,
+          tenant_name: tenantName,
+          hierarchy_level: userRecord.hierarchy_level,
+          hierarchy_id: userRecord.hierarchy_id,
+          status: userRecord.status,
+          permissions
+        },
+        sessionId,
+        expiresAt
+      });
+    } catch (err: any) {
+      console.error('[Auth API] Login exception:', err);
+      res.status(500).json({ error: 'SERVER_ERROR', message: 'An internal authentication error occurred.' });
+    }
   });
 
-  app.post('/api/auth/switch-tenant-scope', authMiddleware, (req, res) => {
-    const user = (req as any).user as AuthSessionUser;
-    if (user.role !== 'SUPER_ADMIN') {
-      return res.status(403).json({ error: 'Only Super Admin can switch global tenant perspective' });
+  // User Registration Endpoint
+  app.post('/api/auth/register', async (req, res) => {
+    try {
+      const { name, email, password, role = 'CLIENT', tenantId, phone } = req.body;
+      const ipAddress = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
+      const userAgent = (req.headers['user-agent'] as string) || 'Desktop Browser';
+
+      if (!name || !email || !password) {
+        return res.status(400).json({
+          error: 'MISSING_FIELDS',
+          message: 'Full name, email address, and password are required.'
+        });
+      }
+
+      if (password.length < 6) {
+        return res.status(400).json({
+          error: 'WEAK_PASSWORD',
+          message: 'Password must be at least 6 characters long.'
+        });
+      }
+
+      const cleanEmail = email.trim().toLowerCase();
+
+      // Check if user already exists
+      const existing = await query(
+        'SELECT id FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1',
+        [cleanEmail]
+      );
+
+      if (existing.rows.length > 0) {
+        return res.status(409).json({
+          error: 'EMAIL_EXISTS',
+          message: 'An account with this email address already exists. Please sign in.'
+        });
+      }
+
+      // Resolve tenant
+      let assignedTenantId: string | null = tenantId || null;
+      let tenantName = 'Alpha Prime Capital';
+
+      if (assignedTenantId) {
+        const tRes = await query('SELECT id, name FROM tenants WHERE id = $1 LIMIT 1', [assignedTenantId]);
+        if (tRes.rows.length > 0) {
+          tenantName = tRes.rows[0].name;
+        } else {
+          const fallbackT = await query('SELECT id, name FROM tenants WHERE status = $1 LIMIT 1', ['ACTIVE']);
+          if (fallbackT.rows.length > 0) {
+            assignedTenantId = fallbackT.rows[0].id;
+            tenantName = fallbackT.rows[0].name;
+          }
+        }
+      } else if (role !== 'SUPER_ADMIN' && role !== 'PLATFORM_OWNER') {
+        const fallbackT = await query('SELECT id, name FROM tenants WHERE status = $1 LIMIT 1', ['ACTIVE']);
+        if (fallbackT.rows.length > 0) {
+          assignedTenantId = fallbackT.rows[0].id;
+          tenantName = fallbackT.rows[0].name;
+        }
+      }
+
+      const passwordHash = await hashPassword(password);
+      const newUserId = `usr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const hierarchyLevel: HierarchyLevel = (role === 'SUPER_ADMIN' || role === 'PLATFORM_OWNER')
+        ? 'PLATFORM'
+        : (role === 'TENANT_ADMIN' ? 'TENANT' : (role as HierarchyLevel));
+      const hierarchyId = assignedTenantId;
+
+      await query(
+        `INSERT INTO users (
+          id, tenant_id, name, email, role, status, password_hash,
+          phone, hierarchy_level, hierarchy_id, is_suspended, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, 'ACTIVE', $6, $7, $8, $9, false, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        [
+          newUserId,
+          assignedTenantId,
+          name.trim(),
+          cleanEmail,
+          role,
+          passwordHash,
+          phone || null,
+          hierarchyLevel,
+          hierarchyId
+        ]
+      );
+
+      // Create authenticated session
+      const { token, sessionId, expiresAt } = await createAuthenticatedSession({
+        userId: newUserId,
+        tenantId: assignedTenantId,
+        userName: name.trim(),
+        role: role as any,
+        hierarchyLevel,
+        hierarchyId,
+        email: cleanEmail,
+        ipAddress,
+        device: userAgent
+      });
+
+      res.cookie('tradepro_session', token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        expires: expiresAt,
+        path: '/'
+      });
+
+      await writeSecurityAuditLog({
+        tenantId: assignedTenantId,
+        userName: name.trim(),
+        action: 'USER_REGISTERED',
+        module: 'AUTH',
+        details: `New account registered: ${cleanEmail} (${role})`,
+        ipAddress
+      });
+
+      const permissions = await getPermissionsForRole(role as any);
+
+      res.status(201).json({
+        success: true,
+        message: 'Account created successfully.',
+        token,
+        user: {
+          id: newUserId,
+          name: name.trim(),
+          email: cleanEmail,
+          role,
+          tenant_id: assignedTenantId,
+          tenant_name: tenantName,
+          hierarchy_level: hierarchyLevel,
+          hierarchy_id: hierarchyId,
+          status: 'ACTIVE',
+          permissions
+        },
+        sessionId,
+        expiresAt
+      });
+    } catch (err: any) {
+      console.error('[Auth API] Registration exception:', err);
+      res.status(500).json({
+        error: 'SERVER_ERROR',
+        message: err.message || 'An error occurred during registration. Please try again.'
+      });
     }
+  });
+
+  app.post('/api/auth/switch-tenant-scope', authenticate, async (req, res) => {
+    const user = req.user!;
+    if (user.role !== 'SUPER_ADMIN' && user.role !== 'PLATFORM_OWNER') {
+      return res.status(403).json({
+        error: 'FORBIDDEN',
+        message: 'Only Super Admin can switch global tenant perspective.'
+      });
+    }
+
     const { tenantId } = req.body;
     user.simulated_tenant_id = (tenantId === 'ALL' || !tenantId) ? null : tenantId;
+
+    await writeSecurityAuditLog({
+      tenantId: user.simulated_tenant_id,
+      userName: user.name,
+      action: 'TENANT_SCOPE_SWITCH',
+      module: 'SECURITY',
+      details: `Super Admin switched active tenant scope to: ${user.simulated_tenant_id || 'ALL_TENANTS'}`,
+      ipAddress: req.ip || req.socket.remoteAddress
+    });
+
     res.json({ success: true, activeTenantScope: user.simulated_tenant_id });
   });
 
-  app.post('/api/auth/logout', (req, res) => {
-    const token = req.cookies?.tradepro_session;
-    if (token && sessions[token]) {
-      delete sessions[token];
+  app.post('/api/auth/logout', authenticate, async (req, res) => {
+    try {
+      const user = req.user!;
+      if (user.session_id) {
+        await invalidateSession(user.session_id, user.name);
+      }
+
+      await writeSecurityAuditLog({
+        tenantId: user.tenant_id,
+        userName: user.name,
+        action: 'LOGOUT',
+        module: 'AUTH',
+        details: `User logged out. Session ${user.session_id} invalidated.`,
+        ipAddress: req.ip || req.socket.remoteAddress
+      });
+    } catch (err) {
+      console.error('[Auth API] Logout error:', err);
+    } finally {
+      res.clearCookie('tradepro_session');
+      res.json({ success: true, message: 'Logged out successfully.' });
     }
-    res.clearCookie('tradepro_session');
-    res.json({ success: true });
   });
 
   // ----------------------------------------------------
   // ADMIN DASHBOARD APIS (Matches Figma screenshot data)
   // ----------------------------------------------------
-  app.get('/api/admin/dashboard', authMiddleware, async (req, res) => {
+  app.get('/api/admin/dashboard', authenticate, requirePermission('dashboard.view'), async (req, res) => {
     try {
-      const tenantScope = resolveTenantScope(req);
+      const tenantScope = resolveStrictTenantScope(req);
       const kpis = await activeTradingDataProvider.getDashboardKPIs(tenantScope);
       const volumeCommission = await activeTradingDataProvider.getVolumeCommissionChart(tenantScope);
       const clientGrowth = await activeTradingDataProvider.getClientGrowthChart(tenantScope);
@@ -167,8 +439,13 @@ async function startServer() {
       const recentTrades = await activeTradingDataProvider.getRecentTrades(tenantScope, 6);
       const pendingKYC = await activeTradingDataProvider.getPendingKYC(tenantScope, 5);
 
+      const tenants = await activeTradingDataProvider.getTenants({});
+
       res.json({
         kpis,
+        volumeCommission,
+        clientGrowth,
+        dailyPL,
         charts: {
           volumeCommission,
           clientGrowth,
@@ -176,6 +453,7 @@ async function startServer() {
         },
         recentTrades,
         pendingKYC,
+        tenants,
         tenantScope: tenantScope || 'ALL_TENANTS'
       });
     } catch (err: any) {
@@ -186,7 +464,7 @@ async function startServer() {
   // ----------------------------------------------------
   // TENANTS MANAGEMENT (SUPER_ADMIN only)
   // ----------------------------------------------------
-  app.get('/api/admin/tenants', authMiddleware, requireRoles(['SUPER_ADMIN']), async (req, res) => {
+  app.get('/api/admin/tenants', authenticate, requirePermission('tenants.view'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER']), async (req, res) => {
     try {
       const search = req.query.search as string;
       const status = req.query.status as string;
@@ -197,7 +475,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/admin/tenants/:id', authMiddleware, requireRoles(['SUPER_ADMIN']), async (req, res) => {
+  app.get('/api/admin/tenants/:id', authenticate, requirePermission('tenants.view'), requireTenantAccess, async (req, res) => {
     try {
       const tenant = await activeTradingDataProvider.getTenantById(req.params.id);
       if (!tenant) return res.status(404).json({ error: 'Tenant not found' });
@@ -207,27 +485,70 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/tenants', authMiddleware, requireRoles(['SUPER_ADMIN']), async (req, res) => {
+  app.post('/api/admin/tenants', authenticate, requirePermission('tenants.create'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER']), async (req, res) => {
     try {
       const tenant = await activeTradingDataProvider.createTenant(req.body);
+      await writeSecurityAuditLog({
+        tenantId: tenant.id,
+        userName: req.user!.name,
+        action: 'TENANT_CREATED',
+        module: 'TENANTS',
+        details: `Created new tenant: ${tenant.name} (${tenant.id})`,
+        ipAddress: req.ip
+      });
       res.status(201).json(tenant);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  app.post('/api/admin/tenants/:id/suspend', authMiddleware, requireRoles(['SUPER_ADMIN']), async (req, res) => {
+  app.post('/api/admin/tenants/:id/suspend', authenticate, requirePermission('tenants.update'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER']), async (req, res) => {
     try {
       const updated = await activeTradingDataProvider.updateTenantStatus(req.params.id, 'SUSPENDED');
+      await writeSecurityAuditLog({
+        tenantId: req.params.id,
+        userName: req.user!.name,
+        action: 'TENANT_SUSPENDED',
+        module: 'TENANTS',
+        details: `Tenant ${req.params.id} suspended by admin`,
+        ipAddress: req.ip
+      });
       res.json(updated);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  app.post('/api/admin/tenants/:id/activate', authMiddleware, requireRoles(['SUPER_ADMIN']), async (req, res) => {
+  app.post('/api/admin/tenants/:id/activate', authenticate, requirePermission('tenants.update'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER']), async (req, res) => {
     try {
       const updated = await activeTradingDataProvider.updateTenantStatus(req.params.id, 'ACTIVE');
+      await writeSecurityAuditLog({
+        tenantId: req.params.id,
+        userName: req.user!.name,
+        action: 'TENANT_ACTIVATED',
+        module: 'TENANTS',
+        details: `Tenant ${req.params.id} activated by admin`,
+        ipAddress: req.ip
+      });
+      res.json(updated);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.patch('/api/admin/tenants/:id/status', authenticate, requirePermission('tenants.update'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER']), async (req, res) => {
+    try {
+      const { status } = req.body;
+      const updated = await activeTradingDataProvider.updateTenantStatus(req.params.id, status || 'ACTIVE');
+      if (!updated) return res.status(404).json({ error: 'Tenant not found' });
+      await writeSecurityAuditLog({
+        tenantId: req.params.id,
+        userName: req.user!.name,
+        action: 'TENANT_STATUS_CHANGED',
+        module: 'TENANTS',
+        details: `Tenant ${req.params.id} status changed to ${status}`,
+        ipAddress: req.ip
+      });
       res.json(updated);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -237,80 +558,257 @@ async function startServer() {
   // ----------------------------------------------------
   // HIERARCHY MODULES: Masters, Brokers, Sub-Brokers, Clients
   // ----------------------------------------------------
-  app.get('/api/admin/masters', authMiddleware, async (req, res) => {
+  app.get(['/api/admin/masters', '/api/admin/hierarchy/masters'], authenticate, requirePermission('masters.view'), async (req, res) => {
     try {
-      const tenantScope = resolveTenantScope(req);
-      const masters = await activeTradingDataProvider.getMasters(tenantScope);
-      res.json(masters);
+      const tenantScope = resolveStrictTenantScope(req);
+      const allMasters = await activeTradingDataProvider.getMasters(tenantScope);
+      const filtered = await filterMastersForUser(allMasters, req.user!);
+      res.json(filtered);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  app.post('/api/admin/masters', authMiddleware, requireRoles(['SUPER_ADMIN', 'TENANT_ADMIN']), async (req, res) => {
+  app.post(['/api/admin/masters', '/api/admin/hierarchy/masters'], authenticate, requirePermission('masters.create'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN']), async (req, res) => {
     try {
-      const master = await activeTradingDataProvider.createMaster(req.body);
+      const user = req.user!;
+      const data = { ...req.body };
+      if (user.role !== 'SUPER_ADMIN' && user.role !== 'PLATFORM_OWNER') {
+        data.tenant_id = user.tenant_id;
+      }
+      const master = await activeTradingDataProvider.createMaster(data);
+      await writeSecurityAuditLog({
+        tenantId: master.tenant_id,
+        userName: user.name,
+        action: 'MASTER_CREATED',
+        module: 'HIERARCHY',
+        details: `Created master account ${master.name} (${master.id})`,
+        ipAddress: req.ip
+      });
       res.status(201).json(master);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  app.get('/api/admin/brokers', authMiddleware, async (req, res) => {
+  app.put('/api/admin/masters/:id', authenticate, requirePermission('masters.update'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN']), async (req, res) => {
     try {
-      const tenantScope = resolveTenantScope(req);
-      const masterId = req.query.masterId as string;
-      const brokers = await activeTradingDataProvider.getBrokers(tenantScope, masterId);
-      res.json(brokers);
+      const updated = await activeTradingDataProvider.updateMaster(req.params.id, req.body);
+      if (!updated) return res.status(404).json({ error: 'Master not found' });
+      res.json(updated);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  app.post('/api/admin/brokers', authMiddleware, requireRoles(['SUPER_ADMIN', 'TENANT_ADMIN', 'MASTER']), async (req, res) => {
+  app.patch('/api/admin/masters/:id/status', authenticate, requirePermission('masters.update'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN']), async (req, res) => {
     try {
-      const broker = await activeTradingDataProvider.createBroker(req.body);
+      const { status } = req.body;
+      const updated = await activeTradingDataProvider.updateMasterStatus(req.params.id, status);
+      if (!updated) return res.status(404).json({ error: 'Master not found' });
+      res.json(updated);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get(['/api/admin/brokers', '/api/admin/hierarchy/brokers'], authenticate, requirePermission('brokers.view'), async (req, res) => {
+    try {
+      const tenantScope = resolveStrictTenantScope(req);
+      const masterId = req.query.masterId as string;
+      const allBrokers = await activeTradingDataProvider.getBrokers(tenantScope, masterId);
+      const filtered = await filterBrokersForUser(allBrokers, req.user!);
+      res.json(filtered);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post(['/api/admin/brokers', '/api/admin/hierarchy/brokers'], authenticate, requirePermission('brokers.create'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN', 'MASTER']), async (req, res) => {
+    try {
+      const user = req.user!;
+      const data = { ...req.body };
+      if (user.role !== 'SUPER_ADMIN' && user.role !== 'PLATFORM_OWNER') {
+        data.tenant_id = user.tenant_id;
+      }
+      // If creator is Master, enforce master_id
+      if (user.role === 'MASTER' && user.hierarchy_id) {
+        data.master_id = user.hierarchy_id;
+      }
+      const broker = await activeTradingDataProvider.createBroker(data);
+      await writeSecurityAuditLog({
+        tenantId: broker.tenant_id,
+        userName: user.name,
+        action: 'BROKER_CREATED',
+        module: 'HIERARCHY',
+        details: `Created broker account ${broker.name} (${broker.id}) under Master ${broker.master_id}`,
+        ipAddress: req.ip
+      });
       res.status(201).json(broker);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  app.get('/api/admin/sub-brokers', authMiddleware, async (req, res) => {
+  app.put('/api/admin/brokers/:id', authenticate, requirePermission('brokers.update'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN', 'MASTER']), async (req, res) => {
     try {
-      const tenantScope = resolveTenantScope(req);
-      const brokerId = req.query.brokerId as string;
-      const subBrokers = await activeTradingDataProvider.getSubBrokers(tenantScope, brokerId);
-      res.json(subBrokers);
+      const updated = await activeTradingDataProvider.updateBroker(req.params.id, req.body);
+      if (!updated) return res.status(404).json({ error: 'Broker not found' });
+      res.json(updated);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  app.post('/api/admin/sub-brokers', authMiddleware, requireRoles(['SUPER_ADMIN', 'TENANT_ADMIN', 'MASTER', 'BROKER']), async (req, res) => {
+  app.patch('/api/admin/brokers/:id/status', authenticate, requirePermission('brokers.update'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN', 'MASTER']), async (req, res) => {
     try {
-      const subBroker = await activeTradingDataProvider.createSubBroker(req.body);
+      const { status } = req.body;
+      const updated = await activeTradingDataProvider.updateBrokerStatus(req.params.id, status);
+      if (!updated) return res.status(404).json({ error: 'Broker not found' });
+      res.json(updated);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get(['/api/admin/sub-brokers', '/api/admin/hierarchy/sub-brokers'], authenticate, requirePermission('sub_brokers.view'), async (req, res) => {
+    try {
+      const tenantScope = resolveStrictTenantScope(req);
+      const brokerId = req.query.brokerId as string;
+      const allSubBrokers = await activeTradingDataProvider.getSubBrokers(tenantScope, brokerId);
+      const filtered = await filterSubBrokersForUser(allSubBrokers, req.user!);
+      res.json(filtered);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post(['/api/admin/sub-brokers', '/api/admin/hierarchy/sub-brokers'], authenticate, requirePermission('sub_brokers.create'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN', 'MASTER', 'BROKER']), async (req, res) => {
+    try {
+      const user = req.user!;
+      const data = { ...req.body };
+      if (user.role !== 'SUPER_ADMIN' && user.role !== 'PLATFORM_OWNER') {
+        data.tenant_id = user.tenant_id;
+      }
+      if (user.role === 'BROKER' && user.hierarchy_id) {
+        data.broker_id = user.hierarchy_id;
+      }
+      const subBroker = await activeTradingDataProvider.createSubBroker(data);
+      await writeSecurityAuditLog({
+        tenantId: subBroker.tenant_id,
+        userName: user.name,
+        action: 'SUB_BROKER_CREATED',
+        module: 'HIERARCHY',
+        details: `Created sub-broker ${subBroker.name} (${subBroker.id})`,
+        ipAddress: req.ip
+      });
       res.status(201).json(subBroker);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  app.get('/api/admin/clients', authMiddleware, async (req, res) => {
+  app.put('/api/admin/sub-brokers/:id', authenticate, requirePermission('sub_brokers.update'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN', 'MASTER', 'BROKER']), async (req, res) => {
     try {
-      const tenantScope = resolveTenantScope(req);
-      const subBrokerId = req.query.subBrokerId as string;
-      const clients = await activeTradingDataProvider.getClients(tenantScope, subBrokerId);
-      res.json(clients);
+      const updated = await activeTradingDataProvider.updateSubBroker(req.params.id, req.body);
+      if (!updated) return res.status(404).json({ error: 'Sub-Broker not found' });
+      res.json(updated);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  app.post('/api/admin/clients', authMiddleware, requireRoles(['SUPER_ADMIN', 'TENANT_ADMIN', 'MASTER', 'BROKER', 'SUB_BROKER']), async (req, res) => {
+  app.patch('/api/admin/sub-brokers/:id/status', authenticate, requirePermission('sub_brokers.update'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN', 'MASTER', 'BROKER']), async (req, res) => {
     try {
-      const client = await activeTradingDataProvider.createClient(req.body);
+      const { status } = req.body;
+      const updated = await activeTradingDataProvider.updateSubBrokerStatus(req.params.id, status);
+      if (!updated) return res.status(404).json({ error: 'Sub-Broker not found' });
+      res.json(updated);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get(['/api/admin/clients', '/api/admin/hierarchy/clients'], authenticate, requirePermission('clients.view'), async (req, res) => {
+    try {
+      const tenantScope = resolveStrictTenantScope(req);
+      const subBrokerId = req.query.subBrokerId as string;
+      const allClients = await activeTradingDataProvider.getClients(tenantScope, subBrokerId);
+      const filtered = await filterClientsForUser(allClients, req.user!);
+      res.json(filtered);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post(['/api/admin/clients', '/api/admin/hierarchy/clients'], authenticate, requirePermission('clients.create'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN', 'MASTER', 'BROKER', 'SUB_BROKER']), async (req, res) => {
+    try {
+      const user = req.user!;
+      const data = { ...req.body };
+      if (user.role !== 'SUPER_ADMIN' && user.role !== 'PLATFORM_OWNER') {
+        data.tenant_id = user.tenant_id;
+      }
+      if (user.role === 'SUB_BROKER' && user.hierarchy_id) {
+        data.sub_broker_id = user.hierarchy_id;
+      }
+      const client = await activeTradingDataProvider.createClient(data);
+      await writeSecurityAuditLog({
+        tenantId: client.tenant_id,
+        userName: user.name,
+        action: 'CLIENT_CREATED',
+        module: 'HIERARCHY',
+        details: `Created client ${client.name} (${client.id}) under sub-broker ${client.sub_broker_id}`,
+        ipAddress: req.ip
+      });
       res.status(201).json(client);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.put('/api/admin/clients/:id', authenticate, requirePermission('clients.update'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN', 'MASTER', 'BROKER', 'SUB_BROKER']), async (req, res) => {
+    try {
+      const updated = await activeTradingDataProvider.updateClient(req.params.id, req.body);
+      if (!updated) return res.status(404).json({ error: 'Client not found' });
+      res.json(updated);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.patch('/api/admin/clients/:id/status', authenticate, requirePermission('clients.update'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN', 'MASTER', 'BROKER', 'SUB_BROKER']), async (req, res) => {
+    try {
+      const { status } = req.body;
+      const updated = await activeTradingDataProvider.updateClientStatus(req.params.id, status);
+      if (!updated) return res.status(404).json({ error: 'Client not found' });
+      res.json(updated);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Generic status toggle adapter supporting /api/admin/entities/:type/:id/status
+  app.patch('/api/admin/entities/:type/:id/status', authenticate, async (req, res) => {
+    try {
+      const { type, id } = req.params;
+      const { status } = req.body;
+      let updated: any = null;
+      if (type === 'masters' || type === 'master') {
+        updated = await activeTradingDataProvider.updateMasterStatus(id, status);
+      } else if (type === 'brokers' || type === 'broker') {
+        updated = await activeTradingDataProvider.updateBrokerStatus(id, status);
+      } else if (type === 'sub-brokers' || type === 'sub_brokers' || type === 'subBroker') {
+        updated = await activeTradingDataProvider.updateSubBrokerStatus(id, status);
+      } else if (type === 'clients' || type === 'client') {
+        updated = await activeTradingDataProvider.updateClientStatus(id, status);
+      } else if (type === 'tenants' || type === 'tenant') {
+        if (req.user!.role !== 'SUPER_ADMIN' && req.user!.role !== 'PLATFORM_OWNER') {
+          return res.status(403).json({ error: 'Forbidden' });
+        }
+        updated = await activeTradingDataProvider.updateTenantStatus(id, status);
+      }
+      if (!updated) return res.status(404).json({ error: 'Entity not found' });
+      res.json(updated);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -319,9 +817,9 @@ async function startServer() {
   // ----------------------------------------------------
   // COMPLIANCE: KYC, Funds, Ledger
   // ----------------------------------------------------
-  app.get('/api/admin/kyc', authMiddleware, async (req, res) => {
+  app.get('/api/admin/kyc', authenticate, requirePermission('kyc.view'), async (req, res) => {
     try {
-      const tenantScope = resolveTenantScope(req);
+      const tenantScope = resolveStrictTenantScope(req);
       const status = req.query.status as string;
       const kyc = await activeTradingDataProvider.getKYCRecords(tenantScope, status);
       res.json(kyc);
@@ -330,11 +828,253 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/admin/kyc/:id', authMiddleware, requireRoles(['SUPER_ADMIN', 'TENANT_ADMIN']), async (req, res) => {
+  app.patch('/api/admin/kyc/:id', authenticate, requirePermission('kyc.review'), async (req, res) => {
     try {
       const { status, notes } = req.body;
+      const user = req.user!;
       const updated = await activeTradingDataProvider.updateKYCStatus(req.params.id, status, notes);
+      await writeSecurityAuditLog({
+        tenantId: user.tenant_id,
+        userName: user.name,
+        action: 'KYC_STATUS_UPDATED',
+        module: 'COMPLIANCE',
+        details: `KYC record ${req.params.id} marked ${status} by ${user.name}`,
+        ipAddress: req.ip
+      });
       res.json(updated);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Funds Deposits
+  app.get(['/api/admin/compliance/deposits', '/api/compliance/deposits'], authenticate, requirePermission('funds.view'), async (req, res) => {
+    try {
+      const tenantScope = resolveStrictTenantScope(req);
+      const status = req.query.status as string;
+      const deposits = await activeTradingDataProvider.getFundDeposits(tenantScope, status);
+      res.json(deposits);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post(['/api/admin/compliance/deposits/:id/approve', '/api/compliance/deposits/:id/approve'], authenticate, requirePermission('funds.approve'), async (req, res) => {
+    try {
+      const actor = req.user?.name || req.user?.email || 'Compliance Officer';
+      const result = await activeTradingDataProvider.approveFundDeposit(req.params.id, actor);
+      await writeSecurityAuditLog({
+        tenantId: req.user?.tenant_id,
+        userName: actor,
+        action: 'DEPOSIT_APPROVED',
+        module: 'FUNDS',
+        details: `Deposit ${req.params.id} approved`,
+        ipAddress: req.ip
+      });
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post(['/api/admin/compliance/deposits/:id/reject', '/api/compliance/deposits/:id/reject'], authenticate, requirePermission('funds.reject'), async (req, res) => {
+    try {
+      const actor = req.user?.name || req.user?.email || 'Compliance Officer';
+      const result = await activeTradingDataProvider.rejectFundDeposit(req.params.id, actor);
+      await writeSecurityAuditLog({
+        tenantId: req.user?.tenant_id,
+        userName: actor,
+        action: 'DEPOSIT_REJECTED',
+        module: 'FUNDS',
+        details: `Deposit ${req.params.id} rejected`,
+        ipAddress: req.ip
+      });
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post(['/api/admin/compliance/deposits', '/api/compliance/deposits'], authenticate, requirePermission('funds.deposit'), async (req, res) => {
+    try {
+      const tenantScope = resolveStrictTenantScope(req);
+      const data = { ...req.body, tenant_id: tenantScope || req.body.tenant_id };
+      const deposit = await activeTradingDataProvider.createFundDeposit(data);
+      res.status(201).json(deposit);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Funds Withdrawals
+  app.get(['/api/admin/compliance/withdrawals', '/api/compliance/withdrawals'], authenticate, requirePermission('funds.view'), async (req, res) => {
+    try {
+      const tenantScope = resolveStrictTenantScope(req);
+      const status = req.query.status as string;
+      const withdrawals = await activeTradingDataProvider.getFundWithdrawals(tenantScope, status);
+      res.json(withdrawals);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post(['/api/admin/compliance/withdrawals/:id/approve', '/api/compliance/withdrawals/:id/approve'], authenticate, requirePermission('funds.approve'), async (req, res) => {
+    try {
+      const actor = req.user?.name || req.user?.email || 'Compliance Officer';
+      const result = await activeTradingDataProvider.approveFundWithdrawal(req.params.id, actor);
+      await writeSecurityAuditLog({
+        tenantId: req.user?.tenant_id,
+        userName: actor,
+        action: 'WITHDRAWAL_APPROVED',
+        module: 'FUNDS',
+        details: `Withdrawal ${req.params.id} approved`,
+        ipAddress: req.ip
+      });
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post(['/api/admin/compliance/withdrawals/:id/reject', '/api/compliance/withdrawals/:id/reject'], authenticate, requirePermission('funds.reject'), async (req, res) => {
+    try {
+      const actor = req.user?.name || req.user?.email || 'Compliance Officer';
+      const result = await activeTradingDataProvider.rejectFundWithdrawal(req.params.id, actor);
+      await writeSecurityAuditLog({
+        tenantId: req.user?.tenant_id,
+        userName: actor,
+        action: 'WITHDRAWAL_REJECTED',
+        module: 'FUNDS',
+        details: `Withdrawal ${req.params.id} rejected`,
+        ipAddress: req.ip
+      });
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post(['/api/admin/compliance/withdrawals', '/api/compliance/withdrawals'], authenticate, requirePermission('funds.withdraw'), async (req, res) => {
+    try {
+      const tenantScope = resolveStrictTenantScope(req);
+      const data = { ...req.body, tenant_id: tenantScope || req.body.tenant_id };
+      const withdrawal = await activeTradingDataProvider.createFundWithdrawal(data);
+      res.status(201).json(withdrawal);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Immutable Ledger
+  app.get(['/api/admin/compliance/ledger', '/api/compliance/ledger'], authenticate, requirePermission('ledger.view'), async (req, res) => {
+    try {
+      const tenantScope = resolveStrictTenantScope(req);
+      const type = req.query.type as string;
+      const ledger = await activeTradingDataProvider.getLedgerEntries(tenantScope, type);
+      res.json(ledger);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post(['/api/admin/compliance/ledger', '/api/compliance/ledger'], authenticate, requirePermission('ledger.view'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN']), async (req, res) => {
+    try {
+      const tenantScope = resolveStrictTenantScope(req);
+      const data = { ...req.body, tenant_id: tenantScope || req.body.tenant_id };
+      const entry = await activeTradingDataProvider.createLedgerEntry(data);
+      res.status(201).json(entry);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ----------------------------------------------------
+  // TRADING: Orders, Trades & Positions
+  // ----------------------------------------------------
+  app.get(['/api/admin/positions', '/api/positions'], authenticate, requirePermission('positions.view'), async (req, res) => {
+    try {
+      const tenantScope = resolveStrictTenantScope(req);
+      const positions = await activeTradingDataProvider.getPositions(tenantScope);
+      const scoped = filterClientScopedItems(positions, req.user!);
+      res.json(scoped);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post(['/api/admin/positions/:id/square-off', '/api/positions/:id/square-off'], authenticate, requirePermission('risk.manage'), async (req, res) => {
+    try {
+      const actor = req.user?.name || req.user?.email || 'Risk Manager';
+      const result = await activeTradingDataProvider.squareOffPosition(req.params.id, actor);
+      await writeSecurityAuditLog({
+        tenantId: req.user?.tenant_id,
+        userName: actor,
+        action: 'POSITION_SQUARED_OFF',
+        module: 'RISK',
+        details: `Position ${req.params.id} squared off by ${actor}`,
+        ipAddress: req.ip
+      });
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/admin/commercial/commission-plans', authenticate, requirePermission('commission.view'), async (req, res) => {
+    try {
+      const tenantScope = resolveStrictTenantScope(req);
+      const plans = await activeTradingDataProvider.getCommissionPlans(tenantScope);
+      res.json(plans);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/admin/commercial/commission-rules', authenticate, requirePermission('commission.view'), async (req, res) => {
+    try {
+      const tenantScope = resolveStrictTenantScope(req);
+      const planId = req.query.planId as string;
+      const rules = await activeTradingDataProvider.getCommissionRules(tenantScope, planId);
+      res.json(rules);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/admin/risk/profiles', authenticate, requirePermission('risk.view'), async (req, res) => {
+    try {
+      const tenantScope = resolveStrictTenantScope(req);
+      const profiles = await activeTradingDataProvider.getRiskProfiles(tenantScope);
+      res.json(profiles);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/admin/risk/events', authenticate, requirePermission('risk.view'), async (req, res) => {
+    try {
+      const tenantScope = resolveStrictTenantScope(req);
+      const events = await activeTradingDataProvider.getRiskEvents(tenantScope);
+      res.json(events);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/admin/notifications', authenticate, requirePermission('notifications.view'), async (req, res) => {
+    try {
+      const tenantScope = resolveStrictTenantScope(req);
+      const notifications = await activeTradingDataProvider.getNotifications(tenantScope);
+      res.json(notifications);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/admin/notifications/:id/read', authenticate, requirePermission('notifications.view'), async (req, res) => {
+    try {
+      const result = await activeTradingDataProvider.markNotificationRead(req.params.id);
+      res.json(result);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -343,21 +1083,23 @@ async function startServer() {
   // ----------------------------------------------------
   // TRADING: Orders & Trades
   // ----------------------------------------------------
-  app.get('/api/admin/trades', authMiddleware, async (req, res) => {
+  app.get(['/api/admin/trades', '/api/admin/trading/trades'], authenticate, requirePermission('trades.view'), async (req, res) => {
     try {
-      const tenantScope = resolveTenantScope(req);
+      const tenantScope = resolveStrictTenantScope(req);
       const trades = await activeTradingDataProvider.getAllTrades(tenantScope);
-      res.json(trades);
+      const scoped = filterClientScopedItems(trades, req.user!);
+      res.json(scoped);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  app.get('/api/admin/orders', authMiddleware, async (req, res) => {
+  app.get('/api/admin/orders', authenticate, requirePermission('orders.view'), async (req, res) => {
     try {
-      const tenantScope = resolveTenantScope(req);
+      const tenantScope = resolveStrictTenantScope(req);
       const orders = await activeTradingDataProvider.getOrders(tenantScope);
-      res.json(orders);
+      const scoped = filterClientScopedItems(orders, req.user!);
+      res.json(scoped);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -366,7 +1108,7 @@ async function startServer() {
   // ----------------------------------------------------
   // SUBSCRIPTIONS & WHITE LABEL
   // ----------------------------------------------------
-  app.get('/api/admin/subscriptions', authMiddleware, requireRoles(['SUPER_ADMIN']), async (req, res) => {
+  app.get('/api/admin/subscriptions', authenticate, requirePermission('subscriptions.view'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER']), async (req, res) => {
     try {
       const subscriptions = await activeTradingDataProvider.getSubscriptions();
       res.json(subscriptions);
@@ -836,12 +1578,39 @@ async function startServer() {
     }
   });
 
+  app.get('/api/admin/emergency-controls/trading', authMiddleware, async (req, res) => {
+    try {
+      const state = await activeTradingDataProvider.getEmergencyState();
+      res.json({
+        active: state.globalTradingActive,
+        paused: !state.globalTradingActive,
+        reason: state.tradingReason,
+        trading_paused_at: state.trading_paused_at,
+        trading_paused_by: state.trading_paused_by
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.post('/api/admin/emergency-controls/trading', authMiddleware, requireRoles(['SUPER_ADMIN', 'PLATFORM_OWNER']), async (req, res) => {
     try {
-      const { active, reason } = req.body;
+      const { active, paused, reason } = req.body;
+      const effectiveActive = active !== undefined ? Boolean(active) : (paused !== undefined ? !paused : false);
       const user = (req as any).user;
-      const updated = await activeTradingDataProvider.setGlobalTradingActive(active, user?.name || 'Super Admin', reason);
-      res.json(updated);
+      const updated = await activeTradingDataProvider.setGlobalTradingActive(effectiveActive, user?.name || 'Super Admin', reason);
+      res.json({ success: true, active: effectiveActive, paused: !effectiveActive, state: updated });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/admin/emergency-controls/cancel-all-orders', authMiddleware, requireRoles(['SUPER_ADMIN', 'PLATFORM_OWNER']), async (req, res) => {
+    try {
+      const user = (req as any).user;
+      const reason = req.body?.reason || 'Emergency Mass Order Cancellation by Super Admin';
+      const result = await activeTradingDataProvider.cancelAllOrders(user?.name || 'Super Admin', reason);
+      res.json({ success: true, ...result });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -853,6 +1622,76 @@ async function startServer() {
       const user = (req as any).user;
       const updated = await activeTradingDataProvider.triggerKillSwitch(action, user?.name || 'Super Admin', reason);
       res.json(updated);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Emergency Controls Compatibility Aliases (/api/admin/emergency/*)
+  app.get('/api/admin/emergency/trading', authMiddleware, async (req, res) => {
+    try {
+      const state = await activeTradingDataProvider.getEmergencyState();
+      res.json({ active: state.globalTradingActive, paused: !state.globalTradingActive, reason: state.tradingReason });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+  app.post('/api/admin/emergency/trading', authMiddleware, async (req, res) => {
+    try {
+      const { active, paused, reason } = req.body;
+      const effectiveActive = active !== undefined ? Boolean(active) : (paused !== undefined ? !paused : false);
+      const user = (req as any).user;
+      const updated = await activeTradingDataProvider.setGlobalTradingActive(effectiveActive, user?.name || 'Super Admin', reason);
+      res.json({ success: true, active: effectiveActive, paused: !effectiveActive, state: updated });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+  app.post('/api/admin/emergency/kill-switch', authMiddleware, async (req, res) => {
+    try {
+      const { action, reason } = req.body;
+      const user = (req as any).user;
+      const updated = await activeTradingDataProvider.triggerKillSwitch(action || 'TRIGGER', user?.name || 'Super Admin', reason);
+      res.json(updated);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+  app.post('/api/admin/emergency/kill-switch/reset', authMiddleware, async (req, res) => {
+    try {
+      const user = (req as any).user;
+      const updated = await activeTradingDataProvider.triggerKillSwitch('RESET', user?.name || 'Super Admin', req.body?.reason || 'Kill switch reset');
+      res.json(updated);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+  app.post('/api/admin/emergency/registrations', authMiddleware, async (req, res) => {
+    try {
+      const { enabled } = req.body;
+      const user = (req as any).user;
+      const updated = await activeTradingDataProvider.setRegistrationActive(enabled, user?.name || 'Super Admin');
+      res.json(updated);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+  app.post('/api/admin/emergency/api-access', authMiddleware, async (req, res) => {
+    try {
+      const { enabled } = req.body;
+      const user = (req as any).user;
+      const updated = await activeTradingDataProvider.setApiAccessActive(enabled, user?.name || 'Super Admin');
+      res.json(updated);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+  app.post('/api/admin/emergency/freeze', authMiddleware, async (req, res) => {
+    try {
+      const { entityType, entityId, action, reason } = req.body;
+      const user = (req as any).user;
+      const result = await activeTradingDataProvider.executeAccountAction(entityType, entityId, action, user?.name || 'Super Admin', reason || 'Emergency Freeze');
+      res.json(result);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -1183,20 +2022,91 @@ async function startServer() {
   // ----------------------------------------------------
   // PLATFORM MANAGEMENT
   // ----------------------------------------------------
-  app.get('/api/admin/platform-management', authMiddleware, async (req, res) => {
+  const handleGetPlatformManagement = async (req: Request, res: Response) => {
     try {
       const config = await activeTradingDataProvider.getPlatformManagement();
-      res.json(config);
+      res.json({
+        ...config,
+        maintenanceMode: config.web_maintenance_mode,
+        webPlatform: config.web_trading_enabled ? 'ACTIVE' : 'SUSPENDED',
+        mobilePlatform: (config.mobile_android_enabled && config.mobile_ios_enabled) ? 'ACTIVE' : 'SUSPENDED',
+        minAppVersion: config.mobile_android_min_version,
+        broadcastMessage: config.broadcast_message
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  };
+
+  const handleUpdatePlatformManagement = async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user;
+      const body = req.body || {};
+      const payload: any = { ...body };
+
+      if (body.maintenanceMode !== undefined) {
+        payload.web_maintenance_mode = Boolean(body.maintenanceMode);
+      }
+      if (body.enabled !== undefined && (body.message !== undefined || body.until !== undefined)) {
+        payload.web_maintenance_mode = Boolean(body.enabled);
+        if (body.message) payload.broadcast_message = body.message;
+      }
+      if (body.message !== undefined && body.target !== undefined) {
+        payload.broadcast_message = body.message;
+      }
+      if (body.webPlatform) {
+        payload.web_trading_enabled = body.webPlatform === 'ACTIVE';
+      }
+      if (body.mobilePlatform) {
+        payload.mobile_android_enabled = body.mobilePlatform === 'ACTIVE';
+        payload.mobile_ios_enabled = body.mobilePlatform === 'ACTIVE';
+      }
+      if (body.minAppVersion) {
+        payload.mobile_android_min_version = body.minAppVersion;
+        payload.mobile_ios_min_version = body.minAppVersion;
+      }
+
+      const updated = await activeTradingDataProvider.updatePlatformManagement(payload, user?.name || 'Super Admin');
+      res.json({
+        ...updated,
+        maintenanceMode: updated.web_maintenance_mode,
+        webPlatform: updated.web_trading_enabled ? 'ACTIVE' : 'SUSPENDED',
+        mobilePlatform: (updated.mobile_android_enabled && updated.mobile_ios_enabled) ? 'ACTIVE' : 'SUSPENDED',
+        minAppVersion: updated.mobile_android_min_version,
+        broadcastMessage: updated.broadcast_message
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  };
+
+  app.get('/api/admin/platform-management', authMiddleware, handleGetPlatformManagement);
+  app.put('/api/admin/platform-management', authMiddleware, requireRoles(['SUPER_ADMIN', 'PLATFORM_OWNER']), handleUpdatePlatformManagement);
+  app.post('/api/admin/platform-management', authMiddleware, requireRoles(['SUPER_ADMIN', 'PLATFORM_OWNER']), handleUpdatePlatformManagement);
+
+  // Platform Compatibility Aliases (/api/admin/platform*)
+  app.get('/api/admin/platform', authMiddleware, handleGetPlatformManagement);
+  app.put('/api/admin/platform', authMiddleware, handleUpdatePlatformManagement);
+  app.post('/api/admin/platform', authMiddleware, handleUpdatePlatformManagement);
+  app.post('/api/admin/platform/maintenance', authMiddleware, handleUpdatePlatformManagement);
+  app.post('/api/admin/platform/broadcast', authMiddleware, handleUpdatePlatformManagement);
+
+  // Monitoring session and alert deletion/resolution aliases
+  app.delete('/api/admin/monitoring/sessions/:id', authMiddleware, async (req, res) => {
+    try {
+      const user = (req as any).user;
+      await activeTradingDataProvider.revokeSession(req.params.id, user?.name || 'Super Admin');
+      res.json({ success: true, revoked: req.params.id });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  app.put('/api/admin/platform-management', authMiddleware, requireRoles(['SUPER_ADMIN', 'PLATFORM_OWNER']), async (req, res) => {
+  app.post('/api/admin/monitoring/alerts/:id/resolve', authMiddleware, async (req, res) => {
     try {
       const user = (req as any).user;
-      const updated = await activeTradingDataProvider.updatePlatformManagement(req.body, user?.name || 'Super Admin');
-      res.json(updated);
+      await activeTradingDataProvider.resolveSuspiciousAlert(req.params.id, user?.name || 'Super Admin');
+      res.json({ success: true, resolved: req.params.id });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

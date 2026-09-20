@@ -113,6 +113,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin, tenants }) => {
   const [forgotSubmitted, setForgotSubmitted] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
 
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   // Handle Quick Login click
   const handleSelectDemoAccount = (roleKey: DemoRoleKey) => {
     setSelectedDemoRole(roleKey);
@@ -123,7 +125,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin, tenants }) => {
   };
 
   // Handle Sign In submission
-  const handleSignIn = (e: React.FormEvent) => {
+  const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
 
@@ -132,46 +134,40 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin, tenants }) => {
       return;
     }
 
-    // Match with one of the demo accounts or fallback
-    const matchedAccount = Object.values(DEMO_ACCOUNTS).find(
-      acc => acc.email.toLowerCase() === email.trim().toLowerCase()
-    );
-
-    if (matchedAccount) {
-      onLogin({
-        id: `USR-${matchedAccount.role.slice(0, 3)}-${Date.now().toString().slice(-4)}`,
-        name: matchedAccount.name,
-        email: matchedAccount.email,
-        role: matchedAccount.role,
-        tenant_id: matchedAccount.tenantId,
-        tenant_name: matchedAccount.tenantName
+    setIsSubmitting(true);
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          email: email.trim(),
+          password
+        }),
+        credentials: 'include'
       });
-      return;
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.message || data.error || 'Authentication failed');
+      }
+
+      if (data.user) {
+        onLogin(data.user);
+      } else {
+        throw new Error('No user data returned from authentication server');
+      }
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Invalid email or password. Please try again.');
+    } finally {
+      setIsSubmitting(false);
     }
-
-    // Generic login for custom email
-    const inferredRole: UserRole = email.includes('admin')
-      ? 'SUPER_ADMIN'
-      : email.includes('master')
-      ? 'MASTER'
-      : email.includes('broker')
-      ? 'BROKER'
-      : 'CLIENT';
-
-    const cleanName = email.split('@')[0].replace(/[._-]/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-
-    onLogin({
-      id: `USR-${Date.now().toString().slice(-5)}`,
-      name: cleanName || 'Admin User',
-      email: email.trim(),
-      role: inferredRole,
-      tenant_id: 'TNT-001',
-      tenantName: 'Alpha Prime Capital'
-    });
   };
 
   // Handle Sign Up submission
-  const handleSignUp = (e: React.FormEvent) => {
+  const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
 
@@ -190,16 +186,37 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin, tenants }) => {
       return;
     }
 
-    const assignedTenant = tenants.find(t => t.id === signUpTenantId) || tenants[0];
+    if (signUpPassword.length < 6) {
+      setErrorMessage('Password must be at least 6 characters long.');
+      return;
+    }
 
-    onLogin({
-      id: `USR-NEW-${Date.now().toString().slice(-4)}`,
-      name: signUpName.trim(),
-      email: signUpEmail.trim(),
-      role: signUpRole,
-      tenant_id: assignedTenant?.id || 'TNT-001',
-      tenant_name: assignedTenant?.name || 'Alpha Prime Capital'
-    });
+    setIsSubmitting(true);
+    try {
+      const res = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: signUpName.trim(),
+          email: signUpEmail.trim(),
+          password: signUpPassword,
+          role: signUpRole,
+          tenantId: signUpTenantId
+        }),
+        credentials: 'include'
+      });
+
+      const data = await res.json();
+      if (res.ok && data.user) {
+        onLogin(data.user);
+      } else {
+        throw new Error(data.message || data.error || 'Account registration failed.');
+      }
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Account registration failed.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -413,9 +430,10 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin, tenants }) => {
               {/* Primary Sign In Button */}
               <button
                 type="submit"
-                className="w-full mt-2 py-2.5 px-4 bg-[#2563eb] hover:bg-blue-600 active:bg-blue-700 text-white font-semibold text-sm rounded-lg shadow-lg shadow-blue-600/30 active:scale-[0.99] transition-all"
+                disabled={isSubmitting}
+                className="w-full mt-2 py-2.5 px-4 bg-[#2563eb] hover:bg-blue-600 active:bg-blue-700 disabled:opacity-60 text-white font-semibold text-sm rounded-lg shadow-lg shadow-blue-600/30 active:scale-[0.99] transition-all cursor-pointer"
               >
-                Sign In
+                {isSubmitting ? 'Signing In...' : 'Sign In'}
               </button>
 
               {/* Toggle to Sign Up */}

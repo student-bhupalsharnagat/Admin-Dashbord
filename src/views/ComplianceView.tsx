@@ -53,78 +53,7 @@ interface KycItem {
   notes?: string;
 }
 
-const initialKycData: KycItem[] = [
-  {
-    kycId: 'KYC001',
-    clientId: 'CLT001',
-    client: 'Alexander Hunt',
-    status: 'APPROVED',
-    submitted: '2023-04-05',
-    reviewer: 'Admin John',
-    reviewDate: '2023-04-08',
-    documentType: 'Passport & Proof of Address',
-    email: 'alexander.hunt@matrixcapital.com',
-    phone: '+1 415-555-0192',
-    idNumber: 'USA-P9812401',
-    notes: 'Verified via LexisNexis AML watchlists. Clean sanction records.'
-  },
-  {
-    kycId: 'KYC002',
-    clientId: 'CLT002',
-    client: 'Sophia Lee',
-    status: 'APPROVED',
-    submitted: '2023-04-08',
-    reviewer: 'Admin Sarah',
-    reviewDate: '2023-04-10',
-    documentType: 'National ID & Tax Clearance',
-    email: 'sophia.lee@apexinvest.io',
-    phone: '+65 9123 4567',
-    idNumber: 'SGP-9284102-K',
-    notes: 'Approved standard tier trading limits.'
-  },
-  {
-    kycId: 'KYC003',
-    clientId: 'CLT003',
-    client: 'Nathan Brooks',
-    status: 'PENDING',
-    submitted: '2023-06-21',
-    reviewer: '—',
-    reviewDate: '—',
-    documentType: 'Passport & Bank Statement',
-    email: 'nathan.b@summittrading.com',
-    phone: '+44 20 7946 0912',
-    idNumber: 'GBR-8821940-A',
-    notes: 'Pending manual proof of address review (utility bill under 90 days).'
-  },
-  {
-    kycId: 'KYC004',
-    clientId: 'CLT005',
-    client: 'Ethan Clarke',
-    status: 'REJECTED',
-    submitted: '2023-05-16',
-    reviewer: 'Admin John',
-    reviewDate: '2023-05-18',
-    documentType: 'Driver License',
-    email: 'ethan.clarke@horizonsec.net',
-    phone: '+1 212-555-0144',
-    idNumber: 'NY-4482019',
-    notes: 'Document expired in March 2023. Client notified to re-upload.'
-  },
-  {
-    kycId: 'KYC005',
-    clientId: 'CLT004',
-    client: 'Maya Patel',
-    status: 'APPROVED',
-    submitted: '2023-02-02',
-    reviewer: 'Admin Sarah',
-    reviewDate: '2023-02-05',
-    documentType: 'PAN Card & Aadhaar Verification',
-    email: 'maya.patel@globalmarkets.co.in',
-    phone: '+91 98201 22334',
-    idNumber: 'IND-ABCDE1234F',
-    notes: 'NSDL database API verified automatically with 99.8% match.'
-  }
-];
+const initialKycData: KycItem[] = [];
 
 // ----------------------------------------------------------------------
 // SCREENSHOT 2: FUNDS MANAGEMENT DATASET
@@ -140,68 +69,7 @@ interface FundDepositItem {
   rawAmount: number;
 }
 
-const initialDepositsData: FundDepositItem[] = [
-  {
-    txnId: 'DEP001',
-    client: 'Alexander Hunt',
-    amount: '$10,000',
-    method: 'Bank Transfer',
-    reference: 'TXN-8821-A',
-    status: 'COMPLETED',
-    date: '2023-06-01',
-    rawAmount: 10000
-  },
-  {
-    txnId: 'DEP002',
-    client: 'Maya Patel',
-    amount: '$25,000',
-    method: 'Wire Transfer',
-    reference: 'TXN-8845-B',
-    status: 'COMPLETED',
-    date: '2023-06-02',
-    rawAmount: 25000
-  },
-  {
-    txnId: 'DEP003',
-    client: 'Nathan Brooks',
-    amount: '$5,000',
-    method: 'Credit Card',
-    reference: 'TXN-8902-C',
-    status: 'PENDING',
-    date: '2023-06-20',
-    rawAmount: 5000
-  },
-  {
-    txnId: 'DEP004',
-    client: 'Sophia Lee',
-    amount: '$8,000',
-    method: 'Crypto',
-    reference: 'TXN-9001-D',
-    status: 'PENDING',
-    date: '2023-06-22',
-    rawAmount: 8000
-  },
-  {
-    txnId: 'DEP005',
-    client: 'Isabella Torres',
-    amount: '$15,000',
-    method: 'Bank Transfer',
-    reference: 'TXN-9045-E',
-    status: 'PENDING',
-    date: '2023-06-23',
-    rawAmount: 15000
-  },
-  {
-    txnId: 'DEP006',
-    client: 'Liam Vance',
-    amount: '$18,000',
-    method: 'Wire Transfer',
-    reference: 'TXN-9120-F',
-    status: 'COMPLETED',
-    date: '2023-06-24',
-    rawAmount: 18000
-  }
-];
+const initialDepositsData: FundDepositItem[] = [];
 
 interface FundWithdrawalItem {
   txnId: string;
@@ -214,38 +82,7 @@ interface FundWithdrawalItem {
   rawAmount: number;
 }
 
-const initialWithdrawalsData: FundWithdrawalItem[] = [
-  {
-    txnId: 'WDR001',
-    client: 'Alexander Hunt',
-    amount: '$5,000',
-    method: 'Bank Transfer',
-    reference: 'WDR-001',
-    status: 'COMPLETED',
-    date: '2023-06-10',
-    rawAmount: 5000
-  },
-  {
-    txnId: 'WDR002',
-    client: 'Maya Patel',
-    amount: '$12,000',
-    method: 'Wire Transfer',
-    reference: 'WDR-002',
-    status: 'PENDING',
-    date: '2023-06-21',
-    rawAmount: 12000
-  },
-  {
-    txnId: 'WDR003',
-    client: 'Sophia Lee',
-    amount: '$2,500',
-    method: 'Crypto',
-    reference: 'WDR-003',
-    status: 'COMPLETED',
-    date: '2023-06-15',
-    rawAmount: 2500
-  }
-];
+const initialWithdrawalsData: FundWithdrawalItem[] = [];
 
 // ----------------------------------------------------------------------
 // SCREENSHOT 3: LEDGER DATASET
@@ -262,140 +99,7 @@ interface LedgerRowItem {
   status: 'COMPLETED' | 'PROCESSING' | 'PENDING';
 }
 
-const initialLedgerData: LedgerRowItem[] = [
-  {
-    date: '2023-06-23',
-    txnId: 'TXN-9045-E',
-    account: 'Isabella Torres',
-    type: 'DEPOSIT',
-    credit: '+₹15,000',
-    debit: '—',
-    balance: '$31,500',
-    reference: 'Bank Transfer',
-    status: 'COMPLETED'
-  },
-  {
-    date: '2023-06-22',
-    txnId: 'TXN-9001-D',
-    account: 'Sophia Lee',
-    type: 'DEPOSIT',
-    credit: '+₹8,000',
-    debit: '—',
-    balance: '$12,100',
-    reference: 'Crypto',
-    status: 'PROCESSING'
-  },
-  {
-    date: '2023-06-21',
-    txnId: 'WDR-002',
-    account: 'Maya Patel',
-    type: 'WITHDRAWAL',
-    credit: '—',
-    debit: '-₹12,000',
-    balance: '$48,200',
-    reference: 'Wire Transfer',
-    status: 'PENDING'
-  },
-  {
-    date: '2023-06-18',
-    txnId: 'PNL-0618',
-    account: 'Isabella Torres',
-    type: 'P&L',
-    credit: '+₹5,680',
-    debit: '—',
-    balance: '$16,500',
-    reference: 'Trade Settlement',
-    status: 'COMPLETED'
-  },
-  {
-    date: '2023-06-15',
-    txnId: 'WDR-003',
-    account: 'Sophia Lee',
-    type: 'WITHDRAWAL',
-    credit: '—',
-    debit: '-₹2,500',
-    balance: '$4,100',
-    reference: 'Crypto',
-    status: 'COMPLETED'
-  },
-  {
-    date: '2023-06-10',
-    txnId: 'WDR-001',
-    account: 'Alexander Hunt',
-    type: 'WITHDRAWAL',
-    credit: '—',
-    debit: '-₹5,000',
-    balance: '$25,400',
-    reference: 'Bank Transfer',
-    status: 'COMPLETED'
-  },
-  {
-    date: '2023-06-05',
-    txnId: 'TXN-8600-B',
-    account: 'Nathan Brooks',
-    type: 'DEPOSIT',
-    credit: '+₹5,000',
-    debit: '—',
-    balance: '$5,000',
-    reference: 'Bank Transfer',
-    status: 'PENDING'
-  },
-  {
-    date: '2023-06-01',
-    txnId: 'TXN-8821-A',
-    account: 'Alexander Hunt',
-    type: 'DEPOSIT',
-    credit: '+₹10,000',
-    debit: '—',
-    balance: '$30,400',
-    reference: 'Bank Transfer',
-    status: 'COMPLETED'
-  },
-  {
-    date: '2023-05-28',
-    txnId: 'COM-0528',
-    account: 'Alexander Hunt',
-    type: 'COMMISSION',
-    credit: '+₹120',
-    debit: '—',
-    balance: '$20,400',
-    reference: 'Monthly Commission',
-    status: 'COMPLETED'
-  },
-  {
-    date: '2023-05-25',
-    txnId: 'PNL-0525',
-    account: 'Maya Patel',
-    type: 'P&L',
-    credit: '+₹2,400',
-    debit: '—',
-    balance: '$43,200',
-    reference: 'Trade Settlement',
-    status: 'COMPLETED'
-  },
-  {
-    date: '2023-05-18',
-    txnId: 'TXN-8512-B',
-    account: 'Isabella Torres',
-    type: 'DEPOSIT',
-    credit: '+₹10,820',
-    debit: '—',
-    balance: '$10,820',
-    reference: 'Wire Transfer',
-    status: 'COMPLETED'
-  },
-  {
-    date: '2023-05-15',
-    txnId: 'PNL-0515',
-    account: 'Alexander Hunt',
-    type: 'P&L',
-    credit: '+₹3,820',
-    debit: '—',
-    balance: '$20,280',
-    reference: 'Trade Settlement',
-    status: 'COMPLETED'
-  }
-];
+const initialLedgerData: LedgerRowItem[] = [];
 
 export const ComplianceView: React.FC<ComplianceViewProps> = ({
   section,
@@ -445,31 +149,121 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
   const [selectedDrawerTxn, setSelectedDrawerTxn] = useState<LedgerRowItem | null>(null);
 
   // ----------------------------------------------------------------------
+  // DATA FETCHING HOOKS (PostgreSQL-backed)
+  // ----------------------------------------------------------------------
+  const fetchKycData = async () => {
+    try {
+      const url = kycStatusFilter && kycStatusFilter !== 'All Status'
+        ? `/api/admin/kyc?status=${kycStatusFilter}`
+        : '/api/admin/kyc';
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        const mapped: KycItem[] = data.map((d: any) => ({
+          kycId: d.id,
+          clientId: d.client_id,
+          client: d.client_name,
+          status: d.kyc_status,
+          submitted: d.submitted_date ? d.submitted_date.slice(0, 10) : '2026-03-29',
+          reviewer: d.assigned_reviewer || 'Admin Officer',
+          reviewDate: d.reviewed_at ? d.reviewed_at.slice(0, 10) : '—',
+          documentType: d.document_type || 'ID Document',
+          email: `${d.client_name?.toLowerCase().replace(/\s+/g, '.')}@example.com`,
+          idNumber: d.id_number || 'IND-XXXXX1234',
+          notes: d.notes || 'Submitted for compliance verification'
+        }));
+        setKycList(mapped);
+      }
+    } catch (e) {
+      console.error('Error fetching KYC:', e);
+    }
+  };
+
+  const fetchFundsData = async () => {
+    try {
+      const statusParam = fundsStatusFilter && fundsStatusFilter !== 'All Status' ? `?status=${fundsStatusFilter}` : '';
+      const [depRes, wdrRes] = await Promise.all([
+        fetch(`/api/admin/compliance/deposits${statusParam}`),
+        fetch(`/api/admin/compliance/withdrawals${statusParam}`)
+      ]);
+      if (depRes.ok) {
+        const depData = await depRes.json();
+        setDepositsList(depData);
+      }
+      if (wdrRes.ok) {
+        const wdrData = await wdrRes.json();
+        setWithdrawalsList(wdrData);
+      }
+    } catch (e) {
+      console.error('Error fetching funds:', e);
+    }
+  };
+
+  const fetchLedgerData = async () => {
+    try {
+      const typeParam = ledgerTypeFilter && ledgerTypeFilter !== 'All Types' ? `?type=${ledgerTypeFilter}` : '';
+      const res = await fetch(`/api/admin/compliance/ledger${typeParam}`);
+      if (res.ok) {
+        const data = await res.json();
+        setLedgerList(data);
+      }
+    } catch (e) {
+      console.error('Error fetching ledger:', e);
+    }
+  };
+
+  useEffect(() => {
+    fetchKycData();
+  }, [kycStatusFilter]);
+
+  useEffect(() => {
+    fetchFundsData();
+  }, [fundsTab, fundsStatusFilter]);
+
+  useEffect(() => {
+    fetchLedgerData();
+  }, [ledgerTypeFilter]);
+
+  // ----------------------------------------------------------------------
   // KYC ACTIONS
   // ----------------------------------------------------------------------
-  const handleApproveKyc = (item: KycItem) => {
-    setKycList(prev =>
-      prev.map(k =>
-        k.kycId === item.kycId
-          ? { ...k, status: 'APPROVED', reviewer: 'Admin John', reviewDate: new Date().toISOString().slice(0, 10) }
-          : k
-      )
-    );
-    notify(`KYC for ${item.client} approved successfully.`, 'success');
+  const handleApproveKyc = async (item: KycItem) => {
+    try {
+      const res = await fetch(`/api/admin/kyc/${item.kycId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'APPROVED' })
+      });
+      if (res.ok) {
+        fetchKycData();
+        notify(`KYC for ${item.client} approved successfully.`, 'success');
+      } else {
+        notify('Failed to approve KYC in database', 'warning');
+      }
+    } catch (e) {
+      notify('Network error approving KYC', 'warning');
+    }
     if (selectedKycDetail?.kycId === item.kycId) {
       setSelectedKycDetail(null);
     }
   };
 
-  const handleRejectKyc = (item: KycItem) => {
-    setKycList(prev =>
-      prev.map(k =>
-        k.kycId === item.kycId
-          ? { ...k, status: 'REJECTED', reviewer: 'Admin John', reviewDate: new Date().toISOString().slice(0, 10) }
-          : k
-      )
-    );
-    notify(`KYC for ${item.client} marked as REJECTED.`, 'warning');
+  const handleRejectKyc = async (item: KycItem) => {
+    try {
+      const res = await fetch(`/api/admin/kyc/${item.kycId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'REJECTED' })
+      });
+      if (res.ok) {
+        fetchKycData();
+        notify(`KYC for ${item.client} marked as REJECTED.`, 'warning');
+      } else {
+        notify('Failed to reject KYC in database', 'warning');
+      }
+    } catch (e) {
+      notify('Network error rejecting KYC', 'warning');
+    }
     if (selectedKycDetail?.kycId === item.kycId) {
       setSelectedKycDetail(null);
     }
@@ -478,32 +272,39 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
   // ----------------------------------------------------------------------
   // FUNDS ACTIONS
   // ----------------------------------------------------------------------
-  const handleApproveFunds = (item: any, isDeposit: boolean) => {
-    if (isDeposit) {
-      setDepositsList(prev =>
-        prev.map(d => (d.txnId === item.txnId ? { ...d, status: 'COMPLETED' } : d))
-      );
-      notify(`Deposit ${item.txnId} (${item.amount}) approved & credited.`, 'success');
-    } else {
-      setWithdrawalsList(prev =>
-        prev.map(w => (w.txnId === item.txnId ? { ...w, status: 'COMPLETED' } : w))
-      );
-      notify(`Withdrawal ${item.txnId} (${item.amount}) approved & disbursed.`, 'success');
+  const handleApproveFunds = async (item: any, isDeposit: boolean) => {
+    try {
+      const endpoint = isDeposit
+        ? `/api/admin/compliance/deposits/${item.txnId}/approve`
+        : `/api/admin/compliance/withdrawals/${item.txnId}/approve`;
+      const res = await fetch(endpoint, { method: 'POST' });
+      if (res.ok) {
+        fetchFundsData();
+        fetchLedgerData();
+        notify(`${isDeposit ? 'Deposit' : 'Withdrawal'} ${item.txnId} (${item.amount}) approved & credited.`, 'success');
+      } else {
+        notify(`Failed to approve ${isDeposit ? 'deposit' : 'withdrawal'}.`, 'warning');
+      }
+    } catch (e) {
+      notify('Network error approving transaction', 'warning');
     }
     setSelectedTxnDetail(null);
   };
 
-  const handleRejectFunds = (item: any, isDeposit: boolean) => {
-    if (isDeposit) {
-      setDepositsList(prev =>
-        prev.map(d => (d.txnId === item.txnId ? { ...d, status: 'FAILED' } : d))
-      );
-      notify(`Deposit ${item.txnId} rejected.`, 'warning');
-    } else {
-      setWithdrawalsList(prev =>
-        prev.map(w => (w.txnId === item.txnId ? { ...w, status: 'FAILED' } : w))
-      );
-      notify(`Withdrawal ${item.txnId} rejected. Funds returned to client balance.`, 'warning');
+  const handleRejectFunds = async (item: any, isDeposit: boolean) => {
+    try {
+      const endpoint = isDeposit
+        ? `/api/admin/compliance/deposits/${item.txnId}/reject`
+        : `/api/admin/compliance/withdrawals/${item.txnId}/reject`;
+      const res = await fetch(endpoint, { method: 'POST' });
+      if (res.ok) {
+        fetchFundsData();
+        notify(`${isDeposit ? 'Deposit' : 'Withdrawal'} ${item.txnId} rejected.`, 'warning');
+      } else {
+        notify(`Failed to reject ${isDeposit ? 'deposit' : 'withdrawal'}.`, 'warning');
+      }
+    } catch (e) {
+      notify('Network error rejecting transaction', 'warning');
     }
     setSelectedTxnDetail(null);
   };

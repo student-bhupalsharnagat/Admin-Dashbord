@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Search,
   ChevronDown,
@@ -110,18 +110,66 @@ const defaultTradesData: DetailedTradeItem[] = [
 
 interface TradesViewProps {
   initialSelectedTrade?: Trade | null;
+  initialTrades?: Trade[] | DetailedTradeItem[];
   onNavigateToClient?: () => void;
   onNotify?: (message: string, type?: 'info' | 'success' | 'warning') => void;
 }
 
 export const TradesView: React.FC<TradesViewProps> = ({
+  initialTrades,
   onNavigateToClient,
   onNotify
 }) => {
-  const [trades] = useState<DetailedTradeItem[]>(defaultTradesData);
+  const [trades, setTrades] = useState<DetailedTradeItem[]>(defaultTradesData);
+  const [isLoading, setIsLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [sideFilter, setSideFilter] = useState<'All Sides' | 'BUY' | 'SELL'>('All Sides');
   const [selectedTrade, setSelectedTrade] = useState<DetailedTradeItem | null>(null);
+
+  // Synchronize with API /api/admin/trades
+  useEffect(() => {
+    let isMounted = true;
+    const fetchTrades = async () => {
+      setIsLoading(true);
+      try {
+        const res = await fetch('/api/admin/trades');
+        if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+        const data = await res.json();
+        if (isMounted && Array.isArray(data) && data.length > 0) {
+          const mapped: DetailedTradeItem[] = data.map((t: any, idx: number) => ({
+            tradeId: t.id || t.tradeId || `TRD${String(idx + 1).padStart(3, '0')}`,
+            orderId: t.order_id || t.orderId || `ORD${String(idx + 1).padStart(3, '0')}`,
+            client: t.client_name || t.client || 'Client Trader',
+            clientId: t.client_id || t.clientId,
+            symbol: t.symbol || 'EUR/INR',
+            side: (t.side || 'BUY').toUpperCase() as 'BUY' | 'SELL',
+            quantity: typeof t.quantity === 'number' ? t.quantity.toLocaleString() : String(t.quantity || '100,000'),
+            execPrice: String(t.price || t.execPrice || '1.088'),
+            fees: t.fees ? (String(t.fees).startsWith('$') || String(t.fees).startsWith('₹') ? String(t.fees) : `₹${t.fees}`) : '₹10',
+            timestamp: t.timestamp || t.created_at || '2023-06-23 10:14:25',
+            assetClass: t.asset_class || t.assetClass || 'Forex',
+            executionVenue: t.execution_venue || t.executionVenue || 'NSE Currency Clearing',
+            clearingBroker: t.clearing_broker || t.clearingBroker || 'Apex Capital Group'
+          }));
+          setTrades(mapped);
+          setLoadError(null);
+        }
+      } catch (err: any) {
+        if (isMounted) {
+          console.warn('Trades API sync:', err);
+          setLoadError('Failed to synchronize trades with central API');
+        }
+      } finally {
+        if (isMounted) setIsLoading(false);
+      }
+    };
+
+    fetchTrades();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const filteredTrades = trades.filter(t => {
     const matchSearch =
@@ -160,7 +208,19 @@ export const TradesView: React.FC<TradesViewProps> = ({
       {/* Header */}
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold text-white tracking-tight">Trades</h1>
+        {isLoading && (
+          <span className="text-xs text-blue-400 animate-pulse flex items-center gap-1.5 font-mono">
+            <span className="w-2 h-2 rounded-full bg-blue-400 animate-ping" />
+            Syncing trades...
+          </span>
+        )}
       </div>
+
+      {loadError && (
+        <div className="bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs px-3 py-2 rounded-lg">
+          {loadError}
+        </div>
+      )}
 
       {/* Filter Bar matching Screenshot 5 */}
       <div className="flex flex-wrap items-center gap-3">

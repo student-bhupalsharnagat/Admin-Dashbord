@@ -390,6 +390,7 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
   onCreateMaster,
   onCreateBroker,
   onAddClient,
+  onToggleStatus,
   onNotify
 }) => {
   // Local state for entities ensuring screenshot data is shown and editable
@@ -398,6 +399,31 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
   const [subBrokersList, setSubBrokersList] = useState(initialSubBrokersData);
   const [clientsList, setClientsList] = useState(initialClientsData);
   const [activeClientDetail, setActiveClientDetail] = useState<any | null>(null);
+
+  // Synchronize state with real API data passed via props
+  React.useEffect(() => {
+    if (propMasters && propMasters.length > 0) {
+      setMastersList(propMasters as any);
+    }
+  }, [propMasters]);
+
+  React.useEffect(() => {
+    if (propBrokers && propBrokers.length > 0) {
+      setBrokersList(propBrokers as any);
+    }
+  }, [propBrokers]);
+
+  React.useEffect(() => {
+    if (propSubBrokers && propSubBrokers.length > 0) {
+      setSubBrokersList(propSubBrokers as any);
+    }
+  }, [propSubBrokers]);
+
+  React.useEffect(() => {
+    if (propClients && propClients.length > 0) {
+      setClientsList(propClients as any);
+    }
+  }, [propClients]);
 
   // Search and dropdown filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -417,6 +443,39 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
   const notify = (msg: string, type: 'info' | 'success' | 'warning' = 'info') => {
     if (onNotify) {
       onNotify(msg, type);
+    }
+  };
+
+  const executeToggleStatus = async (entity: any) => {
+    const current = entity.status || entity.account || 'ACTIVE';
+    const nextStatus = current === 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE';
+    try {
+      if (onToggleStatus) {
+        await onToggleStatus(level, entity.id, current);
+      } else {
+        const res = await fetch(`/api/admin/${level}/${entity.id}/status`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: nextStatus })
+        });
+        if (!res.ok) throw new Error('Status update failed');
+      }
+
+      if (level === 'masters') {
+        setMastersList(prev => prev.map(m => m.id === entity.id ? { ...m, status: nextStatus } : m));
+      } else if (level === 'brokers') {
+        setBrokersList(prev => prev.map(b => b.id === entity.id ? { ...b, status: nextStatus } : b));
+      } else if (level === 'sub-brokers') {
+        setSubBrokersList(prev => prev.map(s => s.id === entity.id ? { ...s, status: nextStatus } : s));
+      } else if (level === 'clients') {
+        setClientsList(prev => prev.map(c => c.id === entity.id ? { ...c, account: nextStatus, status: nextStatus } : c));
+      }
+      if (selectedEntity && selectedEntity.id === entity.id) {
+        setSelectedEntity({ ...selectedEntity, status: nextStatus, account: nextStatus });
+      }
+      notify(`${entity.name} status updated to ${nextStatus}`, 'success');
+    } catch {
+      notify(`Failed to update status for ${entity.name}`, 'warning');
     }
   };
 
@@ -667,7 +726,7 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
   };
 
   // Save Created Entity
-  const handleSaveCreate = (e: React.FormEvent) => {
+  const handleSaveCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.name) {
       notify('Please provide a name', 'warning');
@@ -676,80 +735,116 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
 
     const today = new Date().toISOString().split('T')[0];
 
-    if (level === 'masters') {
-      const newMaster = {
-        id: formData.id || `MST00${mastersList.length + 1}`,
-        name: formData.name,
-        company: formData.company || `${formData.name} Ltd`,
-        email: formData.email || `admin@${formData.name.toLowerCase().replace(/\s+/g, '')}.com`,
-        brokers: Number(formData.brokers) || 0,
-        clients: Number(formData.clients) || 0,
-        turnover: formData.turnover || '₹0.0M',
-        commission: formData.commission || '₹0',
-        status: formData.status || 'ACTIVE',
-        created: today,
-        region: formData.region || 'West (Mumbai)',
-        phone: formData.phone || '+91 98000 00000'
-      };
-      setMastersList([newMaster, ...mastersList]);
-      notify(`Master ${newMaster.name} (${newMaster.id}) created successfully!`, 'success');
-    } else if (level === 'brokers') {
-      const newBroker = {
-        id: formData.id || `BRK00${brokersList.length + 1}`,
-        name: formData.name,
-        master: formData.master || 'Apex Capital Group',
-        email: formData.email || `broker@${formData.name.toLowerCase().replace(/\s+/g, '')}.com`,
-        subBrokers: Number(formData.subBrokers) || 0,
-        clients: Number(formData.clients) || 0,
-        turnover: formData.turnover || '$0.0M',
-        commission: formData.commission || '$0',
-        status: formData.status || 'ACTIVE',
-        created: today,
-        phone: formData.phone || '+1 555-0100'
-      };
-      setBrokersList([newBroker, ...brokersList]);
-      notify(`Broker ${newBroker.name} (${newBroker.id}) registered!`, 'success');
-    } else if (level === 'sub-brokers') {
-      const newSub = {
-        id: formData.id || `SBK00${subBrokersList.length + 1}`,
-        name: formData.name,
-        parentBroker: formData.parentBroker || 'Ryan Chen',
-        email: formData.email || `sub@${formData.name.toLowerCase().replace(/\s+/g, '')}.com`,
-        clients: Number(formData.clients) || 0,
-        turnover: formData.turnover || '$0.0M',
-        commission: formData.commission || '$0',
-        status: formData.status || 'ACTIVE',
-        created: today,
-        phone: formData.phone || '+1 555-0200'
-      };
-      setSubBrokersList([newSub, ...subBrokersList]);
-      notify(`Sub-Broker ${newSub.name} (${newSub.id}) added!`, 'success');
-    } else if (level === 'clients') {
-      const newClient = {
-        id: formData.id || `CLT00${clientsList.length + 1}`,
-        name: formData.name,
-        email: formData.email || `client@mail.com`,
-        master: formData.master || 'Apex Capital',
-        broker: formData.broker || 'Ryan Chen',
-        kyc: formData.kyc || 'PENDING',
-        account: formData.account || 'ACTIVE',
-        balance: formData.balance || '$10,000',
-        pl: '+0',
-        openPositions: 0,
-        created: today,
-        phone: formData.phone || '+1 555-0300'
-      };
-      setClientsList([newClient, ...clientsList]);
-      notify(`Client ${newClient.name} (${newClient.id}) onboarded!`, 'success');
+    try {
+      if (level === 'masters') {
+        const newMaster = {
+          id: formData.id || `MST00${mastersList.length + 1}`,
+          name: formData.name,
+          company: formData.company || `${formData.name} Ltd`,
+          email: formData.email || `admin@${formData.name.toLowerCase().replace(/\s+/g, '')}.com`,
+          brokers: Number(formData.brokers) || 0,
+          clients: Number(formData.clients) || 0,
+          turnover: formData.turnover || '₹0.0M',
+          commission: formData.commission || '₹0',
+          status: formData.status || 'ACTIVE',
+          created: today,
+          region: formData.region || 'West (Mumbai)',
+          phone: formData.phone || '+91 98000 00000'
+        };
+        const res = await fetch('/api/admin/masters', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(newMaster)
+        });
+        const saved = res.ok ? await res.json() : newMaster;
+        setMastersList([saved, ...mastersList]);
+        notify(`Master ${saved.name} (${saved.id}) created successfully!`, 'success');
+      } else if (level === 'brokers') {
+        const newBroker = {
+          id: formData.id || `BRK00${brokersList.length + 1}`,
+          name: formData.name,
+          master: formData.master || 'Apex Capital Group',
+          email: formData.email || `broker@${formData.name.toLowerCase().replace(/\s+/g, '')}.com`,
+          subBrokers: Number(formData.subBrokers) || 0,
+          clients: Number(formData.clients) || 0,
+          turnover: formData.turnover || '$0.0M',
+          commission: formData.commission || '$0',
+          status: formData.status || 'ACTIVE',
+          created: today,
+          phone: formData.phone || '+1 555-0100'
+        };
+        const res = await fetch('/api/admin/brokers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(newBroker)
+        });
+        const saved = res.ok ? await res.json() : newBroker;
+        setBrokersList([saved, ...brokersList]);
+        notify(`Broker ${saved.name} (${saved.id}) registered!`, 'success');
+      } else if (level === 'sub-brokers') {
+        const newSub = {
+          id: formData.id || `SBK00${subBrokersList.length + 1}`,
+          name: formData.name,
+          parentBroker: formData.parentBroker || 'Ryan Chen',
+          email: formData.email || `sub@${formData.name.toLowerCase().replace(/\s+/g, '')}.com`,
+          clients: Number(formData.clients) || 0,
+          turnover: formData.turnover || '$0.0M',
+          commission: formData.commission || '$0',
+          status: formData.status || 'ACTIVE',
+          created: today,
+          phone: formData.phone || '+1 555-0200'
+        };
+        const res = await fetch('/api/admin/sub-brokers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(newSub)
+        });
+        const saved = res.ok ? await res.json() : newSub;
+        setSubBrokersList([saved, ...subBrokersList]);
+        notify(`Sub-Broker ${saved.name} (${saved.id}) added!`, 'success');
+      } else if (level === 'clients') {
+        const newClient = {
+          id: formData.id || `CLT00${clientsList.length + 1}`,
+          name: formData.name,
+          email: formData.email || `client@mail.com`,
+          master: formData.master || 'Apex Capital',
+          broker: formData.broker || 'Ryan Chen',
+          kyc: formData.kyc || 'PENDING',
+          account: formData.account || 'ACTIVE',
+          balance: formData.balance || '$10,000',
+          pl: '+0',
+          openPositions: 0,
+          created: today,
+          phone: formData.phone || '+1 555-0300'
+        };
+        const res = await fetch('/api/admin/clients', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(newClient)
+        });
+        const saved = res.ok ? await res.json() : newClient;
+        setClientsList([saved, ...clientsList]);
+        notify(`Client ${saved.name} (${saved.id}) onboarded!`, 'success');
+      }
+    } catch {
+      notify(`Failed to save ${level} entity`, 'warning');
     }
 
     setModalType(null);
   };
 
   // Save Edited Entity
-  const handleSaveEdit = (e: React.FormEvent) => {
+  const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedEntity) return;
+
+    try {
+      await fetch(`/api/admin/${level}/${selectedEntity.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(formData)
+      });
+    } catch {}
 
     if (level === 'masters') {
       setMastersList(prev =>
@@ -1542,12 +1637,26 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
               <span className="text-[11px] text-slate-500 font-mono">
                 Created: {selectedEntity.created || '2023-01-15'}
               </span>
-              <button
-                onClick={() => setModalType(null)}
-                className="px-4 py-1.5 bg-[#172545] hover:bg-[#1f315a] text-slate-200 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
-              >
-                Close
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => executeToggleStatus(selectedEntity)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                    (selectedEntity.status === 'ACTIVE' || selectedEntity.account === 'ACTIVE')
+                      ? 'bg-rose-950/60 hover:bg-rose-900 border border-rose-600/40 text-rose-300'
+                      : 'bg-emerald-950/60 hover:bg-emerald-900 border border-emerald-600/40 text-emerald-300'
+                  }`}
+                >
+                  {(selectedEntity.status === 'ACTIVE' || selectedEntity.account === 'ACTIVE') ? 'Suspend Entity' : 'Activate Entity'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setModalType(null)}
+                  className="px-4 py-1.5 bg-[#172545] hover:bg-[#1f315a] text-slate-200 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
             </div>
           </div>
         </div>

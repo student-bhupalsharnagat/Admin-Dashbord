@@ -118,7 +118,7 @@ export const SystemToolsView: React.FC<SystemToolsViewProps> = ({
 
   // Fetch initial emergency and platform statuses
   useEffect(() => {
-    fetch('/api/admin/platform')
+    fetch('/api/admin/platform-management')
       .then(res => res.ok ? res.json() : null)
       .then(data => {
         if (data) {
@@ -132,133 +132,207 @@ export const SystemToolsView: React.FC<SystemToolsViewProps> = ({
         }
       })
       .catch(() => {});
+
+    fetch('/api/admin/emergency-controls/trading')
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (data) {
+          setTradingPaused(Boolean(data.paused));
+        }
+      })
+      .catch(() => {});
   }, []);
 
   // Emergency Handlers
   const handleToggleTrading = async () => {
-    const nextState = !tradingPaused;
+    const nextPaused = !tradingPaused;
     try {
-      await fetch('/api/admin/emergency/trading', {
+      const res = await fetch('/api/admin/emergency-controls/trading', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ paused: nextState, reason: 'Super Admin emergency toggle' })
+        body: JSON.stringify({ active: !nextPaused, paused: nextPaused, reason: 'Super Admin emergency toggle' })
       });
-    } catch {}
-    setTradingPaused(nextState);
-    onNotify?.(
-      nextState ? 'EMERGENCY: Global Trading PAUSED' : 'Global Trading Resumed',
-      nextState ? 'warning' : 'success'
-    );
+      if (res.ok) {
+        setTradingPaused(nextPaused);
+        onNotify?.(
+          nextPaused ? 'EMERGENCY: Global Trading PAUSED' : 'Global Trading Resumed',
+          nextPaused ? 'warning' : 'success'
+        );
+      } else {
+        onNotify?.('Failed to update trading status', 'warning');
+      }
+    } catch {
+      onNotify?.('Network error updating trading status', 'warning');
+    }
+  };
+
+  const handleCancelAllOrders = async () => {
+    try {
+      const res = await fetch('/api/admin/emergency-controls/cancel-all-orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'Emergency Mass Cancel initiated from Admin console' })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        onNotify?.(data.message || 'All open orders cancelled successfully', 'warning');
+      } else {
+        onNotify?.('Failed to cancel open orders', 'warning');
+      }
+    } catch {
+      onNotify?.('Network error executing cancel all orders', 'warning');
+    }
   };
 
   const handleTriggerKillSwitch = async () => {
     if (killSwitchActive) {
       // Reset
       try {
-        await fetch('/api/admin/emergency/kill-switch/reset', { method: 'POST' });
-      } catch {}
-      setKillSwitchActive(false);
-      onNotify?.('Emergency Kill Switch Disarmed & Reset', 'success');
+        const res = await fetch('/api/admin/emergency-controls/kill-switch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'RESET', reason: 'Manual circuit breaker reset by Super Admin' })
+        });
+        if (res.ok) {
+          setKillSwitchActive(false);
+          onNotify?.('Emergency Kill Switch Disarmed & Reset', 'success');
+        }
+      } catch {
+        onNotify?.('Failed to reset kill switch', 'warning');
+      }
     } else {
       // Trigger
       try {
-        await fetch('/api/admin/emergency/kill-switch', {
+        const res = await fetch('/api/admin/emergency-controls/kill-switch', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ reason: 'Manual circuit breaker triggered by Super Admin' })
+          body: JSON.stringify({ action: 'TRIGGER', reason: 'Manual circuit breaker triggered by Super Admin' })
         });
-      } catch {}
-      setKillSwitchActive(true);
-      onNotify?.('CRITICAL: Kill Switch Activated! All pending orders cancelled.', 'warning');
+        if (res.ok) {
+          setKillSwitchActive(true);
+          onNotify?.('CRITICAL: Kill Switch Activated! All pending orders cancelled.', 'warning');
+        }
+      } catch {
+        onNotify?.('Failed to trigger kill switch', 'warning');
+      }
     }
   };
 
   const handleToggleRegistrations = async () => {
     const next = !registrationsEnabled;
     try {
-      await fetch('/api/admin/emergency/registrations', {
+      const res = await fetch('/api/admin/emergency-controls/registrations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: next })
       });
-    } catch {}
-    setRegistrationsEnabled(next);
-    onNotify?.(next ? 'New User Registrations Enabled' : 'New User Registrations FROZEN', 'info');
+      if (res.ok) {
+        setRegistrationsEnabled(next);
+        onNotify?.(next ? 'New User Registrations Enabled' : 'New User Registrations FROZEN', 'info');
+      }
+    } catch {
+      onNotify?.('Failed to update registration status', 'warning');
+    }
   };
 
   const handleToggleApiAccess = async () => {
     const next = !apiAccessEnabled;
     try {
-      await fetch('/api/admin/emergency/api-access', {
+      const res = await fetch('/api/admin/emergency-controls/api-access', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: next })
       });
-    } catch {}
-    setApiAccessEnabled(next);
-    onNotify?.(next ? 'Public Trading APIs Enabled' : 'Public Trading APIs BLOCKED', 'info');
+      if (res.ok) {
+        setApiAccessEnabled(next);
+        onNotify?.(next ? 'Public Trading APIs Enabled' : 'Public Trading APIs BLOCKED', 'info');
+      }
+    } catch {
+      onNotify?.('Failed to update API access status', 'warning');
+    }
   };
 
   const handleFreezeEntity = async () => {
     if (!freezeEntityId.trim()) return;
     try {
-      await fetch('/api/admin/emergency/freeze', {
+      const res = await fetch('/api/admin/emergency-controls/account-action', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           entityType: freezeEntityType,
           entityId: freezeEntityId.trim(),
+          action: 'FREEZE',
           reason: freezeReason
         })
       });
-    } catch {}
-    setFreezeModalOpen(false);
-    onNotify?.(`Freezing enforced on ${freezeEntityType} ${freezeEntityId}`, 'warning');
-    setFreezeEntityId('');
+      if (res.ok) {
+        setFreezeModalOpen(false);
+        onNotify?.(`Freezing enforced on ${freezeEntityType} ${freezeEntityId}`, 'warning');
+        setFreezeEntityId('');
+      }
+    } catch {
+      onNotify?.(`Failed to freeze ${freezeEntityType}`, 'warning');
+    }
   };
 
   const handleRevokeSession = async (sessionId: string) => {
     try {
-      await fetch(`/api/admin/monitoring/sessions/${sessionId}`, { method: 'DELETE' });
-    } catch {}
-    setSessions(prev => prev.filter(s => s.id !== sessionId));
-    onNotify?.(`Session ${sessionId} terminated immediately`, 'success');
+      const res = await fetch(`/api/admin/monitoring/sessions/${sessionId}`, { method: 'DELETE' });
+      if (res.ok) {
+        setSessions(prev => prev.filter(s => s.id !== sessionId));
+        onNotify?.(`Session ${sessionId} terminated immediately`, 'success');
+      }
+    } catch {
+      onNotify?.(`Failed to terminate session ${sessionId}`, 'warning');
+    }
   };
 
   const handleResolveAlert = async (alertId: string) => {
     try {
-      await fetch(`/api/admin/monitoring/alerts/${alertId}/resolve`, { method: 'POST' });
-    } catch {}
-    setSuspiciousAlerts(prev =>
-      prev.map(a => (a.id === alertId ? { ...a, status: 'RESOLVED' } : a))
-    );
-    onNotify?.(`Alert ${alertId} resolved`, 'success');
+      const res = await fetch(`/api/admin/monitoring/alerts/${alertId}/resolve`, { method: 'POST' });
+      if (res.ok) {
+        setSuspiciousAlerts(prev =>
+          prev.map(a => (a.id === alertId ? { ...a, status: 'RESOLVED' } : a))
+        );
+        onNotify?.(`Alert ${alertId} resolved`, 'success');
+      }
+    } catch {
+      onNotify?.(`Failed to resolve alert ${alertId}`, 'warning');
+    }
   };
 
   const handleToggleMaintenance = async () => {
     const next = !maintenanceMode;
     try {
-      await fetch('/api/admin/platform/maintenance', {
+      const res = await fetch('/api/admin/platform-management', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: next, message: broadcastMessage || 'System maintenance in progress' })
+        body: JSON.stringify({ maintenanceMode: next, message: broadcastMessage || 'System maintenance in progress' })
       });
-    } catch {}
-    setMaintenanceMode(next);
-    onNotify?.(next ? 'Maintenance Mode ACTIVE' : 'Maintenance Mode Disabled', next ? 'warning' : 'success');
+      if (res.ok) {
+        setMaintenanceMode(next);
+        onNotify?.(next ? 'Maintenance Mode ACTIVE' : 'Maintenance Mode Disabled', next ? 'warning' : 'success');
+      }
+    } catch {
+      onNotify?.('Failed to update maintenance mode', 'warning');
+    }
   };
 
   const handleSendBroadcast = async () => {
     if (!broadcastMessage.trim()) return;
     try {
-      await fetch('/api/admin/platform/broadcast', {
+      const res = await fetch('/api/admin/platform-management', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: broadcastMessage.trim(), level: 'CRITICAL' })
       });
-    } catch {}
-    onNotify?.('System-wide push alert dispatched to all active terminals', 'success');
-    setBroadcastMessage('');
+      if (res.ok) {
+        onNotify?.('System-wide push alert dispatched to all active terminals', 'success');
+        setBroadcastMessage('');
+      }
+    } catch {
+      onNotify?.('Failed to dispatch push alert', 'warning');
+    }
   };
 
   return (
@@ -722,17 +796,28 @@ export const SystemToolsView: React.FC<SystemToolsViewProps> = ({
                     Cancels all pending limit orders instantly across every Master and squares off high-risk positions.
                   </p>
                   <div className="mt-5 flex items-center justify-between">
-                    <span className="text-xs text-slate-400">Action:</span>
-                    <button
-                      onClick={handleTriggerKillSwitch}
-                      className={`px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                        killSwitchActive
-                          ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
-                          : 'bg-rose-600 hover:bg-rose-500 text-white shadow-lg shadow-rose-600/30'
-                      }`}
-                    >
-                      {killSwitchActive ? 'Reset Kill Switch' : 'TRIGGER EMERGENCY KILL SWITCH'}
-                    </button>
+                    <span className="text-xs text-slate-400">Actions:</span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleCancelAllOrders}
+                        className="px-3 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer bg-slate-800 hover:bg-slate-700 text-rose-300 border border-rose-500/30"
+                        title="Mass cancel all open/pending orders without disarming system trading"
+                      >
+                        Cancel Open Orders
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleTriggerKillSwitch}
+                        className={`px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                          killSwitchActive
+                            ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                            : 'bg-rose-600 hover:bg-rose-500 text-white shadow-lg shadow-rose-600/30'
+                        }`}
+                      >
+                        {killSwitchActive ? 'Reset Kill Switch' : 'TRIGGER KILL SWITCH'}
+                      </button>
+                    </div>
                   </div>
                 </div>
 

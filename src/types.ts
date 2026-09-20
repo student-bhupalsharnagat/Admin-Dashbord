@@ -43,10 +43,12 @@ export interface AuthUser {
   name: string;
   email: string;
   role: UserRole;
-  tenant_id: string;
+  tenant_id: string | null;
   tenant_name?: string;
   avatar?: string;
   phone?: string;
+  permissions?: string[];
+  simulated_tenant_id?: string | null;
 }
 
 export interface Tenant {
@@ -172,7 +174,9 @@ export interface Trade {
 export interface Order {
   id: string;
   order_id: string;
+  client_id?: string;
   client_name: string;
+  tenant_id?: string;
   tenant_name: string;
   symbol: string;
   type: 'MARKET' | 'LIMIT' | 'STOP_LOSS';
@@ -196,6 +200,40 @@ export interface KYCRecord {
   submitted_date: string;
   id_number?: string;
   notes?: string;
+}
+
+export interface FundDepositItem {
+  txnId: string;
+  client: string;
+  amount: string;
+  method: string;
+  reference: string;
+  status: 'COMPLETED' | 'PENDING' | 'PROCESSING' | 'FAILED';
+  date: string;
+  rawAmount: number;
+}
+
+export interface FundWithdrawalItem {
+  txnId: string;
+  client: string;
+  amount: string;
+  method: string;
+  reference: string;
+  status: 'COMPLETED' | 'PENDING' | 'PROCESSING' | 'FAILED';
+  date: string;
+  rawAmount: number;
+}
+
+export interface LedgerRowItem {
+  date: string;
+  txnId: string;
+  account: string;
+  type: 'DEPOSIT' | 'WITHDRAWAL' | 'COMMISSION' | 'P&L';
+  credit: string;
+  debit: string;
+  balance: string;
+  reference: string;
+  status: 'COMPLETED' | 'PROCESSING' | 'PENDING';
 }
 
 export interface DashboardKPIs {
@@ -439,6 +477,9 @@ export interface LedgerEntry {
 export interface EmergencyControlsState {
   globalTradingActive: boolean;
   globalKillSwitchActive: boolean;
+  tradingReason?: string;
+  trading_paused_at?: string;
+  trading_paused_by?: string;
   killSwitchDetails?: {
     triggeredBy: string;
     triggeredAt: string;

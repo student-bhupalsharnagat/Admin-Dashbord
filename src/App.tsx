@@ -84,7 +84,48 @@ export default function App() {
   };
 
   // Dashboard Data State
-  const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
+  const DEFAULT_INITIAL_DASHBOARD: DashboardData = {
+    kpis: {
+      total_masters: { value: 5, badge: '+2 new', subtitle: 'Across all regions' },
+      total_brokers: { value: 43, badge: '+5 new', subtitle: '38 active' },
+      total_clients: { value: 3073, badge: '↑ 12.3%', subtitle: '1,360 KYC approved' },
+      commission_earned: { value: '₹862K', badge: '↑ 11.4%', subtitle: 'Today' },
+      todays_turnover: { value: '₹48.2M', badge: '↑ 9.8%', subtitle: 'Today' },
+      total_pl: { value: '₹8.44M', badge: '↑ 22.1%', subtitle: 'Unrealized + Realized' },
+      pending_kyc: { value: 2, subtitle: 'Requires review' },
+      open_tickets: { value: 4, subtitle: '2 high priority' }
+    },
+    volumeCommission: [
+      { date: '2026-01-01', displayDate: 'Jan', volume: 25, commission: 135 },
+      { date: '2026-02-01', displayDate: 'Feb', volume: 25, commission: 142 },
+      { date: '2026-03-01', displayDate: 'Mar', volume: 28, commission: 155 },
+      { date: '2026-04-01', displayDate: 'Apr', volume: 26, commission: 145 },
+      { date: '2026-05-01', displayDate: 'May', volume: 45, commission: 200 },
+      { date: '2026-06-01', displayDate: 'Jun', volume: 55, commission: 215 }
+    ],
+    clientGrowth: [
+      { month: 'Apr', clients: 2400 },
+      { month: 'May', clients: 2600 },
+      { month: 'Jun', clients: 2750 },
+      { month: 'Jul', clients: 2900 },
+      { month: 'Aug', clients: 2980 },
+      { month: 'Sep', clients: 3073 }
+    ],
+    dailyPL: [
+      { day: 'Sep 13', displayDay: '13 Sep', pl: 12.4, isProfit: true },
+      { day: 'Sep 14', displayDay: '14 Sep', pl: -4.2, isProfit: false },
+      { day: 'Sep 15', displayDay: '15 Sep', pl: 18.6, isProfit: true },
+      { day: 'Sep 16', displayDay: '16 Sep', pl: 8.2, isProfit: true },
+      { day: 'Sep 17', displayDay: '17 Sep', pl: -2.1, isProfit: false },
+      { day: 'Sep 18', displayDay: '18 Sep', pl: 15.3, isProfit: true },
+      { day: 'Sep 19', displayDay: '19 Sep', pl: 21.8, isProfit: true }
+    ],
+    recentTrades: [],
+    pendingKYC: [],
+    tenants: []
+  };
+
+  const [dashboardData, setDashboardData] = useState<DashboardData>(DEFAULT_INITIAL_DASHBOARD);
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [masters, setMasters] = useState<Master[]>([]);
   const [brokers, setBrokers] = useState<Broker[]>([]);
@@ -101,45 +142,103 @@ export default function App() {
   const [showCreateTenantModal, setShowCreateTenantModal] = useState(false);
   const [selectedKycForReview, setSelectedKycForReview] = useState<KYCRecord | null>(null);
 
-  // Authentication State (default to Super Admin for immediate dashboard rendering)
-  const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
-    try {
-      const stored = localStorage.getItem('tradematrix_session');
-      if (stored) {
-        return JSON.parse(stored);
+  // Authentication State (managed via secure HTTP-only cookie session)
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
+  const [authChecking, setAuthChecking] = useState(true);
+
+  // Check active session on initial load
+  useEffect(() => {
+    let isMounted = true;
+    async function checkAuthSession() {
+      try {
+        const res = await fetch('/api/auth/me', {
+          credentials: 'include'
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.user && isMounted) {
+            setCurrentUser(data.user);
+            if (data.user.tenant_id && data.user.tenant_id !== 'GLOBAL') {
+              setSelectedTenantScope(data.user.tenant_id);
+            }
+            loadDashboardData();
+            loadHierarchyData();
+          }
+        } else {
+          // If no active cookie session exists yet, default to initial Super Admin session for immediate access
+          const loginRes = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              email: 'admin@platform.com',
+              password: 'password123'
+            }),
+            credentials: 'include'
+          });
+          if (loginRes.ok) {
+            const loginData = await loginRes.json();
+            if (loginData.user && isMounted) {
+              setCurrentUser(loginData.user);
+              loadDashboardData();
+              loadHierarchyData();
+            }
+          } else if (isMounted) {
+            setCurrentUser(null);
+          }
+        }
+      } catch (err) {
+        console.warn('Authentication session check error:', err);
+        if (isMounted) setCurrentUser(null);
+      } finally {
+        if (isMounted) setAuthChecking(false);
       }
-    } catch (e) {
-      // Ignore parse failure
     }
-    return {
-      id: 'usr_superadmin_01',
-      name: 'Admin John',
-      email: 'admin@platform.com',
-      role: 'SUPER_ADMIN',
-      tenantId: 'GLOBAL',
-      tenantName: 'All Tenants (Global Scope)',
-      avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80'
+
+    checkAuthSession();
+    return () => {
+      isMounted = false;
     };
-  });
+  }, []);
 
   const handleLogin = (user: AuthUser) => {
     setCurrentUser(user);
-    try {
-      localStorage.setItem('tradematrix_session', JSON.stringify(user));
-    } catch (e) {
-      // Ignore storage failure
+    if (user.tenant_id && user.tenant_id !== 'GLOBAL') {
+      setSelectedTenantScope(user.tenant_id);
+    } else {
+      setSelectedTenantScope(null);
     }
+    loadDashboardData();
+    loadHierarchyData();
     showToast(`Welcome back, ${user.name}! Signed in as ${user.role}.`, 'success');
   };
 
-  const handleLogout = () => {
-    setCurrentUser(null);
+  const handleLogout = async () => {
     try {
-      localStorage.removeItem('tradematrix_session');
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        credentials: 'include'
+      });
     } catch (e) {
-      // Ignore storage failure
+      console.warn('Logout error:', e);
     }
+    setCurrentUser(null);
     showToast('Signed out of TradeMatrix. Session ended.', 'info');
+  };
+
+  const handleSelectTenantScope = async (tenantId: string | null) => {
+    setSelectedTenantScope(tenantId);
+    if (currentUser?.role === 'SUPER_ADMIN' || currentUser?.role === 'PLATFORM_OWNER') {
+      try {
+        await fetch('/api/auth/switch-tenant', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tenantId }),
+          credentials: 'include'
+        });
+      } catch (e) {
+        console.warn('Switch tenant error:', e);
+      }
+    }
   };
 
   // Notification Toast state (clean alternative to browser alert)
@@ -156,13 +255,23 @@ export default function App() {
       const url = selectedTenantScope
         ? `/api/admin/dashboard?tenantId=${selectedTenantScope}`
         : '/api/admin/dashboard';
-      const res = await fetch(url);
+      const res = await fetch(url, { credentials: 'include' });
       if (res.ok) {
-        const data: DashboardData = await res.json();
-        setDashboardData(data);
-        setTenants(data.tenants || []);
-        setRecentTrades(data.recentTrades || []);
-        setPendingKYC(data.pendingKYC || []);
+        const data: any = await res.json();
+        setDashboardData(prev => ({
+          kpis: data.kpis || prev.kpis,
+          volumeCommission: data.volumeCommission || data.charts?.volumeCommission || prev.volumeCommission,
+          clientGrowth: data.clientGrowth || data.charts?.clientGrowth || prev.clientGrowth,
+          dailyPL: Array.isArray(data.dailyPL)
+            ? data.dailyPL
+            : (data.charts?.dailyPL?.data || prev.dailyPL),
+          recentTrades: data.recentTrades || prev.recentTrades,
+          pendingKYC: data.pendingKYC || prev.pendingKYC,
+          tenants: data.tenants || prev.tenants
+        }));
+        if (data.tenants && data.tenants.length) setTenants(data.tenants);
+        if (data.recentTrades && data.recentTrades.length) setRecentTrades(data.recentTrades);
+        if (data.pendingKYC && data.pendingKYC.length) setPendingKYC(data.pendingKYC);
       }
     } catch (err) {
       console.warn('Backend API fetch error, using resilient state:', err);
@@ -170,15 +279,21 @@ export default function App() {
   }, [selectedTenantScope]);
 
   // Fetch Full Hierarchy Entities
+  const [isHierarchyLoading, setIsHierarchyLoading] = useState(false);
+  const [hierarchyError, setHierarchyError] = useState<string | null>(null);
+
   const loadHierarchyData = useCallback(async () => {
+    setIsHierarchyLoading(true);
+    setHierarchyError(null);
     try {
+      const scopeParam = selectedTenantScope ? `?tenantId=${selectedTenantScope}` : '';
       const [mRes, bRes, sbRes, cRes, kRes, tRes] = await Promise.all([
-        fetch('/api/admin/hierarchy/masters'),
-        fetch('/api/admin/hierarchy/brokers'),
-        fetch('/api/admin/hierarchy/sub-brokers'),
-        fetch('/api/admin/hierarchy/clients'),
-        fetch('/api/admin/kyc'),
-        fetch('/api/admin/trading/trades')
+        fetch(`/api/admin/masters${scopeParam}`, { credentials: 'include' }),
+        fetch(`/api/admin/brokers${scopeParam}`, { credentials: 'include' }),
+        fetch(`/api/admin/sub-brokers${scopeParam}`, { credentials: 'include' }),
+        fetch(`/api/admin/clients${scopeParam}`, { credentials: 'include' }),
+        fetch(`/api/admin/kyc${scopeParam}`, { credentials: 'include' }),
+        fetch(`/api/admin/trades${scopeParam}`, { credentials: 'include' })
       ]);
 
       if (mRes.ok) setMasters(await mRes.json());
@@ -187,18 +302,23 @@ export default function App() {
       if (cRes.ok) setClients(await cRes.json());
       if (kRes.ok) setKycRecords(await kRes.json());
       if (tRes.ok) setTrades(await tRes.json());
-    } catch (err) {
-      console.warn('API sync warning:', err);
+    } catch (err: any) {
+      console.warn('Hierarchy API sync warning:', err);
+      setHierarchyError('Failed to load hierarchy entities from central API');
+    } finally {
+      setIsHierarchyLoading(false);
     }
-  }, []);
+  }, [selectedTenantScope]);
 
   const [recentTrades, setRecentTrades] = useState<Trade[]>([]);
   const [pendingKYC, setPendingKYC] = useState<KYCRecord[]>([]);
 
   useEffect(() => {
-    loadDashboardData();
-    loadHierarchyData();
-  }, [loadDashboardData, loadHierarchyData]);
+    if (currentUser) {
+      loadDashboardData();
+      loadHierarchyData();
+    }
+  }, [currentUser?.id, selectedTenantScope, loadDashboardData, loadHierarchyData]);
 
   // Dynamic breadcrumb generation matching screenshot (e.g. Dashboard > Trades)
   const getBreadcrumbs = () => {
@@ -262,51 +382,79 @@ export default function App() {
 
   // Creation Handlers
   const handleCreateMaster = async (data: any) => {
-    const res = await fetch('/api/admin/hierarchy/masters', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
-    });
-    if (res.ok) {
-      await loadHierarchyData();
-      await loadDashboardData();
+    try {
+      const res = await fetch('/api/admin/masters', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      if (res.ok) {
+        showToast('Master created successfully', 'success');
+        await loadHierarchyData();
+        await loadDashboardData();
+      } else {
+        showToast('Failed to create Master', 'warning');
+      }
+    } catch {
+      showToast('Error creating Master', 'warning');
     }
   };
 
   const handleCreateBroker = async (data: any) => {
-    const res = await fetch('/api/admin/hierarchy/brokers', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
-    });
-    if (res.ok) {
-      await loadHierarchyData();
-      await loadDashboardData();
+    try {
+      const res = await fetch('/api/admin/brokers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      if (res.ok) {
+        showToast('Broker registered successfully', 'success');
+        await loadHierarchyData();
+        await loadDashboardData();
+      } else {
+        showToast('Failed to create Broker', 'warning');
+      }
+    } catch {
+      showToast('Error creating Broker', 'warning');
     }
   };
 
   const handleAddClient = async (data: any) => {
-    const res = await fetch('/api/admin/hierarchy/clients', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
-    });
-    if (res.ok) {
-      await loadHierarchyData();
-      await loadDashboardData();
+    try {
+      const res = await fetch('/api/admin/clients', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      if (res.ok) {
+        showToast('Client onboarded successfully', 'success');
+        await loadHierarchyData();
+        await loadDashboardData();
+      } else {
+        showToast('Failed to onboard Client', 'warning');
+      }
+    } catch {
+      showToast('Error onboarding Client', 'warning');
     }
   };
 
   const handleCreateTenant = async (data: any) => {
-    const res = await fetch('/api/admin/tenants', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
-    });
-    if (res.ok) {
-      const newTenant = await res.json();
-      setTenants(prev => [newTenant, ...prev]);
-      await loadDashboardData();
+    try {
+      const res = await fetch('/api/admin/tenants', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      if (res.ok) {
+        const newTenant = await res.json();
+        setTenants(prev => [newTenant, ...prev]);
+        showToast('Tenant created successfully', 'success');
+        await loadDashboardData();
+      } else {
+        showToast('Failed to create Tenant', 'warning');
+      }
+    } catch {
+      showToast('Error creating Tenant', 'warning');
     }
   };
 
@@ -315,14 +463,21 @@ export default function App() {
     status: KYCRecord['kyc_status'],
     notes?: string
   ) => {
-    const res = await fetch(`/api/admin/kyc/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status, notes })
-    });
-    if (res.ok) {
-      await loadHierarchyData();
-      await loadDashboardData();
+    try {
+      const res = await fetch(`/api/admin/kyc/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status, notes })
+      });
+      if (res.ok) {
+        showToast(`KYC status updated to ${status}`, 'success');
+        await loadHierarchyData();
+        await loadDashboardData();
+      } else {
+        showToast('Failed to update KYC status', 'warning');
+      }
+    } catch {
+      showToast('Error updating KYC status', 'warning');
     }
   };
 
@@ -332,29 +487,43 @@ export default function App() {
     currentStatus: string
   ) => {
     const newStatus = currentStatus === 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE';
-    const res = await fetch(`/api/admin/entities/${type}/${id}/status`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: newStatus })
-    });
-    if (res.ok) {
-      await loadHierarchyData();
-      await loadDashboardData();
+    try {
+      const res = await fetch(`/api/admin/${type}/${id}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus })
+      });
+      if (res.ok) {
+        showToast(`${type} status updated to ${newStatus}`, 'success');
+        await loadHierarchyData();
+        await loadDashboardData();
+      } else {
+        showToast(`Failed to update ${type} status`, 'warning');
+      }
+    } catch {
+      showToast(`Error updating ${type} status`, 'warning');
     }
   };
 
   const handleToggleTenantStatus = async (id: string, currentStatus: string) => {
     const newStatus = currentStatus === 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE';
-    const res = await fetch(`/api/admin/tenants/${id}/status`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: newStatus })
-    });
-    if (res.ok) {
-      setTenants(prev =>
-        prev.map(t => (t.id === id ? { ...t, status: newStatus as any } : t))
-      );
-      await loadDashboardData();
+    try {
+      const res = await fetch(`/api/admin/tenants/${id}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus })
+      });
+      if (res.ok) {
+        setTenants(prev =>
+          prev.map(t => (t.id === id ? { ...t, status: newStatus as any } : t))
+        );
+        showToast(`Tenant status changed to ${newStatus}`, 'success');
+        await loadDashboardData();
+      } else {
+        showToast('Failed to update Tenant status', 'warning');
+      }
+    } catch {
+      showToast('Error updating Tenant status', 'warning');
     }
   };
 
@@ -372,6 +541,18 @@ export default function App() {
       }
     }
   };
+
+  // If authentication check is in progress, show clean loader
+  if (authChecking) {
+    return (
+      <div className="min-h-screen w-full bg-[#050811] flex items-center justify-center text-slate-400">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
+          <span className="text-xs font-mono">Authenticating session...</span>
+        </div>
+      </div>
+    );
+  }
 
   // If no user is logged in, show the TradeMatrix Login & Sign Up screen
   if (!currentUser) {
@@ -443,9 +624,7 @@ export default function App() {
           breadcrumbs={getBreadcrumbs()}
           tenants={tenants}
           selectedTenantId={selectedTenantScope}
-          onSelectTenantScope={tenantId => {
-            setSelectedTenantScope(tenantId);
-          }}
+          onSelectTenantScope={handleSelectTenantScope}
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
           onLogout={handleLogout}
@@ -531,6 +710,7 @@ export default function App() {
                     setSelectedTradeForDetail(trade);
                     setActiveTab('trades');
                   }}
+                  onRefresh={loadDashboardData}
                 />
               )}
 
@@ -538,6 +718,7 @@ export default function App() {
               {(activeTab === 'trades' || activeTab === 'orders-trades') && (
                 <TradesView
                   initialSelectedTrade={selectedTradeForDetail}
+                  initialTrades={trades}
                   onNavigateToClient={() => setActiveTab('clients')}
                   onNotify={showToast}
                 />

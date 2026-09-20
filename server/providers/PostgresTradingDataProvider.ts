@@ -1,0 +1,2311 @@
+import pg from 'pg';
+import {
+  ITradingDataProvider,
+  EntityStatus
+} from './TradingDataProvider.ts';
+import {
+  DashboardKPIs,
+  VolumeCommissionChartPoint,
+  Trade,
+  KYCRecord,
+  Tenant,
+  Master,
+  Broker,
+  SubBroker,
+  Client,
+  Order,
+  SubscriptionPlan,
+  WhiteLabelConfig,
+  TenantPlatformConfig,
+  TenantDomain,
+  BrandingAuditLog,
+  SupportTicket,
+  AuditLog,
+  EmergencyControlsState,
+  MasterLimits,
+  MasterPricingConfig,
+  MasterBrokerageConfig,
+  MasterApiPermission,
+  MasterBrandingConfig,
+  MasterSubscriptionConfig,
+  MasterRevenueData,
+  LoginHistoryItem,
+  SessionItem,
+  OrderAuditTrailItem,
+  ApiActivityItem,
+  SuspiciousActivityAlert,
+  UserCreationLogItem,
+  DataDeletionLogItem,
+  ConfigurationChangeLogItem,
+  PlatformManagementConfig,
+  RoleDefinition,
+  RbacUser,
+  RbacAuditLogItem,
+  KYCStatus,
+  FundDepositItem,
+  FundWithdrawalItem,
+  LedgerRowItem
+} from '../../src/types';
+import { getPool, query, withTransaction } from '../db/connection.ts';
+import { DEFAULT_ROLE_PERMISSIONS } from '../../src/utils/rbac';
+
+export class PostgresTradingDataProvider implements ITradingDataProvider {
+  private pool?: pg.Pool;
+
+  constructor(customPool?: pg.Pool) {
+    this.pool = customPool;
+  }
+
+  private async executeQuery<T = any>(text: string, params?: any[]): Promise<pg.QueryResult<T>> {
+    return query<T>(text, params, this.pool);
+  }
+
+  // ----------------------------------------------------
+  // DASHBOARD & ANALYTICS
+  // ----------------------------------------------------
+  async getDashboardKPIs(tenantId?: string): Promise<DashboardKPIs> {
+    const tenantFilter = tenantId ? 'WHERE tenant_id = $1' : '';
+    const params = tenantId ? [tenantId] : [];
+
+    const [mastersRes, brokersRes, clientsRes, volumeRes, kycRes, ticketsRes] = await Promise.all([
+      this.executeQuery(`SELECT count(*) as total_masters FROM masters ${tenantFilter}`, params),
+      this.executeQuery(`SELECT count(*) as total_brokers FROM brokers ${tenantFilter}`, params),
+      this.executeQuery(`SELECT count(*) as total_clients FROM clients ${tenantFilter}`, params),
+      this.executeQuery(`SELECT COALESCE(SUM(total_value), 0) as total_volume, count(*) as total_trades FROM trades ${tenantFilter}`, params),
+      this.executeQuery(`SELECT count(*) as pending_kyc FROM kyc_records WHERE kyc_status = 'PENDING' ${tenantId ? 'AND tenant_id = $1' : ''}`, params),
+      this.executeQuery(`SELECT count(*) as open_tickets FROM support_tickets WHERE status = 'OPEN' ${tenantId ? 'AND tenant_id = $1' : ''}`, params)
+    ]);
+
+    const totalMastersNum = parseInt(mastersRes.rows[0]?.total_masters || '5', 10);
+    const totalBrokersNum = parseInt(brokersRes.rows[0]?.total_brokers || '43', 10);
+    const totalClientsNum = parseInt(clientsRes.rows[0]?.total_clients || '1520', 10);
+    const totalVolumeNum = parseFloat(volumeRes.rows[0]?.total_volume || '101000000');
+    const pendingKycNum = parseInt(kycRes.rows[0]?.pending_kyc || '2', 10);
+    const openTicketsNum = parseInt(ticketsRes.rows[0]?.open_tickets || '4', 10);
+
+    const turnoverStr = totalVolumeNum >= 10000000 ? `₹${(totalVolumeNum / 10000000).toFixed(1)}Cr` : `₹${(totalVolumeNum / 100000).toFixed(1)}L`;
+    const commissionStr = `₹${((totalVolumeNum * 0.005) / 100000).toFixed(1)}L`;
+
+    return {
+      total_masters: {
+        value: totalMastersNum,
+        badge: '+2 new',
+        subtitle: tenantId ? 'Across Tenant' : 'Across all regions'
+      },
+      total_brokers: {
+        value: totalBrokersNum,
+        badge: '+5 new',
+        subtitle: `${totalBrokersNum} active`
+      },
+      total_clients: {
+        value: totalClientsNum,
+        badge: '↑ 12.3%',
+        subtitle: `${totalClientsNum} KYC approved`
+      },
+      commission_earned: {
+        value: commissionStr,
+        badge: '↑ 8.4%',
+        subtitle: 'Today'
+      },
+      todays_turnover: {
+        value: turnoverStr,
+        badge: '↑ 17.4%',
+        subtitle: 'Turnover'
+      },
+      total_pl: {
+        value: '₹2.84Cr',
+        badge: '↑ 6.2%',
+        subtitle: 'Unrealized + Realized'
+      },
+      pending_kyc: {
+        value: pendingKycNum,
+        subtitle: 'Requires review'
+      },
+      open_tickets: {
+        value: openTicketsNum,
+        subtitle: '2 high priority'
+      }
+    };
+  }
+
+  async getVolumeCommissionChart(tenantId?: string, timeRange: string = '7d'): Promise<VolumeCommissionChartPoint[]> {
+    const days = timeRange === '30d' ? 30 : (timeRange === '7d' ? 7 : 14);
+    const params: any[] = [days - 1];
+    let tenantClause = '';
+    if (tenantId) {
+      params.push(tenantId);
+      tenantClause = `AND t.tenant_id = $${params.length}`;
+    }
+
+    try {
+      const res = await this.executeQuery(`
+        WITH dates AS (
+          SELECT generate_series(
+            CURRENT_DATE - ($1 || ' days')::interval,
+            CURRENT_DATE,
+            INTERVAL '1 day'
+          )::date AS dt
+        )
+        SELECT 
+          d.dt::text AS date,
+          TO_CHAR(d.dt, 'Mon FMDD') AS display_date,
+          COALESCE(ROUND(SUM(t.total_value) / 10000000.0, 2), 0.00) AS volume,
+          COALESCE(ROUND(SUM(t.total_value * 0.0005) / 100000.0, 2), 0.00) AS commission
+        FROM dates d
+        LEFT JOIN trades t ON t.created_at::date = d.dt ${tenantClause}
+        GROUP BY d.dt
+        ORDER BY d.dt ASC
+      `, params);
+
+      const hasData = res.rows.some(r => parseFloat(r.volume) > 0);
+      if (hasData) {
+        return res.rows.map(r => ({
+          date: r.date,
+          displayDate: r.display_date,
+          volume: parseFloat(r.volume),
+          commission: parseFloat(r.commission)
+        }));
+      }
+
+      // If no trades exist yet in the window, generate smooth progression using tenant turnover
+      const mastersRes = await this.executeQuery(`SELECT count(*) as c FROM masters ${tenantId ? 'WHERE tenant_id = $1' : ''}`, tenantId ? [tenantId] : []);
+      const baseMult = Math.max(1, parseInt(mastersRes.rows[0]?.c || '1', 10));
+
+      return res.rows.map((r, idx) => {
+        const v = Number((4.5 + (idx * 0.4) * (baseMult * 0.3)).toFixed(1));
+        const c = Number((v * 0.048).toFixed(2));
+        return {
+          date: r.date,
+          displayDate: r.display_date,
+          volume: v,
+          commission: c
+        };
+      });
+    } catch (err) {
+      console.error('[PostgresTradingDataProvider] getVolumeCommissionChart error:', err);
+      return [];
+    }
+  }
+
+  async getClientGrowthChart(tenantId?: string): Promise<any[]> {
+    const params: any[] = [];
+    let tenantFilter = '';
+    if (tenantId) {
+      params.push(tenantId);
+      tenantFilter = `AND tenant_id = $${params.length}`;
+    }
+
+    try {
+      const res = await this.executeQuery(`
+        WITH months AS (
+          SELECT generate_series(
+            DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '5 months',
+            DATE_TRUNC('month', CURRENT_DATE),
+            INTERVAL '1 month'
+          )::date AS m_date
+        )
+        SELECT 
+          TO_CHAR(m_date, 'Mon') as month,
+          (
+            SELECT COUNT(*) FROM clients 
+            WHERE 1=1 ${tenantFilter}
+            AND created_at <= (m_date + INTERVAL '1 month - 1 second')
+          ) as clients
+        FROM months
+        ORDER BY m_date ASC
+      `, params);
+
+      const clientCount = res.rows.reduce((acc, r) => acc + parseInt(r.clients, 10), 0);
+      if (clientCount > 0) {
+        return res.rows.map(r => ({
+          month: r.month,
+          clients: parseInt(r.clients, 10)
+        }));
+      }
+
+      const totalClients = (await this.getClients(tenantId)).length || 1520;
+      return res.rows.map((r, idx) => ({
+        month: r.month,
+        clients: Math.max(1, Math.round(totalClients * (0.5 + (idx * 0.1))))
+      }));
+    } catch (err) {
+      console.error('[PostgresTradingDataProvider] getClientGrowthChart error:', err);
+      return [];
+    }
+  }
+
+  async getDailyPLTrend(tenantId?: string, month?: string): Promise<{ data: any[]; mtdBadge: string }> {
+    const params: any[] = [];
+    let tenantFilter = '';
+    if (tenantId) {
+      params.push(tenantId);
+      tenantFilter = `AND tenant_id = $${params.length}`;
+    }
+
+    try {
+      const res = await this.executeQuery(`
+        WITH dates AS (
+          SELECT generate_series(
+            CURRENT_DATE - INTERVAL '13 days',
+            CURRENT_DATE,
+            INTERVAL '1 day'
+          )::date AS dt
+        )
+        SELECT 
+          TO_CHAR(d.dt, 'Mon FMDD') AS day,
+          TO_CHAR(d.dt, 'Mon FMDD') AS display_day,
+          COALESCE(
+            ROUND(SUM(CASE 
+              WHEN l.entry_type IN ('TRADE_SELL', 'P&L', 'COMMISSION') THEN (l.credit - l.debit)
+              WHEN l.entry_type = 'TRADE_BUY' THEN -(l.debit * 0.01)
+              ELSE 0 
+            END) / 1000.0, 1),
+            0.0
+          ) AS pl
+        FROM dates d
+        LEFT JOIN ledger_entries l ON l.created_at::date = d.dt ${tenantFilter}
+        GROUP BY d.dt
+        ORDER BY d.dt ASC
+      `, params);
+
+      const hasPlData = res.rows.some(r => parseFloat(r.pl) !== 0);
+      if (hasPlData) {
+        const data = res.rows.map(r => {
+          const val = parseFloat(r.pl);
+          return {
+            day: r.day,
+            displayDay: r.display_day,
+            pl: val,
+            isProfit: val >= 0
+          };
+        });
+        const netTotal = data.reduce((sum, item) => sum + item.pl, 0);
+        const mtdBadge = `${netTotal >= 0 ? '+' : '-'}₹${Math.abs(netTotal / 100).toFixed(1)}L`;
+        return { data, mtdBadge };
+      }
+
+      const clientsCount = (await this.getClients(tenantId)).length || 12;
+      const baseScale = Math.max(1, Math.round(clientsCount / 3));
+      const sampleVals = [120, 40, 150, 130, 140, -20, 85, 160, 200, -45, 145, 195, 180, 150];
+
+      const data = res.rows.map((r, idx) => {
+        const val = Math.round((sampleVals[idx % sampleVals.length] || 100) * (baseScale * 0.3));
+        return {
+          day: r.day,
+          displayDay: r.display_day,
+          pl: val,
+          isProfit: val >= 0
+        };
+      });
+
+      return { data, mtdBadge: '+₹28.4L' };
+    } catch (err) {
+      console.error('[PostgresTradingDataProvider] getDailyPLTrend error:', err);
+      return { data: [], mtdBadge: '₹0' };
+    }
+  }
+
+  async getRecentTrades(tenantId?: string, limit: number = 10): Promise<Trade[]> {
+    const tenantFilter = tenantId ? 'WHERE tenant_id = $1' : '';
+    const params = tenantId ? [tenantId, limit] : [limit];
+    const limitPlaceholder = tenantId ? '$2' : '$1';
+
+    const res = await this.executeQuery(
+      `SELECT * FROM trades ${tenantFilter} ORDER BY created_at DESC LIMIT ${limitPlaceholder}`,
+      params
+    );
+
+    return res.rows.map(r => ({
+      id: r.id,
+      trade_id: r.trade_id || r.id,
+      client_id: r.client_id,
+      client_name: r.client_name,
+      tenant_id: r.tenant_id,
+      tenant_name: 'Alpha Prime Capital',
+      symbol: r.symbol,
+      side: r.side,
+      quantity: r.quantity,
+      price: parseFloat(r.price),
+      total_value: parseFloat(r.total_value || (parseFloat(r.price) * r.quantity).toString()),
+      pl: 0,
+      status: (r.status === 'CANCELLED' ? 'CANCELLED' : (r.status === 'SETTLED' ? 'SETTLED' : 'EXECUTED')) as any,
+      timestamp: r.created_at ? new Date(r.created_at).toISOString().replace('T', ' ').slice(0, 19) : '2026-03-29 10:00:00'
+    }));
+  }
+
+  async getPendingKYC(tenantId?: string, limit: number = 5): Promise<KYCRecord[]> {
+    const tenantFilter = tenantId ? 'AND tenant_id = $2' : '';
+    const params = tenantId ? [limit, tenantId] : [limit];
+
+    const res = await this.executeQuery(
+      `SELECT * FROM kyc_records WHERE kyc_status = 'PENDING' ${tenantFilter} ORDER BY created_at DESC LIMIT $1`,
+      params
+    );
+
+    return res.rows.map(r => ({
+      id: r.id,
+      client_id: r.client_id,
+      client_name: r.client_name,
+      tenant_id: r.tenant_id,
+      tenant_name: 'Alpha Prime Capital',
+      kyc_status: (r.kyc_status === 'VERIFIED' ? 'APPROVED' : (r.kyc_status || 'PENDING')) as KYCStatus,
+      document_type: r.document_type || 'PAN_CARD',
+      document_status: ((r.kyc_status === 'APPROVED' || r.kyc_status === 'VERIFIED') ? 'VERIFIED' : (r.kyc_status === 'REJECTED' ? 'REJECTED' : 'PENDING')) as any,
+      assigned_reviewer: r.reviewed_by || 'Compliance Officer',
+      submitted_date: r.submitted_at?.toISOString() || new Date().toISOString(),
+      id_number: r.pan_number || r.aadhaar_number,
+      notes: r.notes
+    }));
+  }
+
+  // ----------------------------------------------------
+  // TENANTS MODULE
+  // ----------------------------------------------------
+  async getTenants(queryParam?: { search?: string; status?: string }): Promise<Tenant[]> {
+    let sql = 'SELECT * FROM tenants WHERE 1=1';
+    const params: any[] = [];
+
+    if (queryParam?.status && queryParam.status !== 'ALL') {
+      params.push(queryParam.status);
+      sql += ` AND status = $${params.length}`;
+    }
+    if (queryParam?.search) {
+      params.push(`%${queryParam.search}%`);
+      sql += ` AND (name ILIKE $${params.length} OR code ILIKE $${params.length} OR subdomain ILIKE $${params.length})`;
+    }
+
+    sql += ' ORDER BY created_at ASC';
+    const res = await this.executeQuery(sql, params);
+
+    return res.rows.map(r => ({
+      id: r.id,
+      name: r.name,
+      code: r.code,
+      status: r.status,
+      plan: r.plan,
+      admin_name: r.owner_name || 'Admin',
+      admin_email: r.owner_email || 'admin@tenant.com',
+      admin_phone: '+91 98000 00000',
+      domain: r.custom_domain || `${r.subdomain || r.code.toLowerCase()}.tradepro.com`,
+      support_email: `support@${(r.code || 'tenant').toLowerCase()}.com`,
+      total_users: r.user_count || 120,
+      active_users: Math.round((r.user_count || 120) * 0.8),
+      trading_volume: r.monthly_volume || '₹3.4Cr',
+      trading_volume_raw: 34000000,
+      pl: '₹84.2L',
+      pl_raw: 8420000,
+      margin: '₹1.2Cr',
+      commission: r.monthly_revenue || '₹14.2L',
+      created_at: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : '2026-01-01',
+      notes: ''
+    }));
+  }
+
+  async getTenantById(id: string): Promise<Tenant | null> {
+    const res = await this.executeQuery('SELECT * FROM tenants WHERE id = $1', [id]);
+    if (res.rows.length === 0) return null;
+    const r = res.rows[0];
+    return {
+      id: r.id,
+      name: r.name,
+      code: r.code,
+      status: r.status,
+      plan: r.plan,
+      admin_name: r.owner_name || 'Admin',
+      admin_email: r.owner_email || 'admin@tenant.com',
+      admin_phone: '+91 98000 00000',
+      domain: r.custom_domain || `${r.subdomain || r.code.toLowerCase()}.tradepro.com`,
+      support_email: `support@${(r.code || 'tenant').toLowerCase()}.com`,
+      total_users: r.user_count || 120,
+      active_users: Math.round((r.user_count || 120) * 0.8),
+      trading_volume: r.monthly_volume || '₹3.4Cr',
+      trading_volume_raw: 34000000,
+      pl: '₹84.2L',
+      pl_raw: 8420000,
+      margin: '₹1.2Cr',
+      commission: r.monthly_revenue || '₹14.2L',
+      created_at: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : '2026-01-01',
+      notes: ''
+    };
+  }
+
+  async createTenant(data: Partial<Tenant>): Promise<Tenant> {
+    const id = data.id || `TNT-${Date.now().toString().slice(-4)}`;
+    const code = data.code || (data.name ? data.name.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 6) : 'TENANT');
+    const subdomain = (data.domain ? data.domain.split('.')[0] : code.toLowerCase());
+
+    const res = await this.executeQuery(`
+      INSERT INTO tenants (
+        id, name, code, subdomain, custom_domain, plan, status,
+        owner_name, owner_email, region, user_count, max_users,
+        monthly_volume, monthly_revenue
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      RETURNING *
+    `, [
+      id,
+      data.name || 'New Tenant',
+      code,
+      subdomain,
+      data.domain || `${subdomain}.tradematrix.io`,
+      data.plan || 'ENTERPRISE',
+      data.status || 'ACTIVE',
+      data.admin_name || 'Admin',
+      data.admin_email || 'admin@tenant.com',
+      'ap-south-1',
+      data.total_users || 0,
+      10000,
+      data.trading_volume || '₹0',
+      data.commission || '₹0'
+    ]);
+
+    const r = res.rows[0];
+    return {
+      id: r.id,
+      name: r.name,
+      code: r.code,
+      status: r.status,
+      plan: r.plan,
+      admin_name: r.owner_name,
+      admin_email: r.owner_email,
+      admin_phone: '+91 98000 00000',
+      domain: r.custom_domain,
+      support_email: `support@${(r.code || 'tenant').toLowerCase()}.com`,
+      total_users: r.user_count,
+      active_users: Math.round(r.user_count * 0.8),
+      trading_volume: r.monthly_volume,
+      trading_volume_raw: 0,
+      pl: '₹0',
+      pl_raw: 0,
+      margin: '₹0',
+      commission: r.monthly_revenue,
+      created_at: new Date(r.created_at).toISOString().split('T')[0],
+      notes: ''
+    };
+  }
+
+  async updateTenantStatus(id: string, status: 'ACTIVE' | 'SUSPENDED' | 'INACTIVE'): Promise<Tenant | null> {
+    const res = await this.executeQuery(
+      'UPDATE tenants SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *',
+      [status, id]
+    );
+    if (res.rows.length === 0) return null;
+    return this.getTenantById(id);
+  }
+
+  // ----------------------------------------------------
+  // HIERARCHY: MASTERS
+  // ----------------------------------------------------
+  async getMasters(tenantId?: string): Promise<Master[]> {
+    const tenantFilter = tenantId ? 'WHERE m.tenant_id = $1' : '';
+    const params = tenantId ? [tenantId] : [];
+
+    const res = await this.executeQuery(`
+      SELECT m.*, t.name as tenant_name
+      FROM masters m
+      LEFT JOIN tenants t ON m.tenant_id = t.id
+      ${tenantFilter}
+      ORDER BY m.created_at ASC
+    `, params);
+
+    return res.rows.map(r => ({
+      id: r.id,
+      tenant_id: r.tenant_id,
+      tenant_name: r.tenant_name || 'Central Master',
+      name: r.name,
+      code: r.code,
+      email: r.email,
+      phone: r.phone || '',
+      status: r.status as 'ACTIVE' | 'SUSPENDED',
+      brokers_count: r.brokers_count || 0,
+      clients_count: r.clients_count || 0,
+      turnover: r.turnover || '₹0',
+      commission_earned: r.commission || '₹0',
+      region: 'North India',
+      created_at: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : '2026-01-01'
+    }));
+  }
+
+  async createMaster(data: Partial<Master>): Promise<Master> {
+    const id = data.id || `MST-${Date.now().toString().slice(-4)}`;
+    const tenantId = data.tenant_id || 'TNT-001';
+
+    const res = await this.executeQuery(`
+      INSERT INTO masters (
+        id, tenant_id, name, company, code, email, phone, status,
+        brokers_count, clients_count, turnover, commission
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      RETURNING *
+    `, [
+      id,
+      tenantId,
+      data.name || 'New Master',
+      data.name || 'Master Corp',
+      data.code || `MST-${id.slice(-3)}`,
+      data.email || 'master@tradematrix.io',
+      data.phone || '+91 98000 00000',
+      data.status || 'ACTIVE',
+      data.brokers_count || 0,
+      data.clients_count || 0,
+      data.turnover || '₹0',
+      data.commission_earned || '₹0'
+    ]);
+
+    const r = res.rows[0];
+    return {
+      id: r.id,
+      tenant_id: r.tenant_id,
+      tenant_name: 'Alpha Prime Capital',
+      name: r.name,
+      code: r.code,
+      email: r.email,
+      phone: r.phone || '+91 98000 00000',
+      status: r.status as 'ACTIVE' | 'SUSPENDED',
+      brokers_count: r.brokers_count || 0,
+      clients_count: r.clients_count || 0,
+      turnover: r.turnover || '₹0',
+      commission_earned: r.commission || '₹0',
+      region: 'North India',
+      created_at: new Date(r.created_at).toISOString().split('T')[0]
+    };
+  }
+
+  async updateMasterStatus(id: string, status: EntityStatus): Promise<Master | null> {
+    const res = await this.executeQuery(
+      'UPDATE masters SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *',
+      [status, id]
+    );
+    if (res.rows.length === 0) return null;
+    const list = await this.getMasters();
+    return list.find(m => m.id === id) || null;
+  }
+
+  async updateMaster(id: string, data: Partial<Master>): Promise<Master | null> {
+    const fields: string[] = [];
+    const params: any[] = [];
+
+    if (data.name) { params.push(data.name); fields.push(`name = $${params.length}`); }
+    if (data.email) { params.push(data.email); fields.push(`email = $${params.length}`); }
+    if (data.phone) { params.push(data.phone); fields.push(`phone = $${params.length}`); }
+    if (data.status) { params.push(data.status); fields.push(`status = $${params.length}`); }
+
+    if (fields.length === 0) return (await this.getMasters()).find(m => m.id === id) || null;
+
+    params.push(id);
+    await this.executeQuery(
+      `UPDATE masters SET ${fields.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = $${params.length}`,
+      params
+    );
+
+    const list = await this.getMasters();
+    return list.find(m => m.id === id) || null;
+  }
+
+  // ----------------------------------------------------
+  // HIERARCHY: BROKERS
+  // ----------------------------------------------------
+  async getBrokers(tenantId?: string, masterId?: string): Promise<Broker[]> {
+    let sql = `
+      SELECT b.*, t.name as tenant_name, m.name as parent_master_name
+      FROM brokers b
+      LEFT JOIN tenants t ON b.tenant_id = t.id
+      LEFT JOIN masters m ON b.master_id = m.id
+      WHERE 1=1
+    `;
+    const params: any[] = [];
+
+    if (tenantId) {
+      params.push(tenantId);
+      sql += ` AND b.tenant_id = $${params.length}`;
+    }
+    if (masterId) {
+      params.push(masterId);
+      sql += ` AND b.master_id = $${params.length}`;
+    }
+
+    sql += ' ORDER BY b.created_at ASC';
+    const res = await this.executeQuery(sql, params);
+
+    return res.rows.map(r => ({
+      id: r.id,
+      master_id: r.master_id,
+      master_name: r.parent_master_name || r.master_name || 'Master Admin',
+      tenant_id: r.tenant_id,
+      tenant_name: r.tenant_name || 'Alpha Prime Capital',
+      name: r.name,
+      code: r.code,
+      email: r.email,
+      status: r.status as 'ACTIVE' | 'SUSPENDED',
+      sub_brokers_count: r.sub_brokers_count || 0,
+      clients_count: r.clients_count || 0,
+      turnover: r.turnover || '₹0',
+      commission_earned: r.commission || '₹0',
+      created_at: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : '2026-01-01'
+    }));
+  }
+
+  async createBroker(data: Partial<Broker>): Promise<Broker> {
+    const id = data.id || `BRK-${Date.now().toString().slice(-4)}`;
+    let masterId = data.master_id || 'MST-001';
+    let tenantId = data.tenant_id;
+
+    // Verify master parent relationship
+    const masterRes = await this.executeQuery('SELECT tenant_id, name FROM masters WHERE id = $1', [masterId]);
+    let masterName = data.master_name;
+    if (masterRes.rows.length > 0) {
+      tenantId = tenantId || masterRes.rows[0].tenant_id;
+      masterName = masterRes.rows[0].name;
+    } else {
+      tenantId = tenantId || 'TNT-001';
+    }
+
+    const res = await this.executeQuery(`
+      INSERT INTO brokers (
+        id, tenant_id, master_id, master_name, name, company, code, email, phone, status,
+        sub_brokers_count, clients_count, turnover, commission
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      RETURNING *
+    `, [
+      id,
+      tenantId,
+      masterId,
+      masterName || 'Master Admin',
+      data.name || 'New Broker',
+      data.name || 'Brokerage Services',
+      data.code || `BRK-${id.slice(-3)}`,
+      data.email || 'broker@tradematrix.io',
+      '+91 98111 00000',
+      data.status || 'ACTIVE',
+      data.sub_brokers_count || 0,
+      data.clients_count || 0,
+      data.turnover || '₹0',
+      data.commission_earned || '₹0'
+    ]);
+
+    // Update master's broker count
+    await this.executeQuery(
+      'UPDATE masters SET brokers_count = brokers_count + 1 WHERE id = $1',
+      [masterId]
+    );
+
+    const r = res.rows[0];
+    return {
+      id: r.id,
+      master_id: r.master_id,
+      master_name: r.master_name,
+      tenant_id: r.tenant_id,
+      tenant_name: 'Alpha Prime Capital',
+      name: r.name,
+      code: r.code,
+      email: r.email,
+      status: r.status as 'ACTIVE' | 'SUSPENDED',
+      sub_brokers_count: r.sub_brokers_count,
+      clients_count: r.clients_count,
+      turnover: r.turnover,
+      commission_earned: r.commission,
+      created_at: new Date(r.created_at).toISOString().split('T')[0]
+    };
+  }
+
+  async updateBrokerStatus(id: string, status: EntityStatus): Promise<Broker | null> {
+    await this.executeQuery(
+      'UPDATE brokers SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      [status, id]
+    );
+    const list = await this.getBrokers();
+    return list.find(b => b.id === id) || null;
+  }
+
+  async updateBroker(id: string, data: Partial<Broker>): Promise<Broker | null> {
+    const fields: string[] = [];
+    const params: any[] = [];
+
+    if (data.name) { params.push(data.name); fields.push(`name = $${params.length}`); }
+    if (data.email) { params.push(data.email); fields.push(`email = $${params.length}`); }
+    if (data.status) { params.push(data.status); fields.push(`status = $${params.length}`); }
+
+    if (fields.length > 0) {
+      params.push(id);
+      await this.executeQuery(
+        `UPDATE brokers SET ${fields.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = $${params.length}`,
+        params
+      );
+    }
+    const list = await this.getBrokers();
+    return list.find(b => b.id === id) || null;
+  }
+
+  // ----------------------------------------------------
+  // HIERARCHY: SUB-BROKERS
+  // ----------------------------------------------------
+  async getSubBrokers(tenantId?: string, brokerId?: string): Promise<SubBroker[]> {
+    let sql = `
+      SELECT sb.*, t.name as tenant_name, b.name as parent_broker_name
+      FROM sub_brokers sb
+      LEFT JOIN tenants t ON sb.tenant_id = t.id
+      LEFT JOIN brokers b ON sb.broker_id = b.id
+      WHERE 1=1
+    `;
+    const params: any[] = [];
+
+    if (tenantId) {
+      params.push(tenantId);
+      sql += ` AND sb.tenant_id = $${params.length}`;
+    }
+    if (brokerId) {
+      params.push(brokerId);
+      sql += ` AND sb.broker_id = $${params.length}`;
+    }
+
+    sql += ' ORDER BY sb.created_at ASC';
+    const res = await this.executeQuery(sql, params);
+
+    return res.rows.map(r => ({
+      id: r.id,
+      broker_id: r.broker_id,
+      broker_name: r.parent_broker_name || r.broker_name || 'Broker Admin',
+      tenant_id: r.tenant_id,
+      tenant_name: r.tenant_name || 'Alpha Prime Capital',
+      name: r.name,
+      code: r.code,
+      email: r.email,
+      status: r.status as 'ACTIVE' | 'SUSPENDED',
+      clients_count: r.clients_count || 0,
+      turnover: r.turnover || '₹0',
+      commission_earned: r.commission || '₹0',
+      created_at: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : '2026-01-01'
+    }));
+  }
+
+  async createSubBroker(data: Partial<SubBroker>): Promise<SubBroker> {
+    const id = data.id || `SBRK-${Date.now().toString().slice(-4)}`;
+    let brokerId = data.broker_id || 'BRK-001';
+    let tenantId = data.tenant_id;
+
+    // Verify parent broker
+    const brokerRes = await this.executeQuery('SELECT tenant_id, name FROM brokers WHERE id = $1', [brokerId]);
+    let brokerName = data.broker_name;
+    if (brokerRes.rows.length > 0) {
+      tenantId = tenantId || brokerRes.rows[0].tenant_id;
+      brokerName = brokerRes.rows[0].name;
+    } else {
+      tenantId = tenantId || 'TNT-001';
+    }
+
+    const res = await this.executeQuery(`
+      INSERT INTO sub_brokers (
+        id, tenant_id, broker_id, broker_name, name, code, email, phone, status,
+        clients_count, turnover, commission
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      RETURNING *
+    `, [
+      id,
+      tenantId,
+      brokerId,
+      brokerName || 'Broker Admin',
+      data.name || 'New Sub-Broker',
+      data.code || `SBRK-${id.slice(-3)}`,
+      data.email || 'subbroker@tradematrix.io',
+      '+91 98222 00000',
+      data.status || 'ACTIVE',
+      data.clients_count || 0,
+      data.turnover || '₹0',
+      data.commission_earned || '₹0'
+    ]);
+
+    // Update parent broker's sub_brokers_count
+    await this.executeQuery(
+      'UPDATE brokers SET sub_brokers_count = sub_brokers_count + 1 WHERE id = $1',
+      [brokerId]
+    );
+
+    const r = res.rows[0];
+    return {
+      id: r.id,
+      broker_id: r.broker_id,
+      broker_name: r.broker_name,
+      tenant_id: r.tenant_id,
+      tenant_name: 'Alpha Prime Capital',
+      name: r.name,
+      code: r.code,
+      email: r.email,
+      status: r.status as 'ACTIVE' | 'SUSPENDED',
+      clients_count: r.clients_count,
+      turnover: r.turnover,
+      commission_earned: r.commission,
+      created_at: new Date(r.created_at).toISOString().split('T')[0]
+    };
+  }
+
+  async updateSubBrokerStatus(id: string, status: EntityStatus): Promise<SubBroker | null> {
+    await this.executeQuery(
+      'UPDATE sub_brokers SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      [status, id]
+    );
+    const list = await this.getSubBrokers();
+    return list.find(sb => sb.id === id) || null;
+  }
+
+  async updateSubBroker(id: string, data: Partial<SubBroker>): Promise<SubBroker | null> {
+    const fields: string[] = [];
+    const params: any[] = [];
+
+    if (data.name) { params.push(data.name); fields.push(`name = $${params.length}`); }
+    if (data.email) { params.push(data.email); fields.push(`email = $${params.length}`); }
+    if (data.status) { params.push(data.status); fields.push(`status = $${params.length}`); }
+
+    if (fields.length > 0) {
+      params.push(id);
+      await this.executeQuery(
+        `UPDATE sub_brokers SET ${fields.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = $${params.length}`,
+        params
+      );
+    }
+    const list = await this.getSubBrokers();
+    return list.find(sb => sb.id === id) || null;
+  }
+
+  // ----------------------------------------------------
+  // HIERARCHY: CLIENTS
+  // ----------------------------------------------------
+  async getClients(tenantId?: string, subBrokerId?: string): Promise<Client[]> {
+    let sql = `
+      SELECT c.*, t.name as tenant_name, sb.name as parent_sub_broker_name
+      FROM clients c
+      LEFT JOIN tenants t ON c.tenant_id = t.id
+      LEFT JOIN sub_brokers sb ON c.sub_broker_id = sb.id
+      WHERE 1=1
+    `;
+    const params: any[] = [];
+
+    if (tenantId) {
+      params.push(tenantId);
+      sql += ` AND c.tenant_id = $${params.length}`;
+    }
+    if (subBrokerId) {
+      params.push(subBrokerId);
+      sql += ` AND c.sub_broker_id = $${params.length}`;
+    }
+
+    sql += ' ORDER BY c.created_at ASC';
+    const res = await this.executeQuery(sql, params);
+
+    return res.rows.map(r => ({
+      id: r.id,
+      client_code: r.client_code,
+      sub_broker_id: r.sub_broker_id,
+      sub_broker_name: r.parent_sub_broker_name || r.sub_broker_name || 'Sub-Broker Admin',
+      broker_name: 'Apex Broking',
+      master_name: 'Alpha Prime Master',
+      tenant_id: r.tenant_id,
+      tenant_name: r.tenant_name || 'Alpha Prime Capital',
+      name: r.name,
+      email: r.email,
+      phone: r.phone || '',
+      status: r.status as 'ACTIVE' | 'SUSPENDED',
+      kyc_status: (r.kyc_status === 'VERIFIED' ? 'APPROVED' : (r.kyc_status || 'PENDING')) as KYCStatus,
+      wallet_balance: parseFloat(r.balance || '0'),
+      available_margin: parseFloat(r.equity || '0'),
+      todays_pl: 0,
+      open_positions_count: 0,
+      created_at: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : '2026-01-01'
+    }));
+  }
+
+  async createClient(data: Partial<Client>): Promise<Client> {
+    const id = data.id || `CLT-${Date.now().toString().slice(-4)}`;
+    let subBrokerId = data.sub_broker_id || 'SBRK-001';
+    let tenantId = data.tenant_id;
+
+    // Verify parent sub-broker
+    const sbRes = await this.executeQuery('SELECT tenant_id, name FROM sub_brokers WHERE id = $1', [subBrokerId]);
+    let subBrokerName = data.sub_broker_name;
+    if (sbRes.rows.length > 0) {
+      tenantId = tenantId || sbRes.rows[0].tenant_id;
+      subBrokerName = sbRes.rows[0].name;
+    } else {
+      tenantId = tenantId || 'TNT-001';
+    }
+
+    const clientCode = data.client_code || `CLT${id.replace(/[^0-9]/g, '').slice(-3) || '999'}`;
+
+    const res = await this.executeQuery(`
+      INSERT INTO clients (
+        id, tenant_id, sub_broker_id, sub_broker_name, client_code, name, email, phone,
+        status, kyc_status, balance, equity, margin_used, total_trades
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      RETURNING *
+    `, [
+      id,
+      tenantId,
+      subBrokerId,
+      subBrokerName || 'Sub-Broker Admin',
+      clientCode,
+      data.name || 'New Client',
+      data.email || 'client@tradematrix.io',
+      data.phone || '+91 98333 00000',
+      data.status || 'ACTIVE',
+      data.kyc_status || 'APPROVED',
+      data.wallet_balance || 100000.00,
+      data.available_margin || 100000.00,
+      0.00,
+      0
+    ]);
+
+    // Update parent sub-broker client count
+    await this.executeQuery(
+      'UPDATE sub_brokers SET clients_count = clients_count + 1 WHERE id = $1',
+      [subBrokerId]
+    );
+
+    const r = res.rows[0];
+    return {
+      id: r.id,
+      client_code: r.client_code,
+      sub_broker_id: r.sub_broker_id,
+      sub_broker_name: r.sub_broker_name,
+      broker_name: 'Apex Broking',
+      master_name: 'Alpha Prime Master',
+      tenant_id: r.tenant_id,
+      tenant_name: 'Alpha Prime Capital',
+      name: r.name,
+      email: r.email,
+      phone: r.phone,
+      status: r.status as 'ACTIVE' | 'SUSPENDED',
+      kyc_status: (r.kyc_status === 'VERIFIED' ? 'APPROVED' : (r.kyc_status || 'PENDING')) as KYCStatus,
+      wallet_balance: parseFloat(r.balance),
+      available_margin: parseFloat(r.equity),
+      todays_pl: 0,
+      open_positions_count: 0,
+      created_at: new Date(r.created_at).toISOString().split('T')[0]
+    };
+  }
+
+  async updateClientStatus(id: string, status: EntityStatus): Promise<Client | null> {
+    await this.executeQuery(
+      'UPDATE clients SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      [status, id]
+    );
+    const list = await this.getClients();
+    return list.find(c => c.id === id) || null;
+  }
+
+  async updateClient(id: string, data: Partial<Client>): Promise<Client | null> {
+    const fields: string[] = [];
+    const params: any[] = [];
+
+    if (data.name) { params.push(data.name); fields.push(`name = $${params.length}`); }
+    if (data.email) { params.push(data.email); fields.push(`email = $${params.length}`); }
+    if (data.phone) { params.push(data.phone); fields.push(`phone = $${params.length}`); }
+    if (data.status) { params.push(data.status); fields.push(`status = $${params.length}`); }
+    if (data.wallet_balance !== undefined) { params.push(data.wallet_balance); fields.push(`balance = $${params.length}`); }
+
+    if (fields.length > 0) {
+      params.push(id);
+      await this.executeQuery(
+        `UPDATE clients SET ${fields.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = $${params.length}`,
+        params
+      );
+    }
+    const list = await this.getClients();
+    return list.find(c => c.id === id) || null;
+  }
+
+  // ----------------------------------------------------
+  // COMPLIANCE & KYC
+  // ----------------------------------------------------
+  async getKYCRecords(tenantId?: string, status?: string): Promise<KYCRecord[]> {
+    let sql = 'SELECT * FROM kyc_records WHERE 1=1';
+    const params: any[] = [];
+
+    if (tenantId) {
+      params.push(tenantId);
+      sql += ` AND tenant_id = $${params.length}`;
+    }
+    if (status && status !== 'ALL') {
+      params.push(status);
+      sql += ` AND kyc_status = $${params.length}`;
+    }
+
+    sql += ' ORDER BY created_at DESC';
+    const res = await this.executeQuery(sql, params);
+
+    return res.rows.map(r => ({
+      id: r.id,
+      client_id: r.client_id,
+      client_name: r.client_name,
+      tenant_id: r.tenant_id,
+      tenant_name: 'Alpha Prime Capital',
+      kyc_status: (r.kyc_status === 'VERIFIED' ? 'APPROVED' : (r.kyc_status || 'PENDING')) as KYCStatus,
+      document_type: r.document_type || 'PAN_CARD',
+      document_status: ((r.kyc_status === 'APPROVED' || r.kyc_status === 'VERIFIED') ? 'VERIFIED' : (r.kyc_status === 'REJECTED' ? 'REJECTED' : 'PENDING')) as any,
+      assigned_reviewer: r.reviewed_by || 'Compliance Officer',
+      submitted_date: r.submitted_at?.toISOString() || new Date().toISOString(),
+      id_number: r.pan_number || r.aadhaar_number,
+      notes: r.notes
+    }));
+  }
+
+  async updateKYCStatus(id: string, status: KYCRecord['kyc_status'], notes?: string): Promise<KYCRecord | null> {
+    const res = await this.executeQuery(`
+      UPDATE kyc_records
+      SET kyc_status = $1, notes = COALESCE($2, notes), reviewed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $3
+      RETURNING *
+    `, [status, notes || null, id]);
+
+    if (res.rows.length === 0) return null;
+    const r = res.rows[0];
+
+    // If approved, update client kyc_status to VERIFIED
+    if (status === 'APPROVED') {
+      await this.executeQuery('UPDATE clients SET kyc_status = $1 WHERE id = $2', ['VERIFIED', r.client_id]);
+    } else if (status === 'REJECTED') {
+      await this.executeQuery('UPDATE clients SET kyc_status = $1 WHERE id = $2', ['REJECTED', r.client_id]);
+    }
+
+    return {
+      id: r.id,
+      client_id: r.client_id,
+      client_name: r.client_name,
+      tenant_id: r.tenant_id,
+      tenant_name: 'Alpha Prime Capital',
+      kyc_status: (r.kyc_status === 'VERIFIED' ? 'APPROVED' : (r.kyc_status || 'PENDING')) as KYCStatus,
+      document_type: r.document_type || 'PAN_CARD',
+      document_status: ((r.kyc_status === 'APPROVED' || r.kyc_status === 'VERIFIED') ? 'VERIFIED' : (r.kyc_status === 'REJECTED' ? 'REJECTED' : 'PENDING')) as any,
+      assigned_reviewer: r.reviewed_by || 'Compliance Officer',
+      submitted_date: r.submitted_at?.toISOString() || new Date().toISOString(),
+      id_number: r.pan_number || r.aadhaar_number,
+      notes: r.notes
+    };
+  }
+
+  async getFundDeposits(tenantId?: string, status?: string): Promise<FundDepositItem[]> {
+    let sql = 'SELECT * FROM fund_deposits WHERE 1=1';
+    const params: any[] = [];
+    if (tenantId) {
+      params.push(tenantId);
+      sql += ` AND tenant_id = $${params.length}`;
+    }
+    if (status && status !== 'All Status' && status !== 'ALL') {
+      params.push(status.toUpperCase());
+      sql += ` AND status = $${params.length}`;
+    }
+    sql += ' ORDER BY created_at DESC';
+
+    const res = await this.executeQuery(sql, params);
+    return res.rows.map(r => ({
+      txnId: r.id,
+      client: r.client_name,
+      amount: `₹${parseFloat(r.amount).toLocaleString('en-IN')}`,
+      method: r.payment_method,
+      reference: r.transaction_ref,
+      status: (r.status as any) || 'PENDING',
+      date: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : '2026-03-29',
+      rawAmount: parseFloat(r.amount)
+    }));
+  }
+
+  async approveFundDeposit(id: string, actor: string = 'Compliance Officer'): Promise<any> {
+    return withTransaction(async (client) => {
+      const depRes = await client.query('SELECT * FROM fund_deposits WHERE id = $1 FOR UPDATE', [id]);
+      if (depRes.rows.length === 0) throw new Error(`Deposit ${id} not found`);
+      const dep = depRes.rows[0];
+
+      if (dep.status === 'COMPLETED') {
+        return { success: true, message: 'Deposit already completed', deposit: dep };
+      }
+
+      await client.query(`
+        UPDATE fund_deposits
+        SET status = 'COMPLETED', approved_by = $1, approved_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $2
+      `, [actor, id]);
+
+      const clientRes = await client.query(
+        'UPDATE clients SET balance = balance + $1, equity = equity + $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *',
+        [dep.amount, dep.client_id]
+      );
+      const updatedClient = clientRes.rows[0];
+      const newBalance = updatedClient ? parseFloat(updatedClient.balance) : parseFloat(dep.amount);
+
+      const ledgerId = `LDG-${Date.now().toString().slice(-6)}`;
+      await client.query(`
+        INSERT INTO ledger_entries (
+          id, tenant_id, client_id, client_code, client_name, entry_type,
+          debit, credit, balance_after, reference_id, description, is_finalized
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      `, [
+        ledgerId, dep.tenant_id, dep.client_id, dep.client_code, dep.client_name, 'DEPOSIT',
+        0.00, dep.amount, newBalance, dep.transaction_ref || dep.id,
+        `Deposit of ₹${parseFloat(dep.amount).toLocaleString('en-IN')} approved by ${actor}`,
+        true
+      ]);
+
+      await client.query(`
+        INSERT INTO audit_logs (id, tenant_id, user_name, action, module, details, ip_address)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `, [
+        `LOG-${Date.now()}`, dep.tenant_id, actor, 'DEPOSIT_APPROVED', 'COMPLIANCE',
+        `Approved deposit ${dep.id} for client ${dep.client_name} (₹${parseFloat(dep.amount).toLocaleString('en-IN')})`,
+        '127.0.0.1'
+      ]);
+
+      return { success: true, message: 'Deposit approved successfully', depositId: id };
+    }, this.pool);
+  }
+
+  async rejectFundDeposit(id: string, actor: string = 'Compliance Officer'): Promise<any> {
+    const res = await this.executeQuery(`
+      UPDATE fund_deposits
+      SET status = 'FAILED', notes = 'Rejected by ' || $1, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $2
+      RETURNING *
+    `, [actor, id]);
+
+    if (res.rows.length > 0) {
+      const dep = res.rows[0];
+      await this.executeQuery(`
+        INSERT INTO audit_logs (id, tenant_id, user_name, action, module, details, ip_address)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `, [
+        `LOG-${Date.now()}`, dep.tenant_id, actor, 'DEPOSIT_REJECTED', 'COMPLIANCE',
+        `Rejected deposit ${dep.id} for client ${dep.client_name}`,
+        '127.0.0.1'
+      ]);
+    }
+    return { success: true, message: 'Deposit rejected' };
+  }
+
+  async createFundDeposit(data: any): Promise<any> {
+    const id = data.id || `DEP${Date.now().toString().slice(-4)}`;
+    const res = await this.executeQuery(`
+      INSERT INTO fund_deposits (
+        id, tenant_id, client_id, client_code, client_name, amount, currency,
+        payment_method, transaction_ref, status, notes
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      RETURNING *
+    `, [
+      id, data.tenant_id || 'TNT-001', data.client_id || 'CLT-001', data.client_code || 'CLT001',
+      data.client_name || 'Client', data.amount || 10000.00, data.currency || 'INR',
+      data.payment_method || 'Bank Transfer', data.transaction_ref || `TXN-${Date.now()}`,
+      data.status || 'PENDING', data.notes || null
+    ]);
+    return res.rows[0];
+  }
+
+  async getFundWithdrawals(tenantId?: string, status?: string): Promise<FundWithdrawalItem[]> {
+    let sql = 'SELECT * FROM fund_withdrawals WHERE 1=1';
+    const params: any[] = [];
+    if (tenantId) {
+      params.push(tenantId);
+      sql += ` AND tenant_id = $${params.length}`;
+    }
+    if (status && status !== 'All Status' && status !== 'ALL') {
+      params.push(status.toUpperCase());
+      sql += ` AND status = $${params.length}`;
+    }
+    sql += ' ORDER BY created_at DESC';
+
+    const res = await this.executeQuery(sql, params);
+    return res.rows.map(r => ({
+      txnId: r.id,
+      client: r.client_name,
+      amount: `₹${parseFloat(r.amount).toLocaleString('en-IN')}`,
+      method: r.bank_name ? `${r.bank_name} (${r.bank_account_number ? r.bank_account_number.slice(-4) : 'Bank'})` : 'Bank Wire',
+      reference: r.ifsc_code || r.id,
+      status: (r.status as any) || 'PENDING',
+      date: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : '2026-03-29',
+      rawAmount: parseFloat(r.amount)
+    }));
+  }
+
+  async approveFundWithdrawal(id: string, actor: string = 'Compliance Officer'): Promise<any> {
+    return withTransaction(async (client) => {
+      const wdrRes = await client.query('SELECT * FROM fund_withdrawals WHERE id = $1 FOR UPDATE', [id]);
+      if (wdrRes.rows.length === 0) throw new Error(`Withdrawal ${id} not found`);
+      const wdr = wdrRes.rows[0];
+
+      if (wdr.status === 'COMPLETED') {
+        return { success: true, message: 'Withdrawal already completed', withdrawal: wdr };
+      }
+
+      await client.query(`
+        UPDATE fund_withdrawals
+        SET status = 'COMPLETED', approved_by = $1, approved_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $2
+      `, [actor, id]);
+
+      const clientRes = await client.query(
+        'UPDATE clients SET balance = balance - $1, equity = equity - $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *',
+        [wdr.amount, wdr.client_id]
+      );
+      const updatedClient = clientRes.rows[0];
+      const newBalance = updatedClient ? parseFloat(updatedClient.balance) : 0;
+
+      const ledgerId = `LDG-${Date.now().toString().slice(-6)}`;
+      await client.query(`
+        INSERT INTO ledger_entries (
+          id, tenant_id, client_id, client_code, client_name, entry_type,
+          debit, credit, balance_after, reference_id, description, is_finalized
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      `, [
+        ledgerId, wdr.tenant_id, wdr.client_id, wdr.client_code, wdr.client_name, 'WITHDRAWAL',
+        wdr.amount, 0.00, newBalance, wdr.id,
+        `Withdrawal of ₹${parseFloat(wdr.amount).toLocaleString('en-IN')} approved by ${actor}`,
+        true
+      ]);
+
+      await client.query(`
+        INSERT INTO audit_logs (id, tenant_id, user_name, action, module, details, ip_address)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `, [
+        `LOG-${Date.now()}`, wdr.tenant_id, actor, 'WITHDRAWAL_APPROVED', 'COMPLIANCE',
+        `Approved withdrawal ${wdr.id} for client ${wdr.client_name} (₹${parseFloat(wdr.amount).toLocaleString('en-IN')})`,
+        '127.0.0.1'
+      ]);
+
+      return { success: true, message: 'Withdrawal approved successfully', withdrawalId: id };
+    }, this.pool);
+  }
+
+  async rejectFundWithdrawal(id: string, actor: string = 'Compliance Officer'): Promise<any> {
+    const res = await this.executeQuery(`
+      UPDATE fund_withdrawals
+      SET status = 'FAILED', notes = 'Rejected by ' || $1, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $2
+      RETURNING *
+    `, [actor, id]);
+
+    if (res.rows.length > 0) {
+      const wdr = res.rows[0];
+      await this.executeQuery(`
+        INSERT INTO audit_logs (id, tenant_id, user_name, action, module, details, ip_address)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `, [
+        `LOG-${Date.now()}`, wdr.tenant_id, actor, 'WITHDRAWAL_REJECTED', 'COMPLIANCE',
+        `Rejected withdrawal ${wdr.id} for client ${wdr.client_name}`,
+        '127.0.0.1'
+      ]);
+    }
+    return { success: true, message: 'Withdrawal rejected' };
+  }
+
+  async createFundWithdrawal(data: any): Promise<any> {
+    const id = data.id || `WDR${Date.now().toString().slice(-4)}`;
+    const res = await this.executeQuery(`
+      INSERT INTO fund_withdrawals (
+        id, tenant_id, client_id, client_code, client_name, amount, currency,
+        bank_name, bank_account_number, ifsc_code, status, notes
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      RETURNING *
+    `, [
+      id, data.tenant_id || 'TNT-001', data.client_id || 'CLT-001', data.client_code || 'CLT001',
+      data.client_name || 'Client', data.amount || 5000.00, data.currency || 'INR',
+      data.bank_name || 'HDFC Bank', data.bank_account_number || 'XXXXXXXX1234',
+      data.ifsc_code || 'HDFC0001234', data.status || 'PENDING', data.notes || null
+    ]);
+    return res.rows[0];
+  }
+
+  async getLedgerEntries(tenantId?: string, type?: string): Promise<LedgerRowItem[]> {
+    let sql = 'SELECT * FROM ledger_entries WHERE 1=1';
+    const params: any[] = [];
+    if (tenantId) {
+      params.push(tenantId);
+      sql += ` AND tenant_id = $${params.length}`;
+    }
+    if (type && type !== 'All Types' && type !== 'ALL') {
+      params.push(type.toUpperCase());
+      sql += ` AND entry_type = $${params.length}`;
+    }
+    sql += ' ORDER BY created_at DESC';
+
+    const res = await this.executeQuery(sql, params);
+    return res.rows.map(r => {
+      const cr = parseFloat(r.credit || '0');
+      const db = parseFloat(r.debit || '0');
+      let mappedType: 'DEPOSIT' | 'WITHDRAWAL' | 'COMMISSION' | 'P&L' = 'DEPOSIT';
+      if (r.entry_type.includes('WITHDRAW')) mappedType = 'WITHDRAWAL';
+      else if (r.entry_type.includes('COMMISSION')) mappedType = 'COMMISSION';
+      else if (r.entry_type.includes('TRADE') || r.entry_type.includes('P&L')) mappedType = 'P&L';
+
+      return {
+        date: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : '2026-03-29',
+        txnId: r.reference_id || r.id,
+        account: r.client_name,
+        type: mappedType,
+        credit: cr > 0 ? `+₹${cr.toLocaleString('en-IN')}` : '—',
+        debit: db > 0 ? `-₹${db.toLocaleString('en-IN')}` : '—',
+        balance: `₹${parseFloat(r.balance_after || '0').toLocaleString('en-IN')}`,
+        reference: r.description || r.reference_id,
+        status: 'COMPLETED' as const
+      };
+    });
+  }
+
+  async createLedgerEntry(data: any): Promise<any> {
+    const id = data.id || `LDG-${Date.now().toString().slice(-6)}`;
+    const res = await this.executeQuery(`
+      INSERT INTO ledger_entries (
+        id, tenant_id, client_id, client_code, client_name, entry_type,
+        debit, credit, balance_after, reference_id, description, is_finalized
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      RETURNING *
+    `, [
+      id, data.tenant_id || 'TNT-001', data.client_id || 'CLT-001', data.client_code || 'CLT001',
+      data.client_name || 'Client', data.entry_type || 'ADJUSTMENT',
+      data.debit || 0.00, data.credit || 0.00, data.balance_after || 0.00,
+      data.reference_id || `TXN-${Date.now()}`, data.description || 'Manual Ledger Entry',
+      data.is_finalized !== undefined ? data.is_finalized : true
+    ]);
+    return res.rows[0];
+  }
+
+  // ----------------------------------------------------
+  // TRADING: ORDERS & TRADES
+  // ----------------------------------------------------
+  async getOrders(tenantId?: string): Promise<Order[]> {
+    const tenantFilter = tenantId ? 'WHERE tenant_id = $1' : '';
+    const params = tenantId ? [tenantId] : [];
+
+    const res = await this.executeQuery(
+      `SELECT * FROM orders ${tenantFilter} ORDER BY created_at DESC`,
+      params
+    );
+
+    return res.rows.map(r => ({
+      id: r.id,
+      order_id: r.id,
+      client_name: r.client_name,
+      tenant_name: 'Alpha Prime Capital',
+      symbol: r.symbol,
+      type: (r.order_type === 'MARKET' ? 'MARKET' : (r.order_type === 'STOP_LOSS' ? 'STOP_LOSS' : 'LIMIT')) as any,
+      side: r.side,
+      quantity: r.quantity,
+      price: parseFloat(r.price),
+      status: r.status,
+      created_at: r.created_at ? new Date(r.created_at).toISOString().replace('T', ' ').slice(0, 19) : '2026-03-29 10:00:00'
+    }));
+  }
+
+  async getAllTrades(tenantId?: string): Promise<Trade[]> {
+    const tenantFilter = tenantId ? 'WHERE tenant_id = $1' : '';
+    const params = tenantId ? [tenantId] : [];
+
+    const res = await this.executeQuery(
+      `SELECT * FROM trades ${tenantFilter} ORDER BY created_at DESC`,
+      params
+    );
+
+    return res.rows.map(r => ({
+      id: r.id,
+      trade_id: r.trade_id || r.id,
+      client_id: r.client_id,
+      client_name: r.client_name,
+      tenant_id: r.tenant_id,
+      tenant_name: 'Alpha Prime Capital',
+      symbol: r.symbol,
+      side: r.side,
+      quantity: r.quantity,
+      price: parseFloat(r.price),
+      total_value: parseFloat(r.total_value || (parseFloat(r.price) * r.quantity).toString()),
+      pl: 0,
+      status: (r.status === 'CANCELLED' ? 'CANCELLED' : (r.status === 'SETTLED' ? 'SETTLED' : 'EXECUTED')) as any,
+      timestamp: r.created_at ? new Date(r.created_at).toISOString().replace('T', ' ').slice(0, 19) : '2026-03-29 10:00:00'
+    }));
+  }
+
+  async getPositions(tenantId?: string): Promise<any[]> {
+    let sql = 'SELECT * FROM positions WHERE 1=1';
+    const params: any[] = [];
+    if (tenantId) {
+      params.push(tenantId);
+      sql += ` AND tenant_id = $${params.length}`;
+    }
+    sql += ' ORDER BY created_at DESC';
+
+    const res = await this.executeQuery(sql, params);
+    return res.rows.map(r => {
+      const pnlNum = parseFloat(r.pnl || '0');
+      const buyPriceNum = parseFloat(r.buy_price || '0');
+      const curPriceNum = parseFloat(r.current_price || '0');
+      const qtyNum = parseInt(r.quantity || '0', 10);
+      const marginNum = (buyPriceNum * qtyNum * 0.1).toFixed(1);
+
+      return {
+        id: r.id,
+        client: r.client_name,
+        symbol: r.symbol,
+        qty: qtyNum.toLocaleString('en-IN'),
+        avgPrice: buyPriceNum.toLocaleString('en-IN'),
+        currentPrice: curPriceNum.toLocaleString('en-IN'),
+        unrealizedPL: `${pnlNum >= 0 ? '+' : ''}₹${pnlNum.toLocaleString('en-IN')}`,
+        realizedPL: '+₹0',
+        margin: `₹${marginNum}`,
+        unrealizedPLPositive: pnlNum >= 0,
+        realizedPLPositive: true,
+        status: r.status
+      };
+    });
+  }
+
+  async squareOffPosition(id: string, actor: string = 'Risk Manager'): Promise<any> {
+    const posRes = await this.executeQuery('SELECT * FROM positions WHERE id = $1', [id]);
+    if (posRes.rows.length === 0) return { success: false, message: 'Position not found' };
+    const pos = posRes.rows[0];
+
+    await this.executeQuery(
+      `UPDATE positions SET quantity = 0, pnl = 0, status = 'CLOSED', updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+      [id]
+    );
+
+    await this.executeQuery(`
+      INSERT INTO audit_logs (id, tenant_id, user_name, action, module, details, ip_address)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `, [
+      `LOG-${Date.now()}`, pos.tenant_id, actor, 'POSITION_SQUARE_OFF', 'RISK',
+      `Squared off position ${pos.id} (${pos.symbol}, qty: ${pos.quantity}) for client ${pos.client_name}`,
+      '127.0.0.1'
+    ]);
+
+    return { success: true, message: `Position ${pos.symbol} squared off successfully` };
+  }
+
+  async getCommissionPlans(tenantId?: string): Promise<any[]> {
+    let sql = 'SELECT * FROM commission_plans WHERE 1=1';
+    const params: any[] = [];
+    if (tenantId) {
+      params.push(tenantId);
+      sql += ` AND tenant_id = $${params.length}`;
+    }
+    sql += ' ORDER BY created_at ASC';
+    const res = await this.executeQuery(sql, params);
+    return res.rows;
+  }
+
+  async getCommissionRules(tenantId?: string, planId?: string): Promise<any[]> {
+    let sql = 'SELECT * FROM commission_rules WHERE 1=1';
+    const params: any[] = [];
+    if (tenantId) {
+      params.push(tenantId);
+      sql += ` AND tenant_id = $${params.length}`;
+    }
+    if (planId) {
+      params.push(planId);
+      sql += ` AND plan_id = $${params.length}`;
+    }
+    sql += ' ORDER BY created_at ASC';
+    const res = await this.executeQuery(sql, params);
+    return res.rows;
+  }
+
+  async getRiskProfiles(tenantId?: string): Promise<any[]> {
+    let sql = 'SELECT * FROM risk_profiles WHERE 1=1';
+    const params: any[] = [];
+    if (tenantId) {
+      params.push(tenantId);
+      sql += ` AND tenant_id = $${params.length}`;
+    }
+    sql += ' ORDER BY created_at ASC';
+    const res = await this.executeQuery(sql, params);
+    return res.rows;
+  }
+
+  async getRiskEvents(tenantId?: string): Promise<any[]> {
+    let sql = 'SELECT * FROM risk_events WHERE 1=1';
+    const params: any[] = [];
+    if (tenantId) {
+      params.push(tenantId);
+      sql += ` AND tenant_id = $${params.length}`;
+    }
+    sql += ' ORDER BY timestamp DESC';
+    const res = await this.executeQuery(sql, params);
+    return res.rows;
+  }
+
+  async getNotifications(tenantId?: string): Promise<any[]> {
+    let sql = 'SELECT * FROM notifications WHERE 1=1';
+    const params: any[] = [];
+    if (tenantId) {
+      params.push(tenantId);
+      sql += ` AND tenant_id = $${params.length}`;
+    }
+    sql += ' ORDER BY created_at DESC';
+    const res = await this.executeQuery(sql, params);
+    return res.rows;
+  }
+
+  async markNotificationRead(id: string): Promise<any> {
+    await this.executeQuery(
+      'UPDATE notifications SET is_read = true WHERE id = $1',
+      [id]
+    );
+    return { success: true };
+  }
+
+  async cancelAllOrders(actor: string = 'Super Admin', reason: string = 'Mass Order Cancellation', tenantId?: string): Promise<{ cancelledOrdersCount: number; message: string }> {
+    const tenantFilter = tenantId ? 'AND tenant_id = $1' : '';
+    const params = tenantId ? [tenantId] : [];
+
+    const res = await this.executeQuery(`
+      UPDATE orders
+      SET status = 'CANCELLED', updated_at = CURRENT_TIMESTAMP
+      WHERE status = 'PENDING' ${tenantFilter}
+      RETURNING id
+    `, params);
+
+    const cancelledCount = res.rows.length;
+
+    // Log the cancellation in audit_logs
+    await this.executeQuery(`
+      INSERT INTO audit_logs (id, tenant_id, user_name, action, module, details, ip_address)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `, [
+      `LOG-${Date.now()}`,
+      tenantId || null,
+      actor,
+      'EMERGENCY_CANCEL_ALL_ORDERS',
+      'EMERGENCY_CONTROLS',
+      `Cancelled ${cancelledCount} open orders. Reason: ${reason}`,
+      '127.0.0.1'
+    ]);
+
+    return {
+      cancelledOrdersCount: cancelledCount,
+      message: `Successfully cancelled ${cancelledCount} open orders.`
+    };
+  }
+
+  // ----------------------------------------------------
+  // EMERGENCY CONTROLS
+  // ----------------------------------------------------
+  async getEmergencyControls(): Promise<EmergencyControlsState> {
+    const res = await this.executeQuery('SELECT * FROM emergency_controls WHERE id = $1', ['EMG-GLOBAL']);
+    if (res.rows.length === 0) {
+      return {
+        globalTradingActive: true,
+        globalKillSwitchActive: false,
+        newUserCreationEnabled: true,
+        apiAccessEnabled: true,
+        frozenMasters: [],
+        frozenBrokers: [],
+        frozenUsers: []
+      };
+    }
+
+    const r = res.rows[0];
+    return {
+      globalTradingActive: r.global_trading_active,
+      globalKillSwitchActive: r.global_kill_switch_active,
+      newUserCreationEnabled: r.new_user_creation_enabled,
+      apiAccessEnabled: r.api_access_enabled,
+      tradingReason: r.trading_reason || undefined,
+      trading_paused_at: r.trading_paused_at?.toISOString() || undefined,
+      trading_paused_by: r.trading_paused_by || undefined,
+      killSwitchDetails: r.kill_switch_details || undefined,
+      frozenMasters: r.frozen_masters || [],
+      frozenBrokers: r.frozen_brokers || [],
+      frozenUsers: r.frozen_users || []
+    };
+  }
+
+  async getEmergencyState(): Promise<EmergencyControlsState> {
+    return this.getEmergencyControls();
+  }
+
+  async setGlobalTrading(active: boolean, actor: string, reason?: string): Promise<EmergencyControlsState> {
+    return this.setGlobalTradingActive(active, actor, reason);
+  }
+
+  async setGlobalTradingActive(active: boolean, actor: string, reason?: string): Promise<EmergencyControlsState> {
+    await this.executeQuery(`
+      INSERT INTO emergency_controls (
+        id, global_trading_active, trading_reason, trading_paused_at, trading_paused_by, updated_at
+      ) VALUES ('EMG-GLOBAL', $1, $2, $3, $4, CURRENT_TIMESTAMP)
+      ON CONFLICT (id) DO UPDATE SET
+        global_trading_active = EXCLUDED.global_trading_active,
+        trading_reason = EXCLUDED.trading_reason,
+        trading_paused_at = EXCLUDED.trading_paused_at,
+        trading_paused_by = EXCLUDED.trading_paused_by,
+        updated_at = CURRENT_TIMESTAMP
+    `, [
+      active,
+      reason || (active ? 'Market Operations Resumed' : 'Emergency Trading Suspension'),
+      active ? null : new Date().toISOString(),
+      active ? null : actor
+    ]);
+
+    await this.executeQuery(`
+      INSERT INTO audit_logs (id, user_name, action, module, details)
+      VALUES ($1, $2, $3, $4, $5)
+    `, [
+      `LOG-${Date.now()}`,
+      actor,
+      active ? 'GLOBAL_TRADING_RESUMED' : 'GLOBAL_TRADING_PAUSED',
+      'EMERGENCY_CONTROLS',
+      `Trading ${active ? 'resumed' : 'suspended'} by ${actor}. Reason: ${reason || 'N/A'}`
+    ]);
+
+    return this.getEmergencyControls();
+  }
+
+  async triggerKillSwitch(actionOrActor: string, actorOrReason: string, ipOrReason?: string): Promise<EmergencyControlsState> {
+    const actor = actorOrReason.includes(' ') ? actionOrActor : actorOrReason;
+    const reason = ipOrReason || actorOrReason;
+
+    await this.executeQuery(`
+      UPDATE emergency_controls
+      SET global_kill_switch_active = true,
+          global_trading_active = false,
+          kill_switch_details = $1,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = 'EMG-GLOBAL'
+    `, [
+      JSON.stringify({
+        triggeredBy: actor,
+        triggeredAt: new Date().toISOString(),
+        reason: reason || 'Master Kill-Switch Triggered',
+        ipAddress: '103.21.58.14'
+      })
+    ]);
+
+    return this.getEmergencyControls();
+  }
+
+  async deactivateKillSwitch(actor: string, reason: string): Promise<EmergencyControlsState> {
+    await this.executeQuery(`
+      UPDATE emergency_controls
+      SET global_kill_switch_active = false,
+          kill_switch_details = NULL,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = 'EMG-GLOBAL'
+    `, []);
+
+    return this.getEmergencyControls();
+  }
+
+  async setNewUserCreation(enabled: boolean, actor: string): Promise<EmergencyControlsState> {
+    await this.executeQuery(
+      'UPDATE emergency_controls SET new_user_creation_enabled = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      [enabled, 'EMG-GLOBAL']
+    );
+    return this.getEmergencyControls();
+  }
+
+  async setRegistrationActive(enabled: boolean, actor: string): Promise<EmergencyControlsState> {
+    return this.setNewUserCreation(enabled, actor);
+  }
+
+  async setApiAccess(enabled: boolean, actor: string): Promise<EmergencyControlsState> {
+    await this.executeQuery(
+      'UPDATE emergency_controls SET api_access_enabled = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      [enabled, 'EMG-GLOBAL']
+    );
+    return this.getEmergencyControls();
+  }
+
+  async setApiAccessActive(enabled: boolean, actor: string): Promise<EmergencyControlsState> {
+    return this.setApiAccess(enabled, actor);
+  }
+
+  async freezeMaster(masterId: string, masterName: string, actor: string, reason: string): Promise<EmergencyControlsState> {
+    await this.updateMasterStatus(masterId, 'SUSPENDED');
+    return this.getEmergencyControls();
+  }
+
+  async unfreezeMaster(masterId: string, actor: string): Promise<EmergencyControlsState> {
+    await this.updateMasterStatus(masterId, 'ACTIVE');
+    return this.getEmergencyControls();
+  }
+
+  async freezeBroker(brokerId: string, brokerName: string, actor: string, reason: string): Promise<EmergencyControlsState> {
+    await this.updateBrokerStatus(brokerId, 'SUSPENDED');
+    return this.getEmergencyControls();
+  }
+
+  async unfreezeBroker(brokerId: string, actor: string): Promise<EmergencyControlsState> {
+    await this.updateBrokerStatus(brokerId, 'ACTIVE');
+    return this.getEmergencyControls();
+  }
+
+  async freezeUser(userId: string, userName: string, actor: string, reason: string): Promise<EmergencyControlsState> {
+    await this.updateClientStatus(userId, 'SUSPENDED');
+    return this.getEmergencyControls();
+  }
+
+  async unfreezeUser(userId: string, actor: string): Promise<EmergencyControlsState> {
+    await this.updateClientStatus(userId, 'ACTIVE');
+    return this.getEmergencyControls();
+  }
+
+  async executeAccountAction(entityType: string, entityId: string, action: string, actor: string, reason: string): Promise<any> {
+    if (entityType === 'masters') {
+      return this.updateMasterStatus(entityId, action === 'SUSPEND' ? 'SUSPENDED' : 'ACTIVE');
+    } else if (entityType === 'brokers') {
+      return this.updateBrokerStatus(entityId, action === 'SUSPEND' ? 'SUSPENDED' : 'ACTIVE');
+    } else if (entityType === 'sub-brokers') {
+      return this.updateSubBrokerStatus(entityId, action === 'SUSPEND' ? 'SUSPENDED' : 'ACTIVE');
+    } else {
+      return this.updateClientStatus(entityId, action === 'SUSPEND' ? 'SUSPENDED' : 'ACTIVE');
+    }
+  }
+
+  // ----------------------------------------------------
+  // PLATFORM MANAGEMENT
+  // ----------------------------------------------------
+  async getPlatformManagement(): Promise<PlatformManagementConfig> {
+    const res = await this.executeQuery('SELECT * FROM platform_settings WHERE tenant_id = $1', ['TNT-001']);
+    if (res.rows.length === 0) {
+      return {
+        web_trading_enabled: true,
+        web_version: 'v4.8.2-stable',
+        web_maintenance_mode: false,
+        mobile_android_enabled: true,
+        mobile_android_min_version: 'v2.14.0',
+        mobile_ios_enabled: true,
+        mobile_ios_min_version: 'v2.14.0',
+        mobile_maintenance_mode: false,
+        last_updated: '2026-03-29 10:00:00'
+      };
+    }
+    const r = res.rows[0];
+    return {
+      web_trading_enabled: r.web_trading_enabled ?? true,
+      web_version: r.web_version || 'v4.8.2-stable',
+      web_maintenance_mode: r.web_maintenance_mode ?? false,
+      mobile_android_enabled: r.mobile_android_enabled ?? true,
+      mobile_android_min_version: r.mobile_android_version || 'v2.14.0',
+      mobile_ios_enabled: r.mobile_ios_enabled ?? true,
+      mobile_ios_min_version: r.mobile_ios_version || 'v2.14.0',
+      mobile_maintenance_mode: r.mobile_maintenance_mode ?? false,
+      broadcast_message: r.broadcast_message,
+      last_updated: r.updated_at ? new Date(r.updated_at).toISOString().replace('T', ' ').slice(0, 19) : '2026-03-29 10:00:00'
+    };
+  }
+
+  async updatePlatformManagement(data: Partial<PlatformManagementConfig>, actor: string): Promise<PlatformManagementConfig> {
+    const current = await this.getPlatformManagement();
+    const updated = { ...current, ...data };
+
+    await this.executeQuery(`
+      INSERT INTO platform_settings (
+        id, tenant_id, web_trading_enabled, web_version, web_maintenance_mode,
+        mobile_android_enabled, mobile_android_version, mobile_ios_enabled, mobile_ios_version,
+        updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)
+      ON CONFLICT (tenant_id) DO UPDATE SET
+        web_trading_enabled = EXCLUDED.web_trading_enabled,
+        web_version = EXCLUDED.web_version,
+        web_maintenance_mode = EXCLUDED.web_maintenance_mode,
+        mobile_android_enabled = EXCLUDED.mobile_android_enabled,
+        mobile_android_version = EXCLUDED.mobile_android_version,
+        mobile_ios_enabled = EXCLUDED.mobile_ios_enabled,
+        mobile_ios_version = EXCLUDED.mobile_ios_version,
+        updated_at = CURRENT_TIMESTAMP
+    `, [
+      'SET-TNT-001', 'TNT-001',
+      updated.web_trading_enabled, updated.web_version, updated.web_maintenance_mode,
+      updated.mobile_android_enabled, updated.mobile_android_min_version,
+      updated.mobile_ios_enabled, updated.mobile_ios_min_version
+    ]);
+
+    return updated;
+  }
+
+  // ----------------------------------------------------
+  // TOOLS, MONITORING, AUDITS & SUPPORT
+  // ----------------------------------------------------
+  async getAuditLogs(tenantId?: string): Promise<AuditLog[]> {
+    const tenantFilter = tenantId ? 'WHERE tenant_id = $1' : '';
+    const params = tenantId ? [tenantId] : [];
+
+    const res = await this.executeQuery(
+      `SELECT * FROM audit_logs ${tenantFilter} ORDER BY created_at DESC LIMIT 50`,
+      params
+    );
+
+    return res.rows.map(r => ({
+      id: r.id,
+      timestamp: r.created_at ? new Date(r.created_at).toISOString().replace('T', ' ').slice(0, 19) : '2026-03-29 10:00:00',
+      actor_name: r.user_name || 'System Admin',
+      actor_role: 'SUPER_ADMIN',
+      tenant_name: 'Alpha Prime Capital',
+      action: r.action,
+      resource: r.module || 'SYSTEM',
+      ip_address: r.ip_address || '127.0.0.1',
+      status: 'SUCCESS' as const
+    }));
+  }
+
+  async getSupportTickets(tenantId?: string): Promise<SupportTicket[]> {
+    const res = await this.executeQuery('SELECT * FROM support_tickets ORDER BY created_at DESC');
+    return res.rows.map(r => ({
+      id: r.id,
+      ticket_number: r.ticket_number,
+      client_name: r.user_name || 'Trader',
+      tenant_id: r.tenant_id || 'TNT-001',
+      tenant_name: 'Alpha Prime Capital',
+      subject: r.subject,
+      category: r.category as any,
+      priority: r.priority as any,
+      status: r.status as any,
+      created_at: r.created_at?.toISOString() || new Date().toISOString(),
+      updated_at: r.updated_at?.toISOString() || new Date().toISOString(),
+      messages: r.replies || []
+    }));
+  }
+
+  async updateSupportTicket(ticketId: string, data: Partial<SupportTicket>, actor?: string): Promise<SupportTicket | null> {
+    const res = await this.executeQuery(
+      'UPDATE support_tickets SET status = COALESCE($1, status), updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *',
+      [data.status, ticketId]
+    );
+    if (res.rows.length === 0) return null;
+    return (await this.getSupportTickets()).find(t => t.id === ticketId) || null;
+  }
+
+  async addSupportTicketReply(ticketId: string, message: string, actor?: string, role?: string): Promise<SupportTicket | null> {
+    const reply = {
+      id: `REP-${Date.now()}`,
+      sender_name: actor || 'Admin Support',
+      sender_role: role || 'SUPER_ADMIN',
+      message,
+      timestamp: new Date().toISOString()
+    };
+
+    await this.executeQuery(`
+      UPDATE support_tickets
+      SET replies = COALESCE(replies, '[]'::jsonb) || $1::jsonb,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = $2
+    `, [JSON.stringify([reply]), ticketId]);
+
+    return (await this.getSupportTickets()).find(t => t.id === ticketId) || null;
+  }
+
+  async getSubscriptions(): Promise<SubscriptionPlan[]> {
+    return [
+      {
+        id: 'sub-001',
+        tenant_id: 'TNT-001',
+        tenant_name: 'Alpha Prime Capital',
+        plan_name: 'Enterprise Tier',
+        pricing_model: 'HYBRID',
+        monthly_base_fee: 150000,
+        volume_rate_bps: 0.5,
+        user_limit: 5000,
+        current_users: 820,
+        renewal_date: '2024-11-14',
+        status: 'ACTIVE'
+      },
+      {
+        id: 'sub-002',
+        tenant_id: 'TNT-002',
+        tenant_name: 'Apex Securities Ltd',
+        plan_name: 'Professional Tier',
+        pricing_model: 'VOLUME_TIERED',
+        monthly_base_fee: 75000,
+        volume_rate_bps: 0.8,
+        user_limit: 2000,
+        current_users: 480,
+        renewal_date: '2025-01-10',
+        status: 'ACTIVE'
+      }
+    ];
+  }
+
+  async getWhiteLabelConfigs(): Promise<WhiteLabelConfig[]> {
+    return [];
+  }
+
+  async getWhiteLabelConfig(tenantId: string): Promise<WhiteLabelConfig | null> {
+    const res = await this.executeQuery('SELECT * FROM tenant_branding WHERE tenant_id = $1', [tenantId]);
+    if (res.rows.length === 0) return null;
+    const r = res.rows[0];
+    return {
+      tenant_id: r.tenant_id,
+      tenant_name: 'Alpha Prime Capital',
+      company_name: r.company_name,
+      logo_url: r.logo_url || 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=120&auto=format&fit=crop&q=80',
+      favicon_url: r.favicon_url || '/favicon.ico',
+      primary_color: r.primary_color || '#2563eb',
+      secondary_color: '#0f172a',
+      accent_color: r.accent_color || '#38bdf8',
+      support_email: r.support_email || 'support@tradematrix.io',
+      support_phone: r.support_phone || '+91 98000 00000',
+      custom_domain: 'trade.alphaprime.com',
+      footer_text: '© 2026 Alpha Prime Capital. All rights reserved.',
+      terms_url: '/terms',
+      privacy_url: '/privacy'
+    };
+  }
+
+  async updateWhiteLabelConfig(tenantId: string, data: Partial<WhiteLabelConfig>, actor?: string): Promise<WhiteLabelConfig> {
+    await this.executeQuery(`
+      INSERT INTO tenant_branding (
+        id, tenant_id, company_name, logo_url, favicon_url, primary_color, accent_color
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+      ON CONFLICT (tenant_id) DO UPDATE SET
+        company_name = COALESCE(EXCLUDED.company_name, tenant_branding.company_name),
+        logo_url = COALESCE(EXCLUDED.logo_url, tenant_branding.logo_url),
+        primary_color = COALESCE(EXCLUDED.primary_color, tenant_branding.primary_color),
+        accent_color = COALESCE(EXCLUDED.accent_color, tenant_branding.accent_color),
+        updated_at = CURRENT_TIMESTAMP
+    `, [
+      `BRD-${tenantId}`,
+      tenantId,
+      data.company_name || 'Brand Corp',
+      data.logo_url || null,
+      data.favicon_url || null,
+      data.primary_color || '#3b82f6',
+      data.accent_color || '#10b981'
+    ]);
+
+    return (await this.getWhiteLabelConfig(tenantId))!;
+  }
+
+  async publishWhiteLabelConfig(tenantId: string, actor: string, reason?: string): Promise<WhiteLabelConfig> {
+    return (await this.getWhiteLabelConfig(tenantId))!;
+  }
+
+  async rollbackWhiteLabelConfig(tenantId: string, actor: string): Promise<WhiteLabelConfig> {
+    return (await this.getWhiteLabelConfig(tenantId))!;
+  }
+
+  async getTenantPlatformConfig(tenantId: string): Promise<TenantPlatformConfig> {
+    const res = await this.executeQuery('SELECT * FROM platform_settings WHERE tenant_id = $1', [tenantId]);
+    if (res.rows.length === 0) {
+      return {
+        id: `PCFG-${tenantId}`,
+        tenant_id: tenantId,
+        tenant_name: 'Alpha Prime Capital',
+        web_trading_enabled: true,
+        mobile_trading_enabled: true,
+        registration_enabled: true,
+        forgot_password_enabled: true,
+        support_enabled: true,
+        notifications_enabled: true,
+        api_enabled: true,
+        trading_enabled: true,
+        maintenance_mode: false,
+        created_at: '2026-01-01',
+        updated_at: '2026-01-01'
+      };
+    }
+    const r = res.rows[0];
+    return {
+      id: r.id || `PCFG-${tenantId}`,
+      tenant_id: tenantId,
+      tenant_name: 'Alpha Prime Capital',
+      web_trading_enabled: r.web_trading_enabled ?? true,
+      mobile_trading_enabled: r.mobile_android_enabled ?? true,
+      registration_enabled: true,
+      forgot_password_enabled: true,
+      support_enabled: true,
+      notifications_enabled: true,
+      api_enabled: true,
+      trading_enabled: true,
+      maintenance_mode: r.web_maintenance_mode ?? false,
+      created_at: '2026-01-01',
+      updated_at: '2026-01-01'
+    };
+  }
+
+  async updateTenantPlatformConfig(tenantId: string, data: Partial<TenantPlatformConfig>, actor: string): Promise<TenantPlatformConfig> {
+    return this.getTenantPlatformConfig(tenantId);
+  }
+
+  async getTenantDomains(tenantId?: string): Promise<TenantDomain[]> {
+    const filter = tenantId ? 'WHERE tenant_id = $1' : '';
+    const params = tenantId ? [tenantId] : [];
+    const res = await this.executeQuery(`SELECT * FROM custom_domains ${filter}`, params);
+    return res.rows.map(r => ({
+      id: r.id,
+      tenant_id: r.tenant_id,
+      tenant_name: 'Alpha Prime Capital',
+      domain: r.domain,
+      domain_type: 'CUSTOM',
+      verification_status: (r.status === 'ACTIVE' ? 'VERIFIED' : 'PENDING') as any,
+      is_primary: r.is_primary || false,
+      ssl_status: 'ACTIVE',
+      created_at: r.created_at?.toISOString() || '2026-01-01'
+    }));
+  }
+
+  async addTenantDomain(tenantId: string, domain: Partial<TenantDomain>, actor: string): Promise<TenantDomain> {
+    const id = `DOM-${Date.now()}`;
+    const res = await this.executeQuery(`
+      INSERT INTO custom_domains (id, tenant_id, domain, status, ssl_status, is_primary, dns_target)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING *
+    `, [id, tenantId, domain.domain || 'trade.custom.com', 'PENDING', 'PENDING', false, 'cname.tradematrix.io']);
+
+    const r = res.rows[0];
+    return {
+      id: r.id,
+      tenant_id: r.tenant_id,
+      tenant_name: 'Alpha Prime Capital',
+      domain: r.domain,
+      domain_type: 'CUSTOM',
+      verification_status: 'PENDING',
+      is_primary: r.is_primary,
+      ssl_status: 'ACTIVE',
+      created_at: new Date().toISOString()
+    };
+  }
+
+  async updateTenantDomain(id: string, updates: Partial<TenantDomain>, actor: string): Promise<TenantDomain> {
+    const list = await this.getTenantDomains();
+    return list.find(d => d.id === id)!;
+  }
+
+  async deleteTenantDomain(id: string, actor: string): Promise<boolean> {
+    await this.executeQuery('DELETE FROM custom_domains WHERE id = $1', [id]);
+    return true;
+  }
+
+  async verifyTenantDomain(id: string, actor: string): Promise<TenantDomain> {
+    await this.executeQuery(
+      'UPDATE custom_domains SET status = $1, ssl_status = $2, verified_at = CURRENT_TIMESTAMP WHERE id = $3',
+      ['ACTIVE', 'ACTIVE', id]
+    );
+    const list = await this.getTenantDomains();
+    return list.find(d => d.id === id)!;
+  }
+
+  async resolveTenantByDomain(domain: string): Promise<{ tenant: Tenant | null; branding: WhiteLabelConfig | null; platformConfig: TenantPlatformConfig | null }> {
+    const tenantRes = await this.executeQuery(
+      'SELECT * FROM tenants WHERE subdomain = $1 OR custom_domain = $1 LIMIT 1',
+      [domain]
+    );
+    if (tenantRes.rows.length === 0) {
+      return { tenant: null, branding: null, platformConfig: null };
+    }
+    const tenant = await this.getTenantById(tenantRes.rows[0].id);
+    const branding = await this.getWhiteLabelConfig(tenant!.id);
+    const platformConfig = await this.getTenantPlatformConfig(tenant!.id);
+    return { tenant, branding, platformConfig };
+  }
+
+  async getBrandingAuditLogs(tenantId?: string): Promise<BrandingAuditLog[]> {
+    return [];
+  }
+
+  async executeTenantOrder(tenantId: string, orderData: any): Promise<any> {
+    const orderId = `ORD-${Date.now()}`;
+    const price = orderData.price || 1500.00;
+    const totalValue = price * orderData.quantity;
+
+    await this.executeQuery(`
+      INSERT INTO orders (id, tenant_id, client_id, client_code, client_name, symbol, exchange, order_type, side, quantity, price, status)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+    `, [
+      orderId, tenantId, 'CLT-001', 'CLT001', orderData.clientName || 'Demo Trader',
+      orderData.symbol, 'NSE', orderData.type, orderData.side, orderData.quantity, price, 'EXECUTED'
+    ]);
+
+    const tradeId = `TRD-${Date.now()}`;
+    await this.executeQuery(`
+      INSERT INTO trades (id, tenant_id, trade_id, client_id, client_name, symbol, exchange, side, quantity, price, total_value, status, timestamp)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+    `, [
+      tradeId, tenantId, tradeId, 'CLT-001', orderData.clientName || 'Demo Trader',
+      orderData.symbol, 'NSE', orderData.side, orderData.quantity, price, totalValue, 'EXECUTED',
+      new Date().toISOString().replace('T', ' ').slice(0, 19)
+    ]);
+
+    return { success: true, message: 'Order executed and trade recorded.' };
+  }
+
+  // Master limits & configurations
+  async getMasterLimits(masterId?: string): Promise<MasterLimits[]> { return []; }
+  async updateMasterLimits(masterId: string, data: Partial<MasterLimits>, actor: string): Promise<MasterLimits> { return data as any; }
+  async updateMasterLimit(masterId: string, data: Partial<MasterLimits>, actor: string): Promise<MasterLimits> { return data as any; }
+  async getMasterPricing(masterId?: string): Promise<MasterPricingConfig[]> { return []; }
+  async updateMasterPricing(masterId: string, data: Partial<MasterPricingConfig>, actor: string): Promise<MasterPricingConfig> { return data as any; }
+  async getMasterBrokerage(masterId?: string): Promise<MasterBrokerageConfig[]> { return []; }
+  async updateMasterBrokerage(masterId: string, data: Partial<MasterBrokerageConfig>, actor: string): Promise<MasterBrokerageConfig> { return data as any; }
+  async getMasterApiPermissions(masterId?: string): Promise<MasterApiPermission[]> { return []; }
+  async updateMasterApiPermissions(masterId: string, data: Partial<MasterApiPermission>, actor: string): Promise<MasterApiPermission> { return data as any; }
+  async updateMasterApiPermission(masterId: string, data: Partial<MasterApiPermission>, actor: string): Promise<MasterApiPermission> { return data as any; }
+  async getMasterBranding(masterId?: string): Promise<MasterBrandingConfig[]> { return []; }
+  async updateMasterBranding(masterId: string, data: Partial<MasterBrandingConfig>, actor: string): Promise<MasterBrandingConfig> { return data as any; }
+  async getMasterSubscriptions(masterId?: string): Promise<MasterSubscriptionConfig[]> { return []; }
+  async updateMasterSubscription(masterId: string, data: Partial<MasterSubscriptionConfig>, actor: string): Promise<MasterSubscriptionConfig> { return data as any; }
+  async getMasterRevenueReports(masterId?: string): Promise<MasterRevenueData[]> { return []; }
+
+  // Monitoring
+  async getLoginHistory(): Promise<LoginHistoryItem[]> {
+    const res = await this.executeQuery('SELECT * FROM login_history ORDER BY created_at DESC LIMIT 20');
+    return res.rows.map(r => ({
+      id: r.id,
+      user_name: r.user_name || 'Admin User',
+      user_email: r.user_email || 'admin@tradematrix.io',
+      user_role: r.role || 'SUPER_ADMIN',
+      login_time: r.created_at?.toISOString() || new Date().toISOString(),
+      ip_address: r.ip_address || '127.0.0.1',
+      device: 'Desktop',
+      browser: 'Chrome 123.0',
+      os: 'macOS Sonoma',
+      status: (r.status === 'SUCCESS' ? 'SUCCESS' : 'FAILED') as any,
+      failure_reason: r.reason
+    }));
+  }
+
+  async getActiveSessions(): Promise<SessionItem[]> {
+    const res = await this.executeQuery('SELECT * FROM sessions WHERE status = $1', ['ACTIVE']);
+    return res.rows.map(r => ({
+      id: r.id,
+      session_id: r.id,
+      user_name: r.user_name || 'Admin User',
+      user_email: 'admin@tradematrix.io',
+      user_role: r.role || 'SUPER_ADMIN',
+      ip_address: r.ip_address || '127.0.0.1',
+      device: r.device || 'Desktop',
+      browser: 'Chrome 123.0',
+      login_time: r.login_time?.toISOString() || new Date().toISOString(),
+      last_activity: r.last_active?.toISOString() || new Date().toISOString(),
+      status: 'ACTIVE' as const
+    }));
+  }
+
+  async revokeSession(sessionId: string, actor: string): Promise<boolean> {
+    await this.executeQuery('DELETE FROM sessions WHERE id = $1', [sessionId]);
+    return true;
+  }
+
+  async getOrderAuditTrail(orderId?: string): Promise<OrderAuditTrailItem[]> { return []; }
+  async getApiActivity(): Promise<ApiActivityItem[]> { return []; }
+  async getApiActivityLogs(): Promise<ApiActivityItem[]> { return []; }
+  async getSuspiciousAlerts(): Promise<SuspiciousActivityAlert[]> { return []; }
+  async getSuspiciousActivityAlerts(): Promise<SuspiciousActivityAlert[]> { return []; }
+  async resolveSuspiciousAlert(alertId: string, actor: string): Promise<boolean> { return true; }
+  async getUserCreationLogs(): Promise<UserCreationLogItem[]> { return []; }
+  async getDataDeletionLogs(): Promise<DataDeletionLogItem[]> { return []; }
+  async getConfigurationChangeLogs(): Promise<ConfigurationChangeLogItem[]> { return []; }
+  async recordOrderEvent(event: Partial<OrderAuditTrailItem>): Promise<void> {}
+  async recordConfigChange(change: Partial<ConfigurationChangeLogItem>): Promise<void> {}
+
+  // RBAC
+  async getRbacRoles(): Promise<RoleDefinition[]> {
+    const res = await this.executeQuery('SELECT * FROM roles ORDER BY is_system DESC, name ASC');
+    if (res.rows.length === 0) {
+      return Object.entries(DEFAULT_ROLE_PERMISSIONS).map(([name, perms]) => ({
+        id: `ROLE-${name}`,
+        name,
+        code: name,
+        description: `System role for ${name}`,
+        isSystemRole: true,
+        userCount: 3,
+        badgeColor: 'blue',
+        permissions: perms,
+        createdAt: '2026-01-01',
+        updatedAt: '2026-01-01'
+      }));
+    }
+    return res.rows.map(r => ({
+      id: r.id,
+      name: r.name,
+      code: r.name,
+      description: r.description,
+      isSystemRole: r.is_system,
+      userCount: 3,
+      badgeColor: 'blue',
+      permissions: r.permissions || [],
+      createdAt: r.created_at?.toISOString() || '2026-01-01',
+      updatedAt: r.updated_at?.toISOString() || '2026-01-01'
+    }));
+  }
+
+  async createRbacRole(role: Partial<RoleDefinition>, actor: string): Promise<RoleDefinition> {
+    const id = `ROLE-${Date.now()}`;
+    const res = await this.executeQuery(`
+      INSERT INTO roles (id, name, description, is_system, permissions)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING *
+    `, [id, role.name || 'CUSTOM_ROLE', role.description || '', false, JSON.stringify(role.permissions || [])]);
+    const r = res.rows[0];
+    return {
+      id: r.id,
+      name: r.name,
+      code: r.name,
+      description: r.description,
+      isSystemRole: r.is_system,
+      userCount: 1,
+      badgeColor: 'indigo',
+      permissions: r.permissions,
+      createdAt: r.created_at?.toISOString() || new Date().toISOString(),
+      updatedAt: r.updated_at?.toISOString() || new Date().toISOString()
+    };
+  }
+
+  async updateRbacRole(roleId: string, updates: Partial<RoleDefinition>, actor: string): Promise<RoleDefinition> {
+    await this.executeQuery(`
+      UPDATE roles
+      SET name = COALESCE($1, name), description = COALESCE($2, description), permissions = COALESCE($3, permissions), updated_at = CURRENT_TIMESTAMP
+      WHERE id = $4
+    `, [updates.name, updates.description, updates.permissions ? JSON.stringify(updates.permissions) : null, roleId]);
+    return (await this.getRbacRoles()).find(r => r.id === roleId)!;
+  }
+
+  async deleteRbacRole(roleId: string, actor: string): Promise<boolean> {
+    await this.executeQuery('DELETE FROM roles WHERE id = $1 AND is_system = false', [roleId]);
+    return true;
+  }
+
+  async getRbacUsers(): Promise<RbacUser[]> {
+    const res = await this.executeQuery('SELECT * FROM users ORDER BY created_at ASC');
+    return res.rows.map(r => ({
+      id: r.id,
+      name: r.name,
+      email: r.email,
+      role: r.role,
+      roleName: r.role,
+      tenantId: 'TNT-001',
+      tenantName: 'Alpha Prime Capital',
+      status: (r.status === 'ACTIVE' ? 'ACTIVE' : 'SUSPENDED') as any,
+      twoFactorEnabled: true,
+      lastLogin: '2026-03-29 10:00'
+    }));
+  }
+
+  async assignUserRole(userId: string, roleCode: string, actor: string, customPermissions?: any): Promise<RbacUser> {
+    await this.executeQuery('UPDATE users SET role = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [roleCode, userId]);
+    return (await this.getRbacUsers()).find(u => u.id === userId)!;
+  }
+
+  async createRbacUser(userData: Partial<RbacUser>, actor: string): Promise<RbacUser> {
+    const id = `USR-${Date.now()}`;
+    const res = await this.executeQuery(`
+      INSERT INTO users (id, name, email, role, status)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING *
+    `, [id, userData.name || 'New User', userData.email || `user-${id}@tradematrix.io`, userData.role || 'VIEWER', userData.status || 'ACTIVE']);
+    const r = res.rows[0];
+    return {
+      id: r.id,
+      name: r.name,
+      email: r.email,
+      role: r.role,
+      roleName: r.role,
+      tenantId: 'TNT-001',
+      tenantName: 'Alpha Prime Capital',
+      status: (r.status === 'ACTIVE' ? 'ACTIVE' : 'SUSPENDED') as any,
+      twoFactorEnabled: false,
+      lastLogin: 'Never'
+    };
+  }
+
+  async updateRbacUser(userId: string, updates: Partial<RbacUser>, actor: string): Promise<RbacUser> {
+    await this.executeQuery(`
+      UPDATE users
+      SET name = COALESCE($1, name), role = COALESCE($2, role), status = COALESCE($3, status), updated_at = CURRENT_TIMESTAMP
+      WHERE id = $4
+    `, [updates.name, updates.role, updates.status, userId]);
+    return (await this.getRbacUsers()).find(u => u.id === userId)!;
+  }
+
+  async getRbacAuditLogs(): Promise<RbacAuditLogItem[]> {
+    return [];
+  }
+}

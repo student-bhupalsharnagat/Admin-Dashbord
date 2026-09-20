@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Search,
   ChevronDown,
@@ -29,92 +29,7 @@ export interface OrderItem {
   exchange?: string;
 }
 
-const initialOrdersData: OrderItem[] = [
-  {
-    orderId: 'ORD001',
-    client: 'Alexander Hunt',
-    clientId: 'CLT001',
-    symbol: 'EUR/INR',
-    side: 'BUY',
-    quantity: '100,000',
-    type: 'Limit',
-    price: '1.088',
-    status: 'FILLED',
-    created: '2023-06-23 10:14:22',
-    filledQty: '100,000',
-    exchange: 'NSE-FX'
-  },
-  {
-    orderId: 'ORD002',
-    client: 'Maya Patel',
-    clientId: 'CLT004',
-    symbol: 'BTC/INR',
-    side: 'SELL',
-    quantity: '0.5',
-    type: 'Market',
-    price: '30,120',
-    status: 'FILLED',
-    created: '2023-06-23 10:22:45',
-    filledQty: '0.5',
-    exchange: 'CRYPTO-EX'
-  },
-  {
-    orderId: 'ORD003',
-    client: 'Isabella Torres',
-    clientId: 'CLT006',
-    symbol: 'AAPL',
-    side: 'BUY',
-    quantity: '50',
-    type: 'Limit',
-    price: '182.5',
-    status: 'PENDING',
-    created: '2023-06-23 11:05:10',
-    filledQty: '0',
-    exchange: 'NASDAQ'
-  },
-  {
-    orderId: 'ORD004',
-    client: 'Sophia Lee',
-    clientId: 'CLT002',
-    symbol: 'GBP/INR',
-    side: 'BUY',
-    quantity: '50,000',
-    type: 'Stop',
-    price: '1.272',
-    status: 'CANCELLED',
-    created: '2023-06-23 11:30:00',
-    filledQty: '0',
-    exchange: 'NSE-FX'
-  },
-  {
-    orderId: 'ORD005',
-    client: 'Alexander Hunt',
-    clientId: 'CLT001',
-    symbol: 'TSLA',
-    side: 'SELL',
-    quantity: '20',
-    type: 'Market',
-    price: '248.2',
-    status: 'FILLED',
-    created: '2023-06-23 12:00:00',
-    filledQty: '20',
-    exchange: 'NASDAQ'
-  },
-  {
-    orderId: 'ORD006',
-    client: 'Maya Patel',
-    clientId: 'CLT004',
-    symbol: 'ETH/INR',
-    side: 'BUY',
-    quantity: '2',
-    type: 'Limit',
-    price: '1,980',
-    status: 'PENDING',
-    created: '2023-06-23 12:45:00',
-    filledQty: '0',
-    exchange: 'CRYPTO-EX'
-  }
-];
+const initialOrdersData: OrderItem[] = [];
 
 interface OrdersViewProps {
   onNotify?: (message: string, type?: 'info' | 'success' | 'warning') => void;
@@ -140,6 +55,22 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
   const notify = (msg: string, type: 'info' | 'success' | 'warning' = 'info') => {
     if (onNotify) onNotify(msg, type);
   };
+
+  const fetchOrders = async () => {
+    try {
+      const res = await fetch('/api/admin/orders');
+      if (res.ok) {
+        const data = await res.json();
+        setOrders(data);
+      }
+    } catch (e) {
+      console.error('Failed to fetch orders:', e);
+    }
+  };
+
+  useEffect(() => {
+    fetchOrders();
+  }, []);
 
   const handleOpenClientDetail = (order: OrderItem) => {
     const found = initialClientsData.find(

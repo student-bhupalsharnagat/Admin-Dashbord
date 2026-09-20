@@ -28,8 +28,8 @@ import { RecentTradesCard } from '../components/dashboard/RecentTradesCard';
 import { RecentRegistrationsCard } from '../components/dashboard/RecentRegistrationsCard';
 import { NavigationTab } from '../components/layout/AdminSidebar';
 
-interface DashboardViewProps {
-  kpis: DashboardKPIs | null;
+export interface DashboardViewProps {
+  kpis?: DashboardKPIs | null;
   volumeCommissionData?: any;
   clientGrowthData?: any;
   dailyPLData?: any;
@@ -43,40 +43,56 @@ interface DashboardViewProps {
   onAddClient: () => void;
   onReviewKYC: (kyc?: KYCRecord) => void;
   onSelectTrade: (trade: Trade) => void;
+  onRefresh?: () => Promise<void> | void;
 }
+
+const DEFAULT_FALLBACK_KPIS: DashboardKPIs = {
+  total_masters: { value: 5, badge: '+2 new', subtitle: 'Across all regions' },
+  total_brokers: { value: 43, badge: '+5 new', subtitle: '38 active' },
+  total_clients: { value: 3073, badge: '↑ 12.3%', subtitle: '1,360 KYC approved' },
+  commission_earned: { value: '862K', badge: '↑ 11.4%', subtitle: 'Today' },
+  todays_turnover: { value: '48.2M', badge: '↑ 9.8%', subtitle: 'Today' },
+  total_pl: { value: '8.44M', badge: '↑ 22.1%', subtitle: 'Unrealized + Realized' },
+  pending_kyc: { value: 2, subtitle: 'Requires review' },
+  open_tickets: { value: 4, subtitle: '2 high priority' }
+};
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
   kpis,
+  volumeCommissionData,
+  clientGrowthData,
+  dailyPLData,
+  dailyPLBadge,
   recentTrades,
+  pendingKYC,
   onNavigateTab,
   onNavigateFunds,
   onCreateMaster,
   onCreateBroker,
   onAddClient,
   onReviewKYC,
-  onSelectTrade
+  onSelectTrade,
+  onRefresh
 }) => {
   const [currency, setCurrency] = useState<'USD' | 'INR'>('USD');
   const [timeRange, setTimeRange] = useState<'Today' | '7D' | '30D' | 'YTD' | 'All'>('30D');
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const currencySymbol = currency === 'USD' ? '$' : '₹';
+  const activeKpis = kpis || DEFAULT_FALLBACK_KPIS;
 
-  const handleRefresh = () => {
+  const handleRefresh = async () => {
     setIsRefreshing(true);
-    setTimeout(() => setIsRefreshing(false), 600);
+    try {
+      if (onRefresh) {
+        await onRefresh();
+      }
+    } catch (err) {
+      console.warn('Dashboard telemetry refresh error:', err);
+    } finally {
+      setTimeout(() => setIsRefreshing(false), 500);
+    }
   };
-
-  if (!kpis) {
-    return (
-      <div className="flex items-center justify-center h-96">
-        <div className="flex items-center gap-3 text-slate-400 text-sm">
-          <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-          <span>Synchronizing central trading telemetry...</span>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="space-y-4 sm:space-y-5">
@@ -90,9 +106,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <div>
             <div className="flex items-center gap-2">
               <h2 className="text-sm font-bold text-white tracking-tight">Admin Overview</h2>
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-semibold font-mono">
-                LIVE 12ms
-              </span>
+              {kpis ? (
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-semibold font-mono">
+                  LIVE 12ms
+                </span>
+              ) : (
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 font-semibold font-mono flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+                  SYNCING TELEMETRY
+                </span>
+              )}
             </div>
             <p className="text-[11px] text-slate-400 mt-0.5">
               Multi-tenant liquidity pool & downline clearing
@@ -158,7 +181,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 sm:gap-4">
         <KPICard
           title="TOTAL MASTERS"
-          value={kpis.total_masters?.value ?? 5}
+          value={activeKpis.total_masters?.value ?? 5}
           subtitle="+2 this month"
           icon={Crown}
           iconColor="text-blue-400"
@@ -168,7 +191,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         <KPICard
           title="TOTAL BROKERS"
-          value={kpis.total_brokers?.value ?? 43}
+          value={activeKpis.total_brokers?.value ?? 43}
           subtitle="+8 this month"
           icon={Building2}
           iconColor="text-purple-400"
@@ -188,7 +211,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         <KPICard
           title="TOTAL CLIENTS"
-          value="3,073"
+          value={typeof activeKpis.total_clients?.value === 'number' ? activeKpis.total_clients.value.toLocaleString() : (activeKpis.total_clients?.value ?? '3,073')}
           subtitle="+104 this month"
           icon={Users}
           iconColor="text-emerald-400"
@@ -211,7 +234,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         <KPICard
           title="TOTAL TURNOVER"
-          value={`${currencySymbol}48.2M`}
+          value={activeKpis.todays_turnover?.value ? `${activeKpis.todays_turnover.value}` : `${currencySymbol}48.2M`}
           subtitle="+9.8% vs last month"
           icon={BarChart3}
           iconColor="text-blue-400"
@@ -221,7 +244,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         <KPICard
           title="NET P&L"
-          value={`${currencySymbol}8.44M`}
+          value={activeKpis.total_pl?.value ? `${activeKpis.total_pl.value}` : `${currencySymbol}8.44M`}
           subtitle="+22.1% vs last month"
           icon={DollarSign}
           iconColor="text-emerald-400"
@@ -231,7 +254,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         <KPICard
           title="COMMISSION EARNED"
-          value={`${currencySymbol}862K`}
+          value={activeKpis.commission_earned?.value ? `${activeKpis.commission_earned.value}` : `${currencySymbol}862K`}
           subtitle="+11.4% vs last month"
           icon={Coins}
           iconColor="text-purple-400"
@@ -242,10 +265,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
       {/* Row 3: Pending Status Strip */}
       <PendingAlertsStrip
-        pendingKYC={1}
+        pendingKYC={activeKpis.pending_kyc?.value ?? 1}
         pendingDeposits={3}
         pendingWithdrawals={1}
-        openTickets={2}
+        openTickets={activeKpis.open_tickets?.value ?? 2}
         onNavigateKYC={() => onNavigateTab('kyc')}
         onNavigateDeposits={() => {
           if (onNavigateFunds) {

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Search,
   TrendingUp,
@@ -24,73 +24,7 @@ export interface PositionItem {
   realizedPLPositive: boolean;
 }
 
-const initialPositionsData: PositionItem[] = [
-  {
-    id: 'pos_1',
-    client: 'Alexander Hunt',
-    symbol: 'EUR/INR',
-    qty: '100,000',
-    avgPrice: '1.088',
-    currentPrice: '1.089',
-    unrealizedPL: '+₹160',
-    realizedPL: '+₹3,660',
-    margin: '₹1,087.6',
-    unrealizedPLPositive: true,
-    realizedPLPositive: true
-  },
-  {
-    id: 'pos_2',
-    client: 'Maya Patel',
-    symbol: 'ETH/INR',
-    qty: '2',
-    avgPrice: '1,980',
-    currentPrice: '2,010',
-    unrealizedPL: '+₹60',
-    realizedPL: '+₹9,450',
-    margin: '₹396',
-    unrealizedPLPositive: true,
-    realizedPLPositive: true
-  },
-  {
-    id: 'pos_3',
-    client: 'Isabella Torres',
-    symbol: 'AMZN',
-    qty: '10',
-    avgPrice: '131.2',
-    currentPrice: '133.5',
-    unrealizedPL: '+₹23',
-    realizedPL: '+₹5,657',
-    margin: '₹131.2',
-    unrealizedPLPositive: true,
-    realizedPLPositive: true
-  },
-  {
-    id: 'pos_4',
-    client: 'Maya Patel',
-    symbol: 'AAPL',
-    qty: '100',
-    avgPrice: '178.4',
-    currentPrice: '182.5',
-    unrealizedPL: '+₹410',
-    realizedPL: '+₹1,790',
-    margin: '₹1,784',
-    unrealizedPLPositive: true,
-    realizedPLPositive: true
-  },
-  {
-    id: 'pos_5',
-    client: 'Alexander Hunt',
-    symbol: 'TSLA',
-    qty: '0',
-    avgPrice: '248.2',
-    currentPrice: '248.15',
-    unrealizedPL: '+₹0',
-    realizedPL: '₹-1',
-    margin: '₹0',
-    unrealizedPLPositive: true,
-    realizedPLPositive: false
-  }
-];
+const initialPositionsData: PositionItem[] = [];
 
 interface PositionsViewProps {
   onNotify?: (message: string, type?: 'info' | 'success' | 'warning') => void;
@@ -105,20 +39,34 @@ export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify }) => {
     if (onNotify) onNotify(msg, type);
   };
 
-  const handleSquareOff = (pos: PositionItem) => {
-    setPositions(prev =>
-      prev.map(p =>
-        p.id === pos.id
-          ? {
-              ...p,
-              qty: '0',
-              unrealizedPL: '+₹0',
-              margin: '₹0'
-            }
-          : p
-      )
-    );
-    notify(`Position in ${pos.symbol} for ${pos.client} successfully squared off at market.`, 'success');
+  const fetchPositions = async () => {
+    try {
+      const res = await fetch('/api/admin/positions');
+      if (res.ok) {
+        const data = await res.json();
+        setPositions(data);
+      }
+    } catch (e) {
+      console.error('Failed to fetch positions:', e);
+    }
+  };
+
+  useEffect(() => {
+    fetchPositions();
+  }, []);
+
+  const handleSquareOff = async (pos: PositionItem) => {
+    try {
+      const res = await fetch(`/api/admin/positions/${pos.id}/square-off`, { method: 'POST' });
+      if (res.ok) {
+        fetchPositions();
+        notify(`Position in ${pos.symbol} for ${pos.client} successfully squared off at market.`, 'success');
+      } else {
+        notify(`Failed to square off position in database.`, 'warning');
+      }
+    } catch (e) {
+      notify(`Network error squaring off position.`, 'warning');
+    }
     setSelectedPosition(null);
   };
 

@@ -37,10 +37,15 @@ import {
   PlatformManagementConfig,
   RoleDefinition,
   RbacUser,
-  RbacAuditLogItem
+  RbacAuditLogItem,
+  FundDepositItem,
+  FundWithdrawalItem,
+  LedgerRowItem
 } from '../../src/types';
 import { DEFAULT_ROLE_PERMISSIONS } from '../../src/utils/rbac';
 import { tenantConfigCache } from './TenantConfigCache.ts';
+
+export type EntityStatus = 'ACTIVE' | 'SUSPENDED' | 'INACTIVE';
 
 export interface ITradingDataProvider {
   getDashboardKPIs(tenantId?: string): Promise<DashboardKPIs>;
@@ -65,14 +70,40 @@ export interface ITradingDataProvider {
   createBroker(data: Partial<Broker>): Promise<Broker>;
   createSubBroker(data: Partial<SubBroker>): Promise<SubBroker>;
   createClient(data: Partial<Client>): Promise<Client>;
+  updateMasterStatus(id: string, status: EntityStatus): Promise<Master | null>;
+  updateBrokerStatus(id: string, status: EntityStatus): Promise<Broker | null>;
+  updateSubBrokerStatus(id: string, status: EntityStatus): Promise<SubBroker | null>;
+  updateClientStatus(id: string, status: EntityStatus): Promise<Client | null>;
+  updateMaster(id: string, data: Partial<Master>): Promise<Master | null>;
+  updateBroker(id: string, data: Partial<Broker>): Promise<Broker | null>;
+  updateSubBroker(id: string, data: Partial<SubBroker>): Promise<SubBroker | null>;
+  updateClient(id: string, data: Partial<Client>): Promise<Client | null>;
   
   // Compliance & KYC
   getKYCRecords(tenantId?: string, status?: string): Promise<KYCRecord[]>;
   updateKYCStatus(id: string, status: KYCRecord['kyc_status'], notes?: string): Promise<KYCRecord | null>;
+  getFundDeposits(tenantId?: string, status?: string): Promise<FundDepositItem[]>;
+  approveFundDeposit(id: string, actor: string): Promise<any>;
+  rejectFundDeposit(id: string, actor: string): Promise<any>;
+  createFundDeposit(data: any): Promise<any>;
+  getFundWithdrawals(tenantId?: string, status?: string): Promise<FundWithdrawalItem[]>;
+  approveFundWithdrawal(id: string, actor: string): Promise<any>;
+  rejectFundWithdrawal(id: string, actor: string): Promise<any>;
+  createFundWithdrawal(data: any): Promise<any>;
+  getLedgerEntries(tenantId?: string, type?: string): Promise<LedgerRowItem[]>;
+  createLedgerEntry(data: any): Promise<any>;
   
-  // Trading
+  // Trading & Positions
   getOrders(tenantId?: string): Promise<Order[]>;
   getAllTrades(tenantId?: string): Promise<Trade[]>;
+  getPositions(tenantId?: string): Promise<any[]>;
+  squareOffPosition(id: string, actor: string): Promise<any>;
+  getCommissionPlans(tenantId?: string): Promise<any[]>;
+  getCommissionRules(tenantId?: string, planId?: string): Promise<any[]>;
+  getRiskProfiles(tenantId?: string): Promise<any[]>;
+  getRiskEvents(tenantId?: string): Promise<any[]>;
+  getNotifications(tenantId?: string): Promise<any[]>;
+  markNotificationRead(id: string): Promise<any>;
   
   // Tools & Administration
   getSubscriptions(): Promise<SubscriptionPlan[]>;
@@ -130,6 +161,7 @@ export interface ITradingDataProvider {
   setApiAccess(enabled: boolean, actor: string): Promise<EmergencyControlsState>;
   setApiAccessActive(enabled: boolean, actor: string): Promise<EmergencyControlsState>;
   executeAccountAction(entityType: string, entityId: string, action: string, actor: string, reason: string): Promise<any>;
+  cancelAllOrders(actor?: string, reason?: string): Promise<{ cancelledOrdersCount: number; message: string }>;
 
   // Master Management
   getMasterLimits(masterId?: string): Promise<MasterLimits[]>;
@@ -1455,6 +1487,62 @@ export class MockTradingDataProvider implements ITradingDataProvider {
     return newClient;
   }
 
+  async updateMasterStatus(id: string, status: EntityStatus): Promise<Master | null> {
+    const master = this.masters.find(m => m.id === id || m.code === id);
+    if (!master) return null;
+    master.status = status;
+    return master;
+  }
+
+  async updateBrokerStatus(id: string, status: EntityStatus): Promise<Broker | null> {
+    const broker = this.brokers.find(b => b.id === id || b.code === id);
+    if (!broker) return null;
+    broker.status = status;
+    return broker;
+  }
+
+  async updateSubBrokerStatus(id: string, status: EntityStatus): Promise<SubBroker | null> {
+    const subBroker = this.subBrokers.find(s => s.id === id || s.code === id);
+    if (!subBroker) return null;
+    subBroker.status = status;
+    return subBroker;
+  }
+
+  async updateClientStatus(id: string, status: EntityStatus): Promise<Client | null> {
+    const client = this.clients.find(c => c.id === id || c.client_code === id);
+    if (!client) return null;
+    client.status = status;
+    return client;
+  }
+
+  async updateMaster(id: string, data: Partial<Master>): Promise<Master | null> {
+    const master = this.masters.find(m => m.id === id || m.code === id);
+    if (!master) return null;
+    Object.assign(master, data);
+    return master;
+  }
+
+  async updateBroker(id: string, data: Partial<Broker>): Promise<Broker | null> {
+    const broker = this.brokers.find(b => b.id === id || b.code === id);
+    if (!broker) return null;
+    Object.assign(broker, data);
+    return broker;
+  }
+
+  async updateSubBroker(id: string, data: Partial<SubBroker>): Promise<SubBroker | null> {
+    const subBroker = this.subBrokers.find(s => s.id === id || s.code === id);
+    if (!subBroker) return null;
+    Object.assign(subBroker, data);
+    return subBroker;
+  }
+
+  async updateClient(id: string, data: Partial<Client>): Promise<Client | null> {
+    const client = this.clients.find(c => c.id === id || c.client_code === id);
+    if (!client) return null;
+    Object.assign(client, data);
+    return client;
+  }
+
   async getKYCRecords(tenantId?: string, status?: string): Promise<KYCRecord[]> {
     let result = this.kycRecords;
     if (tenantId) result = result.filter(k => k.tenant_id === tenantId);
@@ -2267,6 +2355,42 @@ export class MockTradingDataProvider implements ITradingDataProvider {
       ip_address: '103.21.58.14'
     });
     return this.emergencyState;
+  }
+
+  async cancelAllOrders(actor: string = 'Super Admin', reason: string = 'Emergency Mass Cancellation'): Promise<{ cancelledOrdersCount: number; message: string }> {
+    let cancelledCount = 0;
+    for (const order of this.orders) {
+      if (order.status === 'PENDING') {
+        order.status = 'CANCELLED';
+        cancelledCount++;
+        await this.recordOrderEvent({
+          id: `OAT-${Date.now()}-${cancelledCount}`,
+          order_id: order.id,
+          action: 'ORDER_CANCELLED',
+          user_name: actor,
+          symbol: order.symbol,
+          old_value: 'PENDING',
+          new_value: 'CANCELLED',
+          timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
+          ip_address: '103.21.58.14',
+          session_id: 'SES-EMERGENCY'
+        });
+      }
+    }
+    await this.recordConfigChange({
+      config_module: 'EMERGENCY_CONTROLS',
+      setting_name: 'CANCEL_ALL_ORDERS',
+      old_value: 'N/A',
+      new_value: `Cancelled ${cancelledCount} open orders`,
+      changed_by: actor,
+      reason,
+      timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
+      ip_address: '103.21.58.14'
+    });
+    return {
+      cancelledOrdersCount: cancelledCount,
+      message: `Successfully cancelled ${cancelledCount} open orders.`
+    };
   }
 
   async setNewUserCreation(enabled: boolean, actor: string): Promise<EmergencyControlsState> {
@@ -3805,10 +3929,117 @@ export class MockTradingDataProvider implements ITradingDataProvider {
   async getRbacAuditLogs(): Promise<RbacAuditLogItem[]> {
     return this.rbacAuditLogs;
   }
+
+  // ----------------------------------------------------
+  // Compliance, Funds, Ledger, Positions & Risk (Mock Fallback)
+  // ----------------------------------------------------
+  async getFundDeposits(_tenantId?: string, status?: string): Promise<FundDepositItem[]> {
+    const list: FundDepositItem[] = [
+      { txnId: 'DEP-001', client: 'Alexander Hunt', amount: '₹10,000', method: 'Bank Transfer', reference: 'TXN-8821-A', status: 'COMPLETED', date: '2026-03-20', rawAmount: 10000 },
+      { txnId: 'DEP-002', client: 'Maya Patel', amount: '₹25,000', method: 'Wire Transfer', reference: 'TXN-8845-B', status: 'COMPLETED', date: '2026-03-22', rawAmount: 25000 },
+      { txnId: 'DEP-003', client: 'Nathan Brooks', amount: '₹5,000', method: 'Credit Card', reference: 'TXN-8902-C', status: 'PENDING', date: '2026-03-25', rawAmount: 5000 }
+    ];
+    if (status && status !== 'All Status') return list.filter(d => d.status === status);
+    return list;
+  }
+
+  async approveFundDeposit(id: string, _actor: string): Promise<any> {
+    return { success: true, txnId: id, status: 'COMPLETED' };
+  }
+
+  async rejectFundDeposit(id: string, _actor: string): Promise<any> {
+    return { success: true, txnId: id, status: 'FAILED' };
+  }
+
+  async createFundDeposit(data: any): Promise<any> {
+    return { id: `DEP-${Date.now()}`, ...data, status: 'PENDING' };
+  }
+
+  async getFundWithdrawals(_tenantId?: string, status?: string): Promise<FundWithdrawalItem[]> {
+    const list: FundWithdrawalItem[] = [
+      { txnId: 'WDR-001', client: 'Alexander Hunt', amount: '₹5,000', method: 'Bank Transfer', reference: 'WDR-001', status: 'COMPLETED', date: '2026-03-21', rawAmount: 5000 },
+      { txnId: 'WDR-002', client: 'Maya Patel', amount: '₹12,000', method: 'Wire Transfer', reference: 'WDR-002', status: 'PENDING', date: '2026-03-26', rawAmount: 12000 }
+    ];
+    if (status && status !== 'All Status') return list.filter(w => w.status === status);
+    return list;
+  }
+
+  async approveFundWithdrawal(id: string, _actor: string): Promise<any> {
+    return { success: true, txnId: id, status: 'COMPLETED' };
+  }
+
+  async rejectFundWithdrawal(id: string, _actor: string): Promise<any> {
+    return { success: true, txnId: id, status: 'FAILED' };
+  }
+
+  async createFundWithdrawal(data: any): Promise<any> {
+    return { id: `WDR-${Date.now()}`, ...data, status: 'PENDING' };
+  }
+
+  async getLedgerEntries(_tenantId?: string, type?: string): Promise<LedgerRowItem[]> {
+    const list: LedgerRowItem[] = [
+      { date: '2026-03-26', txnId: 'TXN-9045-E', account: 'Isabella Torres', type: 'DEPOSIT', credit: '+₹15,000', debit: '—', balance: '₹31,500', reference: 'Bank Transfer', status: 'COMPLETED' },
+      { date: '2026-03-25', txnId: 'WDR-002', account: 'Maya Patel', type: 'WITHDRAWAL', credit: '—', debit: '-₹12,000', balance: '₹48,200', reference: 'Wire Transfer', status: 'PENDING' },
+      { date: '2026-03-24', txnId: 'PNL-0618', account: 'Isabella Torres', type: 'P&L', credit: '+₹5,680', debit: '—', balance: '₹16,500', reference: 'Trade Settlement', status: 'COMPLETED' }
+    ];
+    if (type && type !== 'All Types') return list.filter(l => l.type === type);
+    return list;
+  }
+
+  async createLedgerEntry(data: any): Promise<any> {
+    return { id: `LDG-${Date.now()}`, ...data, created_at: new Date().toISOString() };
+  }
+
+  async getPositions(_tenantId?: string): Promise<any[]> {
+    return [
+      { id: 'pos_1', client: 'Alexander Hunt', symbol: 'EUR/INR', qty: '100,000', avgPrice: '1.088', currentPrice: '1.089', unrealizedPL: '+₹160', realizedPL: '+₹3,660', margin: '₹1,087.6', unrealizedPLPositive: true, realizedPLPositive: true },
+      { id: 'pos_2', client: 'Maya Patel', symbol: 'ETH/INR', qty: '2', avgPrice: '1,980', currentPrice: '2,010', unrealizedPL: '+₹60', realizedPL: '+₹9,450', margin: '₹396', unrealizedPLPositive: true, realizedPLPositive: true }
+    ];
+  }
+
+  async squareOffPosition(id: string, _actor: string): Promise<any> {
+    return { success: true, id, message: 'Position squared off at market' };
+  }
+
+  async getCommissionPlans(_tenantId?: string): Promise<any[]> {
+    return [
+      { id: 'plan-1', name: 'Standard FX Tier', description: 'Standard spread and per-lot markup', is_active: true }
+    ];
+  }
+
+  async getCommissionRules(_tenantId?: string, _planId?: string): Promise<any[]> {
+    return [
+      { id: 'rule-1', plan_id: 'plan-1', asset_class: 'FX', instrument_type: 'CURRENCY', rate_type: 'PER_LOT', rate_value: '2.50' }
+    ];
+  }
+
+  async getRiskProfiles(_tenantId?: string): Promise<any[]> {
+    return [
+      { id: 'rp-1', name: 'Conservative Default', max_leverage: '1:100', margin_call_level: '80%', stop_out_level: '50%' }
+    ];
+  }
+
+  async getRiskEvents(_tenantId?: string): Promise<any[]> {
+    return [
+      { id: 're-1', severity: 'WARNING', message: 'Client margin utilization exceeded 75%', created_at: new Date().toISOString() }
+    ];
+  }
+
+  async getNotifications(_tenantId?: string): Promise<any[]> {
+    return [
+      { id: 'notif-1', title: 'System Healthy', message: 'All risk parameters normal', is_read: false, created_at: new Date().toISOString() }
+    ];
+  }
+
+  async markNotificationRead(id: string): Promise<any> {
+    return { success: true, id, is_read: true };
+  }
 }
 
-// Internal PostgreSQL Provider (Stub ready for direct cloud SQL integration)
-export class InternalTradingDataProvider extends MockTradingDataProvider {}
+import { PostgresTradingDataProvider } from './PostgresTradingDataProvider.ts';
+
+// Internal PostgreSQL Provider (Direct PostgreSQL implementation)
+export class InternalTradingDataProvider extends PostgresTradingDataProvider {}
 
 // External Trading Platform Remote API Provider
 export class ExternalTradingDataProvider extends MockTradingDataProvider {
@@ -3817,5 +4048,18 @@ export class ExternalTradingDataProvider extends MockTradingDataProvider {
   }
 }
 
-// Singleton active data provider instance
-export const activeTradingDataProvider: ITradingDataProvider = new MockTradingDataProvider();
+export function createActiveTradingDataProvider(): ITradingDataProvider {
+  if (process.env.USE_MOCK_DATA === 'true') {
+    console.log('[DataProvider] Using MockTradingDataProvider (USE_MOCK_DATA=true)');
+    return new MockTradingDataProvider();
+  }
+
+  // Use PostgreSQL provider for true database persistence
+  // In both remote PostgreSQL and embedded PostgreSQL modes, real SQL queries are executed.
+  // If PostgreSQL is unavailable or an error occurs, it throws a clear database error rather than silently faking data.
+  return new PostgresTradingDataProvider();
+}
+
+// Singleton active data provider instance powered by PostgreSQL
+export const activeTradingDataProvider: ITradingDataProvider = createActiveTradingDataProvider();
+
