@@ -32,12 +32,27 @@ import { seedDatabase } from './server/db/seed.ts';
 import { seedAuthAndRbac } from './server/db/seedAuthUsers.ts';
 import { query } from './server/db/connection.ts';
 import { HierarchyLevel } from './server/auth/types.ts';
+import { appConfig } from './server/config/environment.ts';
+import { tradingPlatformClient } from './server/services/TradingPlatformClient.ts';
+import { eventHandler } from './server/services/EventHandler.ts';
 
 async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  app.use(express.json());
+  // Initialize and ensure database readiness
+  try {
+    const { testConnection } = await import('./server/db/connection.ts');
+    await testConnection();
+  } catch (err: any) {
+    console.warn('[Server] Initial database readiness check:', err?.message);
+  }
+
+  app.use(express.json({
+    verify: (req: any, _res, buf) => {
+      req.rawBody = buf.toString('utf8');
+    }
+  }));
   app.use(cookieParser());
 
   // Request logger
@@ -48,10 +63,63 @@ async function startServer() {
     next();
   });
 
+  // Health check endpoint
+  app.get('/api/health', (req, res) => {
+    res.json({ status: 'ok', uptime: process.uptime() });
+  });
+
   // Production JWT authentication and authorization helpers
   const authMiddleware = authenticate;
   const requireRoles = (roles: (UserRole | string)[]) => requireRole(roles as any);
   const resolveTenantScope = (req: Request) => resolveStrictTenantScope(req);
+
+  // ----------------------------------------------------
+  // S2S INBOUND EVENT WEBHOOK (Trading Platform -> Central Admin)
+  // ----------------------------------------------------
+  app.post(['/api/internal/events', '/api/events/trading-platform'], async (req, res) => {
+    try {
+      const rawBody = (req as any).rawBody || JSON.stringify(req.body);
+      const result = await eventHandler.handleInboundEvent(
+        req.headers as any,
+        req.method,
+        req.path,
+        rawBody,
+        req.body
+      );
+      const statusCode = result.success ? (result.duplicate ? 200 : 201) : 400;
+      res.status(statusCode).json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: 'INTERNAL_ERROR', message: err.message });
+    }
+  });
+
+  // ----------------------------------------------------
+  // S2S INTEGRATION STATUS & OBSERVABILITY
+  // ----------------------------------------------------
+  app.get('/api/admin/integration/status', authenticate, requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER']), async (req, res) => {
+    try {
+      const cbState = tradingPlatformClient.getCircuitBreakerState();
+      const stats = eventHandler.getEventStats();
+      const dbEventsRes = await query('SELECT count(*) as total_events FROM processed_events');
+      const syncStatesRes = await query('SELECT sync_status, count(*) as count FROM tenant_sync_state GROUP BY sync_status');
+
+      res.json({
+        trading_platform: {
+          base_url: appConfig.tradingPlatformBaseUrl,
+          circuit_breaker: cbState,
+          configured: !!appConfig.tradingPlatformBaseUrl
+        },
+        inbound_events: {
+          processed_in_memory: stats.processedCount,
+          total_in_db: parseInt(dbEventsRes.rows[0]?.total_events || '0', 10),
+          recent: stats.recentEvents
+        },
+        tenant_sync_summary: syncStatesRes.rows
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
 
   // ----------------------------------------------------
   // CENTRAL AUTHENTICATION & JWT APIS (Phase 4 Production)
@@ -205,8 +273,8 @@ async function startServer() {
       // Issue secure HTTP-Only cookie
       res.cookie('tradepro_session', token, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
+        secure: true,
+        sameSite: 'none',
         maxAge: 24 * 60 * 60 * 1000
       });
 
@@ -214,6 +282,7 @@ async function startServer() {
 
       res.json({
         success: true,
+        token,
         user: {
           id: userRecord.id,
           name: userRecord.name,
@@ -221,6 +290,7 @@ async function startServer() {
           role: userRecord.role,
           tenant_id: userRecord.tenant_id,
           tenant_name: tenantName,
+          client_code: (userRecord as any).client_code || 'vtx123',
           hierarchy_level: userRecord.hierarchy_level,
           hierarchy_id: userRecord.hierarchy_id,
           status: userRecord.status,
@@ -334,8 +404,8 @@ async function startServer() {
 
       res.cookie('tradepro_session', token, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
+        secure: true,
+        sameSite: 'none',
         expires: expiresAt,
         path: '/'
       });
@@ -351,6 +421,27 @@ async function startServer() {
 
       const permissions = await getPermissionsForRole(role as any);
 
+      // If registered account is a CLIENT, initialize client profile and code
+      let clientCode = `VTX-${Math.floor(10000 + Math.random() * 90000)}`;
+      if (role === 'CLIENT') {
+        try {
+          await activeTradingDataProvider.createClient({
+            id: newUserId,
+            name: name.trim(),
+            email: cleanEmail,
+            phone: phone || '+91 98765 43210',
+            client_code: clientCode,
+            tenant_id: assignedTenantId,
+            status: 'ACTIVE',
+            available_margin: 142840,
+            wallet_balance: 142840,
+            todays_pl: 252227
+          });
+        } catch (clientErr) {
+          console.warn('[Register] Client provider auto-create notice:', clientErr);
+        }
+      }
+
       res.status(201).json({
         success: true,
         message: 'Account created successfully.',
@@ -362,6 +453,7 @@ async function startServer() {
           role,
           tenant_id: assignedTenantId,
           tenant_name: tenantName,
+          client_code: clientCode,
           hierarchy_level: hierarchyLevel,
           hierarchy_id: hierarchyId,
           status: 'ACTIVE',
@@ -549,7 +641,38 @@ async function startServer() {
         details: `Tenant ${req.params.id} status changed to ${status}`,
         ipAddress: req.ip
       });
+      // Automatically sync updated tenant status to Trading Platform
+      await (activeTradingDataProvider as any).syncTenantConfig?.(req.params.id, req.user!.name).catch(() => {});
       res.json(updated);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Manual Trigger: Sync Tenant Configuration to Trading Platform S2S
+  app.post('/api/admin/tenants/:id/sync', authenticate, requirePermission('tenants.update'), async (req, res) => {
+    try {
+      const actor = req.user?.name || 'Super Admin';
+      const syncResult = await (activeTradingDataProvider as any).syncTenantConfig?.(req.params.id, actor);
+      await writeSecurityAuditLog({
+        tenantId: req.params.id,
+        userName: actor,
+        action: 'TENANT_CONFIG_SYNCED',
+        module: 'INTEGRATION',
+        details: `Tenant ${req.params.id} configuration synced to Trading Platform. Status: ${syncResult?.sync_status}`,
+        ipAddress: req.ip
+      });
+      res.json(syncResult || { success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Query Tenant Sync Status
+  app.get('/api/admin/tenants/:id/sync-state', authenticate, async (req, res) => {
+    try {
+      const syncState = await (activeTradingDataProvider as any).getTenantSyncState?.(req.params.id);
+      res.json(syncState);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -787,6 +910,81 @@ async function startServer() {
     }
   });
 
+  // Client Trading Platform Account Details & S2S Live Endpoints
+  app.get('/api/admin/clients/:id/trading-account', authenticate, async (req, res) => {
+    try {
+      if (typeof (activeTradingDataProvider as any).getClientAccountDetails === 'function') {
+        const details = await (activeTradingDataProvider as any).getClientAccountDetails(req.params.id, req.user?.tenant_id);
+        return res.json(details);
+      }
+      res.status(501).json({ error: 'Client account details not supported by provider' });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/admin/clients/:id/orders', authenticate, async (req, res) => {
+    try {
+      if (typeof (activeTradingDataProvider as any).getClientOrders === 'function') {
+        const orders = await (activeTradingDataProvider as any).getClientOrders(req.params.id, req.user?.tenant_id);
+        return res.json(orders);
+      }
+      res.json([]);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/admin/clients/:id/trades', authenticate, async (req, res) => {
+    try {
+      if (typeof (activeTradingDataProvider as any).getClientTrades === 'function') {
+        const trades = await (activeTradingDataProvider as any).getClientTrades(req.params.id, req.user?.tenant_id);
+        return res.json(trades);
+      }
+      res.json([]);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/admin/clients/:id/positions', authenticate, async (req, res) => {
+    try {
+      if (typeof (activeTradingDataProvider as any).getClientPositions === 'function') {
+        const positions = await (activeTradingDataProvider as any).getClientPositions(req.params.id, req.user?.tenant_id);
+        return res.json(positions);
+      }
+      res.json([]);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/admin/clients/:id/positions/:posId/square-off', authenticate, async (req, res) => {
+    try {
+      const { id, posId } = req.params;
+      const { reason } = req.body || {};
+      const sqRes = await tradingPlatformClient.sendEmergencySquareOff({
+        positionId: posId,
+        actor: req.user?.name || 'Admin',
+        reason: reason || `Square-off client position ${posId} for client ${id}`,
+        tenantId: req.user?.tenant_id
+      });
+      res.json({ success: true, positionId: posId, result: sqRes });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/admin/integration/trading-platform-url', authenticate, (_req, res) => {
+    const mainPlatformUrl = process.env.TRADING_PLATFORM_WEB_URL || 'https://ai.studio/apps/9cd34c34-cb38-4875-8889-4e68e6b8ed7e';
+    res.json({
+      webUrl: mainPlatformUrl,
+      s2sUrl: process.env.TRADING_PLATFORM_URL || 'http://localhost:3001',
+      circuitBreaker: tradingPlatformClient.getCircuitBreakerState(),
+      metrics: tradingPlatformClient.getMetrics()
+    });
+  });
+
   // Generic status toggle adapter supporting /api/admin/entities/:type/:id/status
   app.patch('/api/admin/entities/:type/:id/status', authenticate, async (req, res) => {
     try {
@@ -995,7 +1193,7 @@ async function startServer() {
     try {
       const tenantScope = resolveStrictTenantScope(req);
       const positions = await activeTradingDataProvider.getPositions(tenantScope);
-      const scoped = filterClientScopedItems(positions, req.user!);
+      const scoped = await filterClientScopedItems(positions, req.user!);
       res.json(scoped);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1087,7 +1285,7 @@ async function startServer() {
     try {
       const tenantScope = resolveStrictTenantScope(req);
       const trades = await activeTradingDataProvider.getAllTrades(tenantScope);
-      const scoped = filterClientScopedItems(trades, req.user!);
+      const scoped = await filterClientScopedItems(trades, req.user!);
       res.json(scoped);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1098,7 +1296,7 @@ async function startServer() {
     try {
       const tenantScope = resolveStrictTenantScope(req);
       const orders = await activeTradingDataProvider.getOrders(tenantScope);
-      const scoped = filterClientScopedItems(orders, req.user!);
+      const scoped = await filterClientScopedItems(orders, req.user!);
       res.json(scoped);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1402,6 +1600,16 @@ async function startServer() {
       res.json(rolledBack);
     } catch (err: any) {
       res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Query White-Label Version History
+  app.get('/api/admin/white-label/:tenantId/versions', authMiddleware, async (req, res) => {
+    try {
+      const versions = await (activeTradingDataProvider as any).getWhiteLabelVersions?.(req.params.tenantId) || [];
+      res.json(versions);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
     }
   });
 

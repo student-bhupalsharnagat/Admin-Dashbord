@@ -335,7 +335,7 @@ export async function seedDatabase(customPool?: pg.Pool): Promise<void> {
   }, customPool);
 
   const { seedAuthAndRbac } = await import('./seedAuthUsers.ts');
-  await seedAuthAndRbac();
+  await seedAuthAndRbac(true);
 
   console.log('[Seed Runner] PostgreSQL development seed dataset successfully seeded.');
 }

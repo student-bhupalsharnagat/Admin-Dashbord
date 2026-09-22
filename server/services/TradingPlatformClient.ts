@@ -1,0 +1,647 @@
+/**
+ * Dedicated Server-Side Remote Trading Platform Client
+ * Implements S2S HMAC-SHA256 Authentication, Replay Protection,
+ * Idempotency, Circuit Breaker, Timeout, and Retry mechanisms.
+ *
+ * NOTE: Browser/frontend code must NEVER directly call Trading Platform internal APIs.
+ */
+
+import crypto from 'crypto';
+import { appConfig } from '../config/environment.ts';
+
+export interface S2SRequestOptions {
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+  path: string;
+  tenantId?: string;
+  body?: any;
+  idempotencyKey?: string;
+  correlationId?: string;
+  timeoutMs?: number;
+  retries?: number;
+  headers?: Record<string, string>;
+}
+
+export interface S2SResponse<T = any> {
+  success: boolean;
+  statusCode: number;
+  data: T;
+  correlationId: string;
+  latencyMs: number;
+  error?: string;
+  fromFallback?: boolean;
+}
+
+export type CircuitBreakerState = 'CLOSED' | 'OPEN' | 'HALF_OPEN';
+
+export interface ClientMetrics {
+  totalRequests: number;
+  successfulRequests: number;
+  failedRequests: number;
+  retriesCount: number;
+  circuitBreakerState: CircuitBreakerState;
+  circuitBreakerFailures: number;
+  lastFailureAt: string | null;
+  lastSuccessAt: string | null;
+  lastErrorMessage: string | null;
+}
+
+export class TradingPlatformClient {
+  private baseUrl: string;
+  private secret: string;
+  private defaultTimeoutMs: number;
+
+  // Circuit breaker state
+  private circuitState: CircuitBreakerState = 'CLOSED';
+  private consecutiveFailures = 0;
+  private readonly FAILURE_THRESHOLD = 5;
+  private readonly CIRCUIT_RESET_TIMEOUT_MS = 15000;
+  private lastStateChange = Date.now();
+
+  // Observability metrics
+  private metrics: ClientMetrics = {
+    totalRequests: 0,
+    successfulRequests: 0,
+    failedRequests: 0,
+    retriesCount: 0,
+    circuitBreakerState: 'CLOSED',
+    circuitBreakerFailures: 0,
+    lastFailureAt: null,
+    lastSuccessAt: null,
+    lastErrorMessage: null
+  };
+
+  constructor(
+    baseUrl: string = appConfig.tradingPlatformBaseUrl,
+    secret: string = appConfig.internalCommunicationSecret,
+    defaultTimeoutMs: number = appConfig.tradingPlatformTimeoutMs
+  ) {
+    this.baseUrl = baseUrl.replace(/\/$/, '');
+    this.secret = secret;
+    this.defaultTimeoutMs = defaultTimeoutMs;
+  }
+
+  // ----------------------------------------------------
+  // HMAC-SHA256 SIGNATURE GENERATION & VERIFICATION
+  // ----------------------------------------------------
+
+  public generateSignature(timestamp: string, method: string, path: string, bodyString: string): string {
+    const payload = `${timestamp}:${method.toUpperCase()}:${path}:${bodyString}`;
+    return crypto.createHmac('sha256', this.secret).update(payload).digest('hex');
+  }
+
+  public verifyInboundSignature(
+    signature: string,
+    timestamp: string,
+    method: string,
+    path: string,
+    bodyString: string,
+    maxDriftMs: number = 300000 // 5 minutes replay protection window
+  ): { valid: boolean; reason?: string } {
+    if (!signature || !timestamp) {
+      return { valid: false, reason: 'Missing signature or timestamp' };
+    }
+
+    // Replay attack protection: verify timestamp freshness
+    const requestTime = new Date(timestamp).getTime();
+    if (isNaN(requestTime)) {
+      return { valid: false, reason: 'Invalid timestamp format' };
+    }
+
+    const now = Date.now();
+    if (Math.abs(now - requestTime) > maxDriftMs) {
+      return {
+        valid: false,
+        reason: `Timestamp outside acceptable window (${Math.round(Math.abs(now - requestTime) / 1000)}s drift)`
+      };
+    }
+
+    const expectedSignature = this.generateSignature(timestamp, method, path, bodyString);
+    try {
+      const sigBuf = Buffer.from(signature, 'hex');
+      const expectedBuf = Buffer.from(expectedSignature, 'hex');
+      if (sigBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(sigBuf, expectedBuf)) {
+        return { valid: false, reason: 'HMAC signature mismatch' };
+      }
+    } catch {
+      return { valid: false, reason: 'Signature evaluation failed' };
+    }
+
+    return { valid: true };
+  }
+
+  // ----------------------------------------------------
+  // SENSITIVE DATA REDACTION FOR LOGGING
+  // ----------------------------------------------------
+
+  public redactSensitiveData(data: any): any {
+    if (!data) return data;
+    if (typeof data !== 'object') return data;
+
+    const redacted = Array.isArray(data) ? [...data] : { ...data };
+    const sensitiveKeys = [
+      'password',
+      'secret',
+      'token',
+      'authorization',
+      'key',
+      'api_key',
+      'apikey',
+      'broker_secret',
+      'jwt'
+    ];
+
+    for (const key of Object.keys(redacted)) {
+      const lower = key.toLowerCase();
+      if (sensitiveKeys.some(s => lower.includes(s))) {
+        redacted[key] = '[REDACTED]';
+      } else if (typeof redacted[key] === 'object' && redacted[key] !== null) {
+        redacted[key] = this.redactSensitiveData(redacted[key]);
+      }
+    }
+    return redacted;
+  }
+
+  // ----------------------------------------------------
+  // CIRCUIT BREAKER LOGIC
+  // ----------------------------------------------------
+
+  private checkCircuitBreaker(): void {
+    const now = Date.now();
+    if (this.circuitState === 'OPEN') {
+      if (now - this.lastStateChange >= this.CIRCUIT_RESET_TIMEOUT_MS) {
+        this.circuitState = 'HALF_OPEN';
+        this.lastStateChange = now;
+        this.metrics.circuitBreakerState = 'HALF_OPEN';
+        console.warn('[TradingPlatformClient] Circuit breaker transitioned to HALF_OPEN. Probing remote server...');
+      } else {
+        throw new Error(`[Circuit Breaker OPEN] Trading Platform is unavailable. Rapid fail-fast active.`);
+      }
+    }
+  }
+
+  private recordSuccess(): void {
+    this.consecutiveFailures = 0;
+    this.metrics.successfulRequests++;
+    this.metrics.lastSuccessAt = new Date().toISOString();
+    if (this.circuitState === 'HALF_OPEN') {
+      this.circuitState = 'CLOSED';
+      this.lastStateChange = Date.now();
+      this.metrics.circuitBreakerState = 'CLOSED';
+      console.log('[TradingPlatformClient] Remote server recovered. Circuit breaker CLOSED.');
+    }
+  }
+
+  private recordFailure(err: any): void {
+    this.consecutiveFailures++;
+    this.metrics.failedRequests++;
+    this.metrics.circuitBreakerFailures++;
+    this.metrics.lastFailureAt = new Date().toISOString();
+    this.metrics.lastErrorMessage = err?.message || 'Unknown network error';
+
+    if (this.circuitState === 'CLOSED' && this.consecutiveFailures >= this.FAILURE_THRESHOLD) {
+      this.circuitState = 'OPEN';
+      this.lastStateChange = Date.now();
+      this.metrics.circuitBreakerState = 'OPEN';
+      console.error(`[TradingPlatformClient] Circuit breaker tripped OPEN after ${this.consecutiveFailures} consecutive failures.`);
+    } else if (this.circuitState === 'HALF_OPEN') {
+      this.circuitState = 'OPEN';
+      this.lastStateChange = Date.now();
+      this.metrics.circuitBreakerState = 'OPEN';
+      console.error('[TradingPlatformClient] Probe request failed. Circuit breaker returned to OPEN.');
+    }
+  }
+
+  // ----------------------------------------------------
+  // CORE S2S REQUEST EXECUTION
+  // ----------------------------------------------------
+
+  public async request<T = any>(options: S2SRequestOptions): Promise<S2SResponse<T>> {
+    this.metrics.totalRequests++;
+    this.checkCircuitBreaker();
+
+    const correlationId = options.correlationId || `req_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+    const timestamp = new Date().toISOString();
+    const timeoutMs = options.timeoutMs || this.defaultTimeoutMs;
+    const maxRetries = options.retries !== undefined ? options.retries : 2;
+
+    const bodyString = options.body ? JSON.stringify(options.body) : '';
+    const signature = this.generateSignature(timestamp, options.method, options.path, bodyString);
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'X-Signature-SHA256': signature,
+      'X-HMAC-Signature': signature,
+      'X-Timestamp': timestamp,
+      'X-Correlation-ID': correlationId,
+      'X-Request-ID': correlationId,
+      ...(options.tenantId ? { 'X-Tenant-ID': options.tenantId } : {}),
+      ...(options.idempotencyKey ? { 'X-Idempotency-Key': options.idempotencyKey } : {}),
+      ...(options.headers || {})
+    };
+
+    const url = `${this.baseUrl}${options.path}`;
+    let attempt = 0;
+    let lastError: any = null;
+
+    while (attempt <= maxRetries) {
+      attempt++;
+      const startTime = Date.now();
+      const controller = new AbortController();
+      const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
+
+      try {
+        const response = await fetch(url, {
+          method: options.method,
+          headers,
+          body: ['POST', 'PUT', 'PATCH'].includes(options.method) ? bodyString : undefined,
+          signal: controller.signal
+        });
+
+        clearTimeout(timeoutHandle);
+        const latencyMs = Date.now() - startTime;
+
+        // Successful status
+        if (response.ok) {
+          const data = (await response.json().catch(() => ({}))) as T;
+          this.recordSuccess();
+          return {
+            success: true,
+            statusCode: response.status,
+            data,
+            correlationId,
+            latencyMs
+          };
+        }
+
+        // 4xx errors are client errors (do not retry, record as rejection)
+        if (response.status >= 400 && response.status < 500) {
+          const errBody = await response.json().catch(() => ({}));
+          const errorMsg = errBody.error || errBody.message || `Remote HTTP ${response.status}`;
+          return {
+            success: false,
+            statusCode: response.status,
+            data: errBody as T,
+            correlationId,
+            latencyMs,
+            error: errorMsg
+          };
+        }
+
+        // 5xx errors: treat as retryable
+        lastError = new Error(`Remote HTTP ${response.status} from Trading Platform`);
+      } catch (err: any) {
+        clearTimeout(timeoutHandle);
+        const isTimeout = err.name === 'AbortError' || err.code === 23;
+        lastError = isTimeout
+          ? new Error(`S2S request timeout after ${timeoutMs}ms`)
+          : err;
+      }
+
+      if (attempt <= maxRetries) {
+        this.metrics.retriesCount++;
+        const backoffMs = Math.min(1000 * Math.pow(2, attempt - 1), 3000);
+        await new Promise(res => setTimeout(res, backoffMs));
+      }
+    }
+
+    // All retries exhausted
+    this.recordFailure(lastError);
+    return {
+      success: false,
+      statusCode: 503,
+      data: null as any,
+      correlationId,
+      latencyMs: 0,
+      error: lastError?.message || 'Trading Platform communication failed'
+    };
+  }
+
+  // ----------------------------------------------------
+  // BUSINESS S2S OPERATIONS
+  // ----------------------------------------------------
+
+  /**
+   * 1. Synchronize Tenant Governance Configuration
+   */
+  public async syncTenantConfig(
+    tenantId: string,
+    payload: {
+      status: string;
+      trading_enabled: boolean;
+      registration_enabled: boolean;
+      api_enabled: boolean;
+      support_enabled?: boolean;
+      notifications_enabled?: boolean;
+      operational_limits?: any;
+      subscription?: any;
+      domains?: string[];
+      config_version: number;
+    },
+    options?: { actor?: string; correlationId?: string }
+  ): Promise<S2SResponse> {
+    return this.request({
+      method: 'POST',
+      path: `/api/internal/tenants/${tenantId}/sync`,
+      tenantId,
+      body: {
+        tenantId,
+        ...payload,
+        syncedBy: options?.actor || 'CentralAdmin',
+        syncedAt: new Date().toISOString()
+      },
+      idempotencyKey: `sync_${tenantId}_v${payload.config_version}`,
+      correlationId: options?.correlationId
+    });
+  }
+
+  /**
+   * 2. Synchronize Published White Label Branding
+   */
+  public async syncWhiteLabel(
+    tenantId: string,
+    config: any,
+    version: number,
+    options?: { actor?: string; correlationId?: string }
+  ): Promise<S2SResponse> {
+    return this.request({
+      method: 'POST',
+      path: `/api/internal/white-label/${tenantId}/sync`,
+      tenantId,
+      body: {
+        tenantId,
+        version,
+        branding: config,
+        publishedBy: options?.actor || 'CentralAdmin',
+        publishedAt: new Date().toISOString()
+      },
+      idempotencyKey: `wl_${tenantId}_v${version}`,
+      correlationId: options?.correlationId
+    });
+  }
+
+  /**
+   * 3. Emergency Controls: Trading State
+   */
+  public async sendEmergencyTrading(
+    active: boolean,
+    actor: string,
+    reason?: string,
+    tenantId?: string,
+    correlationId?: string
+  ): Promise<S2SResponse> {
+    return this.request({
+      method: 'POST',
+      path: '/api/internal/emergency/trading',
+      tenantId,
+      body: { active, actor, reason: reason || 'Emergency trading action', tenantId },
+      idempotencyKey: `emg_trade_${Date.now()}_${active}`,
+      correlationId
+    });
+  }
+
+  /**
+   * 4. Emergency Controls: Kill-Switch
+   */
+  public async sendEmergencyKillSwitch(
+    action: 'TRIGGER' | 'RESET',
+    actor: string,
+    reason?: string,
+    tenantId?: string,
+    correlationId?: string
+  ): Promise<S2SResponse> {
+    return this.request({
+      method: 'POST',
+      path: '/api/internal/emergency/kill-switch',
+      tenantId,
+      body: { action, actor, reason: reason || 'Emergency kill-switch action', tenantId },
+      idempotencyKey: `emg_kill_${action}_${Date.now()}`,
+      correlationId
+    });
+  }
+
+  /**
+   * 5. Emergency Controls: User Registrations
+   */
+  public async sendEmergencyRegistrations(
+    enabled: boolean,
+    actor: string,
+    tenantId?: string,
+    correlationId?: string
+  ): Promise<S2SResponse> {
+    return this.request({
+      method: 'POST',
+      path: '/api/internal/emergency/registrations',
+      tenantId,
+      body: { enabled, actor, tenantId },
+      idempotencyKey: `emg_reg_${enabled}_${Date.now()}`,
+      correlationId
+    });
+  }
+
+  /**
+   * 6. Emergency Controls: API Access
+   */
+  public async sendEmergencyApiAccess(
+    enabled: boolean,
+    actor: string,
+    tenantId?: string,
+    correlationId?: string
+  ): Promise<S2SResponse> {
+    return this.request({
+      method: 'POST',
+      path: '/api/internal/emergency/api-access',
+      tenantId,
+      body: { enabled, actor, tenantId },
+      idempotencyKey: `emg_api_${enabled}_${Date.now()}`,
+      correlationId
+    });
+  }
+
+  /**
+   * 7. Emergency Controls: Freeze / Unfreeze Entity
+   */
+  public async sendEmergencyFreeze(
+    payload: {
+      entityType: 'MASTER' | 'BROKER' | 'CLIENT' | 'USER';
+      entityId: string;
+      action: 'FREEZE' | 'UNFREEZE';
+      actor: string;
+      reason?: string;
+      tenantId?: string;
+    },
+    correlationId?: string
+  ): Promise<S2SResponse> {
+    return this.request({
+      method: 'POST',
+      path: '/api/internal/emergency/freeze',
+      tenantId: payload.tenantId,
+      body: payload,
+      idempotencyKey: `emg_frz_${payload.entityType}_${payload.entityId}_${payload.action}`,
+      correlationId
+    });
+  }
+
+  /**
+   * 8. Emergency Controls: Cancel All Open Orders
+   */
+  public async sendEmergencyCancelAllOrders(
+    payload: { tenantId?: string; actor: string; reason?: string },
+    correlationId?: string
+  ): Promise<S2SResponse> {
+    return this.request({
+      method: 'POST',
+      path: '/api/internal/emergency/cancel-all-orders',
+      tenantId: payload.tenantId,
+      body: payload,
+      idempotencyKey: `emg_cancel_all_${payload.tenantId || 'global'}_${Date.now()}`,
+      correlationId
+    });
+  }
+
+  /**
+   * 9. Emergency Controls: Square-Off Position
+   */
+  public async sendEmergencySquareOff(
+    payload: { positionId: string; actor: string; reason?: string; tenantId?: string },
+    correlationId?: string
+  ): Promise<S2SResponse> {
+    return this.request({
+      method: 'POST',
+      path: `/api/internal/emergency/positions/${payload.positionId}/square-off`,
+      tenantId: payload.tenantId,
+      body: payload,
+      idempotencyKey: `emg_sq_${payload.positionId}_${Date.now()}`,
+      correlationId
+    });
+  }
+
+  /**
+   * 10. Live Trading Data Queries
+   */
+  public async getLiveOrders(tenantId?: string): Promise<S2SResponse> {
+    return this.request({
+      method: 'GET',
+      path: '/api/internal/trading/orders',
+      tenantId
+    });
+  }
+
+  public async getLiveTrades(tenantId?: string): Promise<S2SResponse> {
+    return this.request({
+      method: 'GET',
+      path: '/api/internal/trading/trades',
+      tenantId
+    });
+  }
+
+  public async getLivePositions(tenantId?: string): Promise<S2SResponse> {
+    return this.request({
+      method: 'GET',
+      path: '/api/internal/trading/positions',
+      tenantId
+    });
+  }
+
+  public async getLiveRiskSummary(tenantId?: string): Promise<S2SResponse> {
+    return this.request({
+      method: 'GET',
+      path: '/api/internal/trading/risk-summary',
+      tenantId
+    });
+  }
+
+  /**
+   * 11. Client-Specific Trading Platform Queries
+   */
+  public async getClientTradingAccount(clientId: string, tenantId?: string): Promise<S2SResponse> {
+    return this.request({
+      method: 'GET',
+      path: `/api/internal/trading/clients/${clientId}/account`,
+      tenantId
+    });
+  }
+
+  public async getClientOrders(clientId: string, tenantId?: string): Promise<S2SResponse> {
+    return this.request({
+      method: 'GET',
+      path: `/api/internal/trading/clients/${clientId}/orders`,
+      tenantId
+    });
+  }
+
+  public async getClientTrades(clientId: string, tenantId?: string): Promise<S2SResponse> {
+    return this.request({
+      method: 'GET',
+      path: `/api/internal/trading/clients/${clientId}/trades`,
+      tenantId
+    });
+  }
+
+  public async getClientPositions(clientId: string, tenantId?: string): Promise<S2SResponse> {
+    return this.request({
+      method: 'GET',
+      path: `/api/internal/trading/clients/${clientId}/positions`,
+      tenantId
+    });
+  }
+
+  /**
+   * 12. Synchronize Account Creation with Trading Platform
+   */
+  public async syncClientAccount(data: {
+    clientId: string;
+    clientCode?: string;
+    name: string;
+    email?: string;
+    phone?: string;
+    initialBalance?: number;
+    subBrokerId?: string;
+    tenantId?: string;
+  }): Promise<S2SResponse> {
+    return this.request({
+      method: 'POST',
+      path: '/api/internal/trading/clients/sync',
+      body: {
+        event: 'CLIENT_ACCOUNT_CREATED',
+        clientId: data.clientId,
+        clientCode: data.clientCode,
+        name: data.name,
+        email: data.email,
+        phone: data.phone,
+        initialBalance: data.initialBalance ?? 100000,
+        subBrokerId: data.subBrokerId,
+        tenantId: data.tenantId,
+        timestamp: new Date().toISOString()
+      },
+      tenantId: data.tenantId
+    });
+  }
+
+  /**
+   * 13. Health & Status
+   */
+  public async checkHealth(): Promise<S2SResponse> {
+    return this.request({
+      method: 'GET',
+      path: '/api/internal/health',
+      timeoutMs: 2000,
+      retries: 0
+    });
+  }
+
+  public getMetrics(): ClientMetrics {
+    return { ...this.metrics };
+  }
+
+  public getCircuitBreakerState() {
+    return {
+      state: this.circuitState,
+      consecutiveFailures: this.consecutiveFailures,
+      lastStateChange: new Date(this.lastStateChange).toISOString()
+    };
+  }
+}
+
+// Export singleton instance
+export const tradingPlatformClient = new TradingPlatformClient();

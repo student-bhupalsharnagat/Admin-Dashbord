@@ -35,12 +35,14 @@ interface OrdersViewProps {
   onNotify?: (message: string, type?: 'info' | 'success' | 'warning') => void;
   onNavigateToClient?: (clientId?: string) => void;
   onNavigateToTrade?: (orderId?: string) => void;
+  onOpenTradingPlatform?: (clientData?: any) => void;
 }
 
 export const OrdersView: React.FC<OrdersViewProps> = ({
   onNotify,
   onNavigateToClient,
-  onNavigateToTrade
+  onNavigateToTrade,
+  onOpenTradingPlatform
 }) => {
   const [orders, setOrders] = useState<OrderItem[]>(initialOrdersData);
   const [searchQuery, setSearchQuery] = useState('');
@@ -168,6 +170,7 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
           if (onNavigateToClient) onNavigateToClient();
         }}
         onNotify={notify}
+        onOpenTradingPlatform={onOpenTradingPlatform}
       />
     );
   }

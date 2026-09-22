@@ -59,6 +59,7 @@ export default function App() {
   // Application Mode: Central Admin Panel vs Tenant Trading Platform
   const [appMode, setAppMode] = useState<'admin' | 'trading-platform'>('admin');
   const [activeTradingDomain, setActiveTradingDomain] = useState<string>('trade.alphaprime.com');
+  const [activeTradingClient, setActiveTradingClient] = useState<any | null>(null);
 
   // Navigation & View state
   const [activeTab, setActiveTab] = useState<NavigationTab>('dashboard');
@@ -209,6 +210,31 @@ export default function App() {
     }
     loadDashboardData();
     loadHierarchyData();
+
+    // If client account registers or signs in, open Trading Platform with client account details
+    if (user.role === 'CLIENT') {
+      const clientInfo = {
+        id: user.id,
+        userId: (user as any).client_code || user.id || 'vtx123',
+        fullName: user.name || 'Demo Trader',
+        email: user.email,
+        tenantId: user.tenant_id,
+        tenantName: (user as any).tenant_name || 'VERTEX Trading',
+        tenantCode: 'VTX',
+        initials: user.name
+          ? user.name.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase()
+          : 'DT'
+      };
+      setActiveTradingClient(clientInfo);
+      const matchedTenant = tenants.find(t => t.id === user.tenant_id);
+      if (matchedTenant?.domain) {
+        setActiveTradingDomain(matchedTenant.domain);
+      }
+      setAppMode('trading-platform');
+      showToast(`Welcome to ${clientInfo.tenantName}, ${user.name}! Trading console initialized.`, 'success');
+      return;
+    }
+
     showToast(`Welcome back, ${user.name}! Signed in as ${user.role}.`, 'success');
   };
 
@@ -222,6 +248,8 @@ export default function App() {
       console.warn('Logout error:', e);
     }
     setCurrentUser(null);
+    setActiveTradingClient(null);
+    setAppMode('admin');
     showToast('Signed out of TradeMatrix. Session ended.', 'info');
   };
 
@@ -587,12 +615,32 @@ export default function App() {
     );
   }
 
+  // Helper to open Trading Platform with optional client context
+  const handleOpenTradingPlatform = (clientData?: any) => {
+    if (clientData) {
+      setActiveTradingClient(clientData);
+      // If client belongs to a tenant or has tenantId
+      const clientTenantId = clientData.tenantId;
+      const matchedTenant = tenants.find(t => t.id === clientTenantId || t.name === clientData.tenantName);
+      if (matchedTenant?.domain) {
+        setActiveTradingDomain(matchedTenant.domain);
+      }
+    } else {
+      setActiveTradingClient(null);
+      const currentTenant = tenants.find(t => t.id === selectedTenantScope);
+      const domain = currentTenant?.domain || (selectedTenantScope === 'ten-02' ? 'trade.zenithmarkets.in' : selectedTenantScope === 'ten-03' ? 'trade.quantumfx.io' : 'trade.alphaprime.com');
+      setActiveTradingDomain(domain);
+    }
+    setAppMode('trading-platform');
+  };
+
   // If in Trading Platform Mode: render the dedicated Branded Tenant Trading Platform
   if (appMode === 'trading-platform') {
     return (
       <TradingPlatformView
         initialTenantDomain={activeTradingDomain}
-        onReturnToAdmin={() => setAppMode('admin')}
+        initialClient={activeTradingClient}
+        onReturnToAdmin={currentUser?.role === 'CLIENT' ? handleLogout : () => setAppMode('admin')}
         onNotify={showToast}
       />
     );
@@ -634,12 +682,7 @@ export default function App() {
           }}
           onNavigateFunds={handleNavigateFunds}
           onOpenMobileMenu={() => setMobileSidebarOpen(true)}
-          onOpenTradingPlatform={() => {
-            const currentTenant = tenants.find(t => t.id === selectedTenantScope);
-            const domain = currentTenant?.domain || (selectedTenantScope === 'ten-02' ? 'trade.zenithmarkets.in' : selectedTenantScope === 'ten-03' ? 'trade.quantumfx.io' : 'trade.alphaprime.com');
-            setActiveTradingDomain(domain);
-            setAppMode('trading-platform');
-          }}
+          onOpenTradingPlatform={() => handleOpenTradingPlatform()}
         />
 
         {/* Scrollable View Container */}

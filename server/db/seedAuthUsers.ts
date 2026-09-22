@@ -3,18 +3,20 @@ import { query, withTransaction } from './connection.ts';
 import { ALL_SYSTEM_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS_MAP } from '../auth/rbac.ts';
 import { UserRole } from '../../src/types.ts';
 
-export async function seedAuthAndRbac(): Promise<void> {
+export async function seedAuthAndRbac(skipTenantCheck = false): Promise<void> {
   console.log('[Auth Seed] Initializing production roles, permissions and administrative users...');
 
-  try {
-    const tenantCheck = await query('SELECT count(*) as count FROM tenants');
-    if (parseInt((tenantCheck.rows[0] as any)?.count || '0', 10) === 0) {
-      const { seedDatabase } = await import('./seed.ts');
-      await seedDatabase();
-      return;
+  if (!skipTenantCheck) {
+    try {
+      const tenantCheck = await query('SELECT count(*) as count FROM tenants');
+      if (parseInt((tenantCheck.rows[0] as any)?.count || '0', 10) === 0) {
+        const { seedDatabase } = await import('./seed.ts');
+        await seedDatabase();
+        return;
+      }
+    } catch {
+      // Proceed with seeding if check fails
     }
-  } catch {
-    // Proceed with seeding if check fails
   }
 
   // 1. Seed permissions
@@ -61,6 +63,17 @@ export async function seedAuthAndRbac(): Promise<void> {
       hierarchy_level: 'PLATFORM',
       hierarchy_id: null,
       phone: '+91 98200 11223'
+    },
+    {
+      id: 'usr_superadmin_02',
+      tenant_id: null,
+      name: 'TradePro Admin',
+      email: 'admin@tradepro.io',
+      role: 'SUPER_ADMIN' as UserRole,
+      status: 'ACTIVE',
+      hierarchy_level: 'PLATFORM',
+      hierarchy_id: null,
+      phone: '+91 98200 11224'
     },
     {
       id: 'usr_platformowner_01',

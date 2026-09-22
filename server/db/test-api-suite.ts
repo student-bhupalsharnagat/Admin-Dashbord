@@ -6,7 +6,7 @@ async function runApiTests() {
   const loginRes = await fetch(`${baseUrl}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: 'admin@tradepro.io', role: 'SUPER_ADMIN' })
+    body: JSON.stringify({ email: 'admin@platform.com', password: 'password123' })
   });
   const loginData = await loginRes.json();
   const cookie = loginRes.headers.get('set-cookie');

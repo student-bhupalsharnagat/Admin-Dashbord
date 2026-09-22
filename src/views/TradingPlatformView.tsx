@@ -1,926 +1,699 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
-  TrendingUp,
-  TrendingDown,
-  Globe,
-  Shield,
-  AlertTriangle,
-  ArrowRight,
-  CheckCircle2,
-  XCircle,
-  Clock,
-  DollarSign,
-  ChevronDown,
-  Search,
-  Sliders,
-  RefreshCw,
-  Lock,
-  UserPlus,
-  ExternalLink,
-  Layers,
-  Sparkles,
-  Info,
-  Phone,
-  Mail,
-  FileText
-} from 'lucide-react';
-import { TenantBranding, TenantPlatformConfig } from '../types';
-
-interface MarketQuote {
-  symbol: string;
-  lastPrice: number;
-  change: number;
-  changePercent: number;
-  high: number;
-  low: number;
-  volume: string;
-}
-
-interface TenantOrder {
-  id: string;
-  order_id: string;
-  symbol: string;
-  side: 'BUY' | 'SELL';
-  quantity: number;
-  price: number;
-  type: string;
-  status: string;
-  created_at: string;
-}
+  TradingTopBar
+} from '../components/trading/TradingTopBar';
+import {
+  TradingHeader,
+  TradingTabKey
+} from '../components/trading/TradingHeader';
+import {
+  TraderConsoleBanner
+} from '../components/trading/TraderConsoleBanner';
+import {
+  TradingMetricsRow
+} from '../components/trading/TradingMetricsRow';
+import {
+  TradingWatchlist
+} from '../components/trading/TradingWatchlist';
+import {
+  LiveSpotlightTerminal
+} from '../components/trading/LiveSpotlightTerminal';
+import {
+  OrderModal
+} from '../components/trading/OrderModal';
+import {
+  TechnicalChartModal
+} from '../components/trading/TechnicalChartModal';
+import {
+  OptionChainModal
+} from '../components/trading/OptionChainModal';
+import {
+  WalletModal
+} from '../components/trading/WalletModal';
+import {
+  CentralControlsModal
+} from '../components/trading/CentralControlsModal';
+import {
+  TradingOrdersView
+} from '../components/trading/TradingOrdersView';
+import {
+  TradingPortfolioView
+} from '../components/trading/TradingPortfolioView';
+import {
+  TradingHistoryView
+} from '../components/trading/TradingHistoryView';
+import {
+  TradingProfileView
+} from '../components/trading/TradingProfileView';
+import {
+  TradingInstrument,
+  ClientOrder,
+  ClientPosition,
+  ClientWallet,
+  ClientAccount,
+  BenchmarkQuote,
+  TenantBrandingConfig
+} from '../types/trading';
+import {
+  INITIAL_INSTRUMENTS,
+  INITIAL_ORDERS,
+  INITIAL_POSITIONS,
+  INITIAL_WALLET,
+  INITIAL_CLIENT,
+  INITIAL_BENCHMARKS,
+  INITIAL_TENANT_BRANDING
+} from '../data/tradingData';
+import { X, HelpCircle, Bell, CheckCircle2 } from 'lucide-react';
 
 interface TradingPlatformViewProps {
   initialTenantDomain?: string;
+  initialClient?: any;
   onReturnToAdmin?: () => void;
   onNotify?: (msg: string, type?: 'info' | 'success' | 'warning') => void;
 }
 
 export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
-  initialTenantDomain = 'trade.alphaprime.com',
+  initialTenantDomain = 'trade.vertextrading.com',
+  initialClient = null,
   onReturnToAdmin,
   onNotify
 }) => {
-  // Domain / Tenant Switcher
-  const [currentDomain, setCurrentDomain] = useState(initialTenantDomain);
-  const [availableDomains, setAvailableDomains] = useState<Array<{ domain: string; name: string; tenantId: string }>>([
-    { domain: 'trade.alphaprime.com', name: 'AlphaPrime Capital', tenantId: 'ten-01' },
-    { domain: 'trade.zenithmarkets.in', name: 'Zenith Markets', tenantId: 'ten-02' },
-    { domain: 'trade.quantumfx.io', name: 'Quantum Alpha', tenantId: 'ten-03' },
-    { domain: 'trade.apexalgo.co', name: 'Apex Securities', tenantId: 'ten-04' }
-  ]);
-
-  // Tenant Branding & Config State
-  const [branding, setBranding] = useState<any | null>(null);
-  const [platformConfig, setPlatformConfig] = useState<any | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [activePlatformTab, setActivePlatformTab] = useState<'terminal' | 'orders' | 'market' | 'register'>('terminal');
-
-  // Market & Order State
-  const [marketQuotes, setMarketQuotes] = useState<MarketQuote[]>([]);
-  const [selectedSymbol, setSelectedSymbol] = useState<string>('NIFTY 50');
-  const [orderSide, setOrderSide] = useState<'BUY' | 'SELL'>('BUY');
-  const [orderQuantity, setOrderQuantity] = useState<number>(50);
-  const [orderType, setOrderType] = useState<'MARKET' | 'LIMIT'>('MARKET');
-  const [orderPrice, setOrderPrice] = useState<string>('');
-  const [recentOrders, setRecentOrders] = useState<TenantOrder[]>([]);
-  const [placingOrder, setPlacingOrder] = useState(false);
-  const [orderFeedback, setOrderFeedback] = useState<{ success: boolean; message: string } | null>(null);
-
-  // Registration Form State
-  const [regName, setRegName] = useState('');
-  const [regEmail, setRegEmail] = useState('');
-  const [regPhone, setRegPhone] = useState('');
-  const [regPassword, setRegPassword] = useState('');
-  const [registering, setRegistering] = useState(false);
-  const [regFeedback, setRegFeedback] = useState<{ success: boolean; message: string } | null>(null);
-
-  // Fetch Tenant Branding & Platform Config
-  const fetchTenantData = async (domain: string) => {
-    setLoading(true);
-    try {
-      // 1. Fetch Branding
-      const brandingRes = await fetch(`/api/tenant/branding?domain=${encodeURIComponent(domain)}`);
-      if (brandingRes.ok) {
-        const brandingData = await brandingRes.json();
-        setBranding(brandingData);
-
-        // Apply Dynamic CSS Variables to Root/Terminal
-        if (brandingData.colors) {
-          const root = document.documentElement;
-          root.style.setProperty('--brand-primary', brandingData.colors.primary);
-          root.style.setProperty('--brand-secondary', brandingData.colors.secondary);
-          root.style.setProperty('--brand-accent', brandingData.colors.accent);
-          root.style.setProperty('--brand-bg', brandingData.colors.background);
-          root.style.setProperty('--brand-surface', brandingData.colors.surface);
-          root.style.setProperty('--brand-text', brandingData.colors.text);
-        }
-
-        // Dynamically update document title
-        if (brandingData.brandName) {
-          document.title = `${brandingData.brandName} - Trading Terminal`;
-        }
-      }
-
-      // 2. Fetch Platform Feature Flags & Emergency Controls
-      const configRes = await fetch(`/api/tenant/config?domain=${encodeURIComponent(domain)}`);
-      if (configRes.ok) {
-        const configData = await configRes.json();
-        setPlatformConfig(configData);
-      }
-
-      // 3. Fetch Market Quotes
-      const quotesRes = await fetch('/api/tenant/market-quotes');
-      if (quotesRes.ok) {
-        const quotesData = await quotesRes.json();
-        setMarketQuotes(quotesData);
-        if (quotesData.length > 0 && !selectedSymbol) {
-          setSelectedSymbol(quotesData[0].symbol);
-          setOrderPrice(String(quotesData[0].lastPrice));
-        }
-      }
-
-      // 4. Fetch Tenant Orders
-      const ordersRes = await fetch(`/api/tenant/orders?domain=${encodeURIComponent(domain)}`);
-      if (ordersRes.ok) {
-        const ordersData = await ordersRes.json();
-        setRecentOrders(ordersData);
-      }
-    } catch (err) {
-      console.error('Error fetching tenant platform data:', err);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
+  // Theme state
+  const [isDark, setIsDark] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return document.documentElement.classList.contains('dark') || true;
     }
-  };
+    return true;
+  });
 
-  useEffect(() => {
-    fetchTenantData(currentDomain);
-  }, [currentDomain]);
+  // Active Navigation Tab
+  const [activeTab, setActiveTab] = useState<TradingTabKey>('watchlist');
 
-  // Set default price when symbol changes
-  useEffect(() => {
-    const quote = marketQuotes.find(q => q.symbol === selectedSymbol);
-    if (quote) {
-      setOrderPrice(String(quote.lastPrice));
-    }
-  }, [selectedSymbol, marketQuotes]);
-
-  // Handle Order Placement
-  const handlePlaceOrder = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setPlacingOrder(true);
-    setOrderFeedback(null);
-
-    try {
-      const payload = {
-        symbol: selectedSymbol,
-        side: orderSide,
-        quantity: orderQuantity,
-        price: orderType === 'LIMIT' ? Number(orderPrice) : undefined,
-        type: orderType,
-        clientName: 'Demo Retail Trader'
+  // Tenant Branding & Controls state
+  const [branding, setBranding] = useState<TenantBrandingConfig>(() => {
+    if (initialClient?.tenantName) {
+      return {
+        ...INITIAL_TENANT_BRANDING,
+        tenantName: initialClient.tenantName,
+        tenantCode: initialClient.tenantCode || 'VTX'
       };
+    }
+    return INITIAL_TENANT_BRANDING;
+  });
 
-      const res = await fetch(`/api/tenant/orders?domain=${encodeURIComponent(currentDomain)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      const data = await res.json();
-
-      if (!res.ok || !data.success) {
-        setOrderFeedback({
-          success: false,
-          message: data.message || data.error || 'Order rejected by risk/feature control.'
-        });
-        onNotify?.(data.message || 'Order rejected', 'warning');
-      } else {
-        setOrderFeedback({
-          success: true,
-          message: `Order #${data.order?.order_id || 'SUCCESS'} placed successfully for ${orderQuantity}x ${selectedSymbol}!`
-        });
-        onNotify?.(`Order placed successfully on ${branding?.brandName}!`, 'success');
-        
-        // Refresh orders list
-        if (data.order) {
-          setRecentOrders(prev => [data.order, ...prev]);
+  // Client Profile state
+  const [client, setClient] = useState<ClientAccount>(() => {
+    if (initialClient) {
+      return {
+        id: initialClient.id || 'CLI-9021',
+        userId: initialClient.userId || initialClient.client_code || initialClient.id || 'vtx123',
+        fullName: initialClient.fullName || initialClient.name || 'Demo Trader',
+        email: initialClient.email || 'trader@vertextrading.com',
+        phone: initialClient.phone || '+91 98765 43210',
+        initials: initialClient.initials || 'DT',
+        kycStatus: 'Verified (MCX & NSE Active)',
+        role: 'CLIENT',
+        tenantId: initialClient.tenantId || 'TNT-001',
+        tenantName: initialClient.tenantName || 'VERTEX Trading',
+        segments: ['NSE Cash', 'NSE F&O', 'MCX Commodity', 'Crypto Derivatives'],
+        bankDetails: {
+          bankName: 'HDFC Bank Ltd',
+          accountNumber: '•••• •••• 8912',
+          ifsc: 'HDFC0001204',
+          verified: true
         }
-      }
-    } catch (err: any) {
-      setOrderFeedback({
-        success: false,
-        message: err.message || 'Network error while executing order'
-      });
-    } finally {
-      setPlacingOrder(false);
+      };
     }
-  };
+    return INITIAL_CLIENT;
+  });
 
-  // Handle Client Registration
-  const handleRegister = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setRegistering(true);
-    setRegFeedback(null);
+  // Market Simulator State
+  const [marketStatus, setMarketStatus] = useState<'LIVE' | 'OPEN' | 'CLOSED'>('LIVE');
+  const [instruments, setInstruments] = useState<TradingInstrument[]>(INITIAL_INSTRUMENTS);
+  const [selectedInstrument, setSelectedInstrument] = useState<TradingInstrument>(
+    INITIAL_INSTRUMENTS[0] // GOLD FUT matching screenshot default spotlight
+  );
+  const [benchmarks, setBenchmarks] = useState<BenchmarkQuote[]>(INITIAL_BENCHMARKS);
+  const [orders, setOrders] = useState<ClientOrder[]>(INITIAL_ORDERS);
+  const [positions, setPositions] = useState<ClientPosition[]>(INITIAL_POSITIONS);
+  const [wallet, setWallet] = useState<ClientWallet>(INITIAL_WALLET);
 
-    try {
-      const res = await fetch(`/api/tenant/register?domain=${encodeURIComponent(currentDomain)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: regName,
-          email: regEmail,
-          phone: regPhone,
-          password: regPassword
+  // Modals state
+  const [orderModalOpen, setOrderModalOpen] = useState(false);
+  const [orderModalSide, setOrderModalSide] = useState<'BUY' | 'SELL'>('BUY');
+  const [orderModalInstrument, setOrderModalInstrument] = useState<TradingInstrument | null>(null);
+
+  const [chartModalOpen, setChartModalOpen] = useState(false);
+  const [chartModalInstrument, setChartModalInstrument] = useState<TradingInstrument | null>(null);
+
+  const [optionChainModalOpen, setOptionChainModalOpen] = useState(false);
+  const [optionChainInstrument, setOptionChainInstrument] = useState<TradingInstrument | null>(null);
+
+  const [walletModalOpen, setWalletModalOpen] = useState(false);
+  const [centralControlsOpen, setCentralControlsOpen] = useState(false);
+  const [tourModalOpen, setTourModalOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+
+  // Sync dark class on document
+  useEffect(() => {
+    if (isDark) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [isDark]);
+
+  // Live Market Price Tick Simulator (every 2 seconds if marketStatus !== 'CLOSED')
+  useEffect(() => {
+    if (marketStatus === 'CLOSED') return;
+
+    const interval = setInterval(() => {
+      setInstruments(prevList =>
+        prevList.map(inst => {
+          // Subtle price walk
+          const volatility = inst.lastPrice * (inst.category === 'CRYPTO' ? 0.0015 : 0.0006);
+          const delta = (Math.random() - 0.49) * volatility;
+          const newPrice = Math.max(1, inst.lastPrice + delta);
+          const newChange = inst.change + delta;
+          const newChangePercent = ((newPrice - (inst.lastPrice - inst.change)) / (inst.lastPrice - inst.change)) * 100;
+          const newHigh = Math.max(inst.high, newPrice);
+          const newLow = Math.min(inst.low, newPrice);
+          const spread = inst.lastPrice < 100 ? 0.05 : 0.5;
+
+          return {
+            ...inst,
+            lastPrice: Number(newPrice.toFixed(inst.lastPrice < 10 ? 4 : 2)),
+            change: Number(newChange.toFixed(inst.lastPrice < 10 ? 4 : 2)),
+            changePercent: Number(newChangePercent.toFixed(2)),
+            high: Number(newHigh.toFixed(2)),
+            low: Number(newLow.toFixed(2)),
+            bid: Number((newPrice - spread).toFixed(2)),
+            ask: Number((newPrice + spread).toFixed(2))
+          };
         })
-      });
+      );
 
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        setRegFeedback({
-          success: false,
-          message: data.message || 'Registration rejected by broker configuration.'
-        });
-      } else {
-        setRegFeedback({
-          success: true,
-          message: data.message || 'Registration successful! Your client account is active.'
-        });
-        setRegName('');
-        setRegEmail('');
-        setRegPhone('');
-        setRegPassword('');
-      }
-    } catch (err: any) {
-      setRegFeedback({ success: false, message: err.message });
-    } finally {
-      setRegistering(false);
+      // Also gently update Benchmarks
+      setBenchmarks(prevBms =>
+        prevBms.map(bm => {
+          const delta = (Math.random() - 0.49) * (bm.price * 0.0004);
+          const newPrice = bm.price + delta;
+          const newChange = bm.change + delta;
+          return {
+            ...bm,
+            price: Number(newPrice.toFixed(2)),
+            change: Number(newChange.toFixed(2)),
+            changePercent: Number(((newChange / (bm.price - bm.change)) * 100).toFixed(2))
+          };
+        })
+      );
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [marketStatus]);
+
+  // Keep selectedInstrument in sync with price updates
+  useEffect(() => {
+    const updated = instruments.find(i => i.id === selectedInstrument.id);
+    if (updated) {
+      setSelectedInstrument(updated);
+    }
+  }, [instruments, selectedInstrument.id]);
+
+  // Recalculate positions P&L dynamically based on latest instrument prices
+  useEffect(() => {
+    setPositions(prevPositions =>
+      prevPositions.map(pos => {
+        const inst = instruments.find(i => i.symbol === pos.symbol || pos.symbol.startsWith(i.symbol));
+        const currentLTP = inst ? inst.lastPrice : pos.lastPrice;
+        const priceDiff = pos.side === 'BUY' ? currentLTP - pos.avgPrice : pos.avgPrice - currentLTP;
+        const newPnl = priceDiff * pos.quantity;
+        const newPnlPercent = (priceDiff / pos.avgPrice) * 100;
+
+        return {
+          ...pos,
+          lastPrice: currentLTP,
+          pnl: Number(newPnl.toFixed(2)),
+          pnlPercent: Number(newPnlPercent.toFixed(2))
+        };
+      })
+    );
+  }, [instruments]);
+
+  // Handlers for Orders
+  const handleOpenOrder = (inst: TradingInstrument, side: 'BUY' | 'SELL') => {
+    if (!branding.isTradingEnabled) {
+      onNotify?.('Trading is currently disabled on this tenant platform.', 'warning');
+      return;
+    }
+    setOrderModalInstrument(inst);
+    setOrderModalSide(side);
+    setOrderModalOpen(true);
+  };
+
+  const handlePlaceOrder = (orderData: Partial<ClientOrder>) => {
+    const newOrder: ClientOrder = {
+      id: `ORD-${Date.now().toString().slice(-6)}`,
+      symbol: orderData.symbol || selectedInstrument.symbol,
+      category: orderData.category || selectedInstrument.category,
+      type: orderData.type || 'BUY',
+      orderType: orderData.orderType || 'MARKET',
+      product: orderData.product || 'INTRADAY',
+      lots: orderData.lots || 1,
+      quantity: orderData.quantity || 10,
+      price: orderData.price || selectedInstrument.lastPrice,
+      executionPrice: orderData.executionPrice,
+      status: orderData.status || 'EXECUTED',
+      timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+      stopLoss: orderData.stopLoss,
+      target: orderData.target
+    };
+
+    setOrders(prev => [newOrder, ...prev]);
+
+    // If order executed, add or update position and adjust margin
+    if (newOrder.status === 'EXECUTED') {
+      const marginDeduction = (orderData.product === 'INTRADAY' ? selectedInstrument.intraday : selectedInstrument.holding) * newOrder.lots;
+
+      setWallet(prev => ({
+        ...prev,
+        availableBalance: Math.max(0, prev.availableBalance - marginDeduction),
+        usedMargin: prev.usedMargin + marginDeduction
+      }));
+
+      // Add to positions
+      const newPos: ClientPosition = {
+        id: `POS-${Date.now().toString().slice(-5)}`,
+        symbol: newOrder.symbol,
+        category: newOrder.category,
+        product: newOrder.product,
+        side: newOrder.type,
+        lots: newOrder.lots,
+        quantity: newOrder.quantity,
+        avgPrice: newOrder.executionPrice || newOrder.price,
+        lastPrice: newOrder.executionPrice || newOrder.price,
+        pnl: 0,
+        pnlPercent: 0
+      };
+      setPositions(prev => [newPos, ...prev]);
+
+      onNotify?.(`Order ${newOrder.id} executed successfully for ${newOrder.symbol}!`, 'success');
+    } else {
+      onNotify?.(`Limit order placed for ${newOrder.symbol} at ₹${newOrder.price}.`, 'info');
     }
   };
 
-  const currentQuote = marketQuotes.find(q => q.symbol === selectedSymbol) || marketQuotes[0];
-  const primaryColor = branding?.colors?.primary || '#2563eb';
-  const surfaceColor = branding?.colors?.surface || '#0f172a';
-  const backgroundColor = branding?.colors?.background || '#080d1a';
-  const textColor = branding?.colors?.text || '#f8fafc';
-  const accentColor = branding?.colors?.accent || '#38bdf8';
+  const handleCancelOrder = (orderId: string) => {
+    setOrders(prev =>
+      prev.map(o => (o.id === orderId ? { ...o, status: 'CANCELLED' } : o))
+    );
+    onNotify?.(`Order ${orderId} cancelled.`, 'info');
+  };
+
+  // Handlers for Positions
+  const handleSquareOff = (positionId: string) => {
+    const pos = positions.find(p => p.id === positionId);
+    if (!pos) return;
+
+    // Realize P&L and release margin
+    setWallet(prev => ({
+      ...prev,
+      availableBalance: prev.availableBalance + pos.pnl + 15000,
+      usedMargin: Math.max(0, prev.usedMargin - 15000),
+      todayPnL: prev.todayPnL + pos.pnl,
+      totalPnL: prev.totalPnL + pos.pnl
+    }));
+
+    setPositions(prev => prev.filter(p => p.id !== positionId));
+    onNotify?.(`Squared off ${pos.symbol}. Realized P&L: ₹${pos.pnl.toFixed(2)}.`, 'success');
+  };
+
+  const handleSquareOffAll = () => {
+    const totalPnl = positions.reduce((acc, p) => acc + p.pnl, 0);
+    setWallet(prev => ({
+      ...prev,
+      availableBalance: prev.availableBalance + totalPnl + prev.usedMargin,
+      usedMargin: 0,
+      todayPnL: prev.todayPnL + totalPnl,
+      totalPnL: prev.totalPnL + totalPnl
+    }));
+    setPositions([]);
+    onNotify?.(`All positions squared off! Total Realized P&L: ₹${totalPnl.toFixed(2)}.`, 'success');
+  };
+
+  // Handlers for Wallet
+  const handleDeposit = (amount: number, method: string) => {
+    setWallet(prev => ({
+      ...prev,
+      availableBalance: prev.availableBalance + amount
+    }));
+    onNotify?.(`₹${amount.toLocaleString()} deposited instantly via ${method}!`, 'success');
+  };
+
+  const handleWithdraw = (amount: number, bank: string) => {
+    setWallet(prev => ({
+      ...prev,
+      availableBalance: Math.max(0, prev.availableBalance - amount)
+    }));
+    onNotify?.(`₹${amount.toLocaleString()} withdrawal initiated to ${bank}.`, 'success');
+  };
+
+  // Central controls & reset
+  const handleResetDemoData = () => {
+    setInstruments(INITIAL_INSTRUMENTS);
+    setOrders(INITIAL_ORDERS);
+    setPositions(INITIAL_POSITIONS);
+    setWallet(INITIAL_WALLET);
+    setSelectedInstrument(INITIAL_INSTRUMENTS[1]);
+    onNotify?.('Platform restored to default demo portfolio state.', 'info');
+  };
 
   return (
-    <div
-      className="min-h-screen flex flex-col font-sans transition-colors duration-300"
-      style={{
-        backgroundColor: backgroundColor,
-        color: textColor
-      }}
-    >
-      {/* Top Architecture Bar: Demonstrates Central Admin <-> Multi-Tenant Trading Platform link */}
-      <div className="bg-[#050914] border-b border-[#141f38] px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs">
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-blue-500/10 border border-blue-500/30 text-blue-400 font-semibold">
-            <Globe size={13} />
-            <span>TENANT TRADING PLATFORM</span>
-          </div>
+    <div className={`min-h-screen ${isDark ? 'dark bg-[#060B14] text-slate-100' : 'bg-slate-100/70 text-slate-900'} font-sans transition-colors duration-150 flex flex-col`}>
+      {/* 1. TOP BAR (Tenant Name, Code, Trade/Options Pills, Switch Tenant & Central Controls) */}
+      <TradingTopBar
+        tenantName={branding.tenantName}
+        tenantCode={branding.tenantCode}
+        tagline={branding.tagline}
+        isTradingEnabled={branding.isTradingEnabled}
+        isOptionsEnabled={branding.isOptionsEnabled}
+        onSelectTenant={t => {
+          setBranding(prev => ({
+            ...prev,
+            tenantName: t.name,
+            tenantCode: t.code
+          }));
+          onNotify?.(`Switched to tenant ${t.name}`, 'info');
+        }}
+        onOpenCentralControls={() => setCentralControlsOpen(true)}
+        onReturnToAdmin={onReturnToAdmin}
+        isAdmin={!!onReturnToAdmin}
+      />
 
-          {/* Domain Switcher */}
-          <div className="flex items-center gap-2">
-            <span className="text-slate-400 hidden sm:inline">Active Host/Domain:</span>
-            <div className="relative">
-              <select
-                value={currentDomain}
-                onChange={e => setCurrentDomain(e.target.value)}
-                className="bg-[#0d162d] border border-[#1f2f54] text-slate-200 rounded-lg px-2.5 py-1 pr-8 font-mono text-xs focus:outline-none focus:border-blue-500 cursor-pointer"
-              >
-                {availableDomains.map(d => (
-                  <option key={d.domain} value={d.domain}>
-                    {d.domain} ({d.name})
-                  </option>
-                ))}
-              </select>
-              <ChevronDown size={13} className="absolute right-2.5 top-2.5 text-slate-400 pointer-events-none" />
-            </div>
-          </div>
-        </div>
+      {/* 2. MAIN HEADER (Logo, Watchlist, Orders, Portfolio, History, Profile Tabs + Theme, Lang, Wallet, Avatar) */}
+      <TradingHeader
+        activeTab={activeTab}
+        onSelectTab={tab => setActiveTab(tab)}
+        brandName={branding.tenantName}
+        brandShortName={branding.tenantCode}
+        brandTagline={branding.tagline}
+        ordersCount={orders.filter(o => o.status === 'OPEN').length || orders.length}
+        positionsCount={positions.length}
+        unreadNotificationsCount={2}
+        isDark={isDark}
+        onToggleTheme={() => setIsDark(!isDark)}
+        onOpenWallet={() => setWalletModalOpen(true)}
+        onOpenNotifications={() => setNotificationsOpen(true)}
+        onOpenTour={() => setTourModalOpen(true)}
+        clientInitials={client.initials}
+        clientFullName={client.fullName}
+      />
 
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => {
-              setRefreshing(true);
-              fetchTenantData(currentDomain);
-            }}
-            disabled={refreshing}
-            className="px-2.5 py-1 rounded bg-[#0f1b36] hover:bg-[#16274e] border border-[#213560] text-slate-300 text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
-            title="Refresh Tenant Branding & Config"
-          >
-            <RefreshCw size={12} className={refreshing ? 'animate-spin text-blue-400' : ''} />
-            <span className="hidden sm:inline">Sync Branding</span>
-          </button>
+      {/* 3. MAIN WORKSPACE CONTAINER */}
+      <main className="flex-1 max-w-7xl w-full mx-auto p-3 sm:p-5 lg:p-6">
+        {/* Trader Console Banner (User ID, KYC Verified, Market: LIVE IST toggle) */}
+        <TraderConsoleBanner
+          clientName={client.fullName}
+          userId={client.userId}
+          kycStatus={client.kycStatus}
+          marketStatus={marketStatus}
+          onToggleMarketStatus={() => {
+            const nextMode = marketStatus === 'LIVE' ? 'OPEN' : marketStatus === 'OPEN' ? 'CLOSED' : 'LIVE';
+            setMarketStatus(nextMode);
+            onNotify?.(`Market Mode switched to: ${nextMode}`, 'info');
+          }}
+        />
 
-          {onReturnToAdmin && (
-            <button
-              onClick={onReturnToAdmin}
-              className="px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs flex items-center gap-1.5 transition-all shadow-sm cursor-pointer"
-            >
-              <Layers size={13} />
-              <span>Back to Central Admin</span>
-            </button>
-          )}
-        </div>
-      </div>
+        {/* Top 3 Metric Cards: AVAILABLE MARGIN, TODAY'S P&L, OVERALL P&L */}
+        <TradingMetricsRow
+          availableMargin={wallet.availableBalance}
+          todayPnL={wallet.todayPnL}
+          overallPnL={wallet.totalPnL}
+          onOpenWallet={() => setWalletModalOpen(true)}
+        />
 
-      {/* Maintenance Mode Banner */}
-      {platformConfig?.maintenanceMode && (
-        <div className="bg-amber-500/20 border-b border-amber-500/40 px-4 py-2.5 text-center text-xs text-amber-300 flex items-center justify-center gap-2">
-          <AlertTriangle size={15} className="shrink-0" />
-          <span className="font-semibold">MAINTENANCE MODE ACTIVE:</span>
-          <span>{platformConfig.maintenanceMessage || 'Platform undergoing scheduled maintenance. Trading is temporarily halted.'}</span>
-        </div>
-      )}
-
-      {/* Global Halting or Tenant Frozen Banner */}
-      {(platformConfig?.systemHalted || platformConfig?.tenantFrozen || !platformConfig?.tradingEnabled) && (
-        <div className="bg-rose-500/20 border-b border-rose-500/40 px-4 py-2 text-center text-xs text-rose-300 flex items-center justify-center gap-2">
-          <AlertTriangle size={15} className="shrink-0" />
-          <span className="font-bold">TRADING SUSPENDED:</span>
-          <span>
-            {platformConfig?.systemHalted
-              ? 'Global Trading Emergency Circuit is active.'
-              : platformConfig?.tenantFrozen
-              ? 'This brokerage account is currently frozen by compliance.'
-              : 'Trading is disabled by platform feature flag.'}
-          </span>
-        </div>
-      )}
-
-      {/* Tenant Custom Branded Navigation Header */}
-      <header
-        className="px-4 lg:px-8 py-3.5 border-b border-white/10 flex items-center justify-between transition-colors shrink-0"
-        style={{ backgroundColor: surfaceColor }}
-      >
-        <div className="flex items-center gap-6">
-          {/* Tenant Brand Logo & Name */}
-          <div className="flex items-center gap-3">
-            {branding?.logoUrl ? (
-              <img
-                src={branding.logoUrl}
-                alt={branding.brandName}
-                className="h-8 max-w-[150px] object-contain"
+        {/* TAB 1: WATCHLIST & SPOTLIGHT (Matching the exact provided screenshot) */}
+        {activeTab === 'watchlist' && (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+            {/* Left Column: Watchlist with Search, Category filters, Instrument rows */}
+            <div className="lg:col-span-8">
+              <TradingWatchlist
+                instruments={instruments}
+                selectedInstrumentId={selectedInstrument.id}
+                onSelectInstrument={inst => setSelectedInstrument(inst)}
+                onOpenOrder={handleOpenOrder}
               />
-            ) : (
-              <div
-                className="w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold"
-                style={{ backgroundColor: primaryColor }}
-              >
-                <TrendingUp size={18} />
-              </div>
-            )}
-            <div>
-              <div className="font-bold tracking-tight text-sm flex items-center gap-2">
-                <span>{branding?.brandName || 'Trading Desk'}</span>
-                <span className="text-[10px] px-1.5 py-0.5 rounded uppercase font-semibold bg-white/10 text-slate-300">
-                  {branding?.shortName || 'PRO'}
-                </span>
-              </div>
-              {branding?.tagline && (
-                <div className="text-[11px] opacity-70 truncate max-w-[200px] sm:max-w-xs">
-                  {branding.tagline}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Navigation Links */}
-          <nav className="hidden md:flex items-center gap-1">
-            <button
-              onClick={() => setActivePlatformTab('terminal')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
-                activePlatformTab === 'terminal' ? 'bg-white/15 text-white' : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              Terminal
-            </button>
-            <button
-              onClick={() => setActivePlatformTab('orders')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
-                activePlatformTab === 'orders' ? 'bg-white/15 text-white' : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              Orders ({recentOrders.length})
-            </button>
-            <button
-              onClick={() => setActivePlatformTab('register')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
-                activePlatformTab === 'register' ? 'bg-white/15 text-white' : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              Open Account
-            </button>
-          </nav>
-        </div>
-
-        {/* Right side: Contact & Account Status */}
-        <div className="flex items-center gap-3">
-          <div className="hidden lg:flex flex-col text-right text-[11px]">
-            <span className="text-slate-400">Support Desk</span>
-            <span className="font-medium text-slate-200">{branding?.contactInfo?.supportEmail || 'support@tradingdesk.com'}</span>
-          </div>
-
-          <div className="h-4 w-px bg-white/15 hidden sm:block" />
-
-          {/* Platform Status Badge */}
-          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            <span>Market Open</span>
-          </div>
-        </div>
-      </header>
-
-      {/* Main Trading Platform Container */}
-      <div className="flex-1 p-4 lg:p-6 max-w-7xl w-full mx-auto space-y-6">
-        {loading ? (
-          <div className="flex flex-col items-center justify-center py-24 space-y-3">
-            <RefreshCw size={24} className="animate-spin text-blue-400" />
-            <p className="text-xs text-slate-400">Resolving tenant configuration and live branding...</p>
-          </div>
-        ) : activePlatformTab === 'register' ? (
-          /* REGISTRATION / CLIENT ONBOARDING VIEW */
-          <div className="max-w-md mx-auto py-8">
-            <div
-              className="rounded-2xl border border-white/10 p-6 shadow-2xl space-y-5"
-              style={{ backgroundColor: surfaceColor }}
-            >
-              <div className="text-center space-y-1">
-                <div
-                  className="w-10 h-10 rounded-xl mx-auto flex items-center justify-center text-white mb-2"
-                  style={{ backgroundColor: primaryColor }}
-                >
-                  <UserPlus size={20} />
-                </div>
-                <h2 className="text-lg font-bold text-white">Create Trading Account</h2>
-                <p className="text-xs text-slate-400">
-                  Open an account with {branding?.brandName || 'our brokerage'}
-                </p>
-              </div>
-
-              {!platformConfig?.registrationEnabled ? (
-                <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-4 text-center space-y-2">
-                  <AlertTriangle size={24} className="text-amber-400 mx-auto" />
-                  <div className="text-xs font-bold text-amber-300">Registration Currently Disabled</div>
-                  <p className="text-[11px] text-slate-400">
-                    New client registrations are temporarily disabled for {branding?.brandName} according to administrator platform configuration.
-                  </p>
-                </div>
-              ) : (
-                <form onSubmit={handleRegister} className="space-y-4">
-                  {regFeedback && (
-                    <div
-                      className={`p-3 rounded-xl text-xs flex items-start gap-2 ${
-                        regFeedback.success
-                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                          : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
-                      }`}
-                    >
-                      {regFeedback.success ? <CheckCircle2 size={16} className="shrink-0 mt-0.5" /> : <XCircle size={16} className="shrink-0 mt-0.5" />}
-                      <span>{regFeedback.message}</span>
-                    </div>
-                  )}
-
-                  <div>
-                    <label className="block text-xs text-slate-300 font-medium mb-1">Full Legal Name</label>
-                    <input
-                      type="text"
-                      required
-                      value={regName}
-                      onChange={e => setRegName(e.target.value)}
-                      placeholder="e.g. Ramesh Sharma"
-                      className="w-full bg-black/30 border border-white/10 rounded-lg px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs text-slate-300 font-medium mb-1">Email Address</label>
-                    <input
-                      type="email"
-                      required
-                      value={regEmail}
-                      onChange={e => setRegEmail(e.target.value)}
-                      placeholder="trader@domain.com"
-                      className="w-full bg-black/30 border border-white/10 rounded-lg px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs text-slate-300 font-medium mb-1">Mobile Phone</label>
-                    <input
-                      type="tel"
-                      value={regPhone}
-                      onChange={e => setRegPhone(e.target.value)}
-                      placeholder="+91 98765 43210"
-                      className="w-full bg-black/30 border border-white/10 rounded-lg px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs text-slate-300 font-medium mb-1">Create Password</label>
-                    <input
-                      type="password"
-                      required
-                      value={regPassword}
-                      onChange={e => setRegPassword(e.target.value)}
-                      placeholder="••••••••••••"
-                      className="w-full bg-black/30 border border-white/10 rounded-lg px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
-                    />
-                  </div>
-
-                  <button
-                    type="submit"
-                    disabled={registering}
-                    className="w-full py-2.5 rounded-xl text-white font-bold text-xs shadow-lg transition-opacity hover:opacity-90 disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
-                    style={{ backgroundColor: primaryColor }}
-                  >
-                    {registering ? (
-                      <>
-                        <RefreshCw size={14} className="animate-spin" />
-                        <span>Creating Account...</span>
-                      </>
-                    ) : (
-                      <>
-                        <span>Submit Registration</span>
-                        <ArrowRight size={14} />
-                      </>
-                    )}
-                  </button>
-                </form>
-              )}
-            </div>
-          </div>
-        ) : (
-          /* TRADING TERMINAL & ORDERS VIEW */
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-            {/* Left Column: Market Watchlist (4 cols) */}
-            <div
-              className="lg:col-span-4 rounded-2xl border border-white/10 p-4 space-y-4"
-              style={{ backgroundColor: surfaceColor }}
-            >
-              <div className="flex items-center justify-between pb-2 border-b border-white/10">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Market Watch</span>
-                  <span className="text-[10px] px-2 py-0.5 rounded bg-white/10 font-mono text-slate-300">
-                    NSE / BSE
-                  </span>
-                </div>
-                <div className="text-[11px] text-slate-400">Live Quotes</div>
-              </div>
-
-              {/* Symbol List */}
-              <div className="space-y-1.5 max-h-[500px] overflow-y-auto pr-1">
-                {marketQuotes.map(quote => {
-                  const isSelected = quote.symbol === selectedSymbol;
-                  const isPositive = quote.change >= 0;
-
-                  return (
-                    <button
-                      key={quote.symbol}
-                      onClick={() => setSelectedSymbol(quote.symbol)}
-                      className={`w-full p-2.5 rounded-xl text-left flex items-center justify-between transition-all cursor-pointer border ${
-                        isSelected
-                          ? 'border-white/30 shadow-md'
-                          : 'border-transparent hover:bg-white/5'
-                      }`}
-                      style={{
-                        backgroundColor: isSelected ? 'rgba(255, 255, 255, 0.08)' : 'transparent'
-                      }}
-                    >
-                      <div>
-                        <div className="text-xs font-bold text-white tracking-tight">{quote.symbol}</div>
-                        <div className="text-[10px] text-slate-400">Vol: {quote.volume}</div>
-                      </div>
-
-                      <div className="text-right">
-                        <div className="text-xs font-mono font-bold text-white">
-                          ₹{quote.lastPrice.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                        </div>
-                        <div
-                          className={`text-[10px] font-mono flex items-center justify-end gap-0.5 ${
-                            isPositive ? 'text-emerald-400' : 'text-rose-400'
-                          }`}
-                        >
-                          {isPositive ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
-                          <span>
-                            {isPositive ? '+' : ''}
-                            {quote.change.toFixed(2)} ({quote.changePercent.toFixed(2)}%)
-                          </span>
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
             </div>
 
-            {/* Middle/Right Column: Active Ticker Chart & Order Execution Form (8 cols) */}
-            <div className="lg:col-span-8 space-y-6">
-              {/* Ticker Header & Dynamic Mini-Chart */}
-              <div
-                className="rounded-2xl border border-white/10 p-5 space-y-4"
-                style={{ backgroundColor: surfaceColor }}
-              >
-                <div className="flex flex-wrap items-center justify-between gap-4 pb-3 border-b border-white/10">
-                  <div>
-                    <div className="flex items-center gap-3">
-                      <h2 className="text-xl font-black tracking-tight text-white">{currentQuote.symbol}</h2>
-                      <span className="text-xs px-2 py-0.5 rounded font-mono uppercase bg-white/10 text-slate-300">
-                        EQUITY / DERIVATIVES
-                      </span>
-                    </div>
-                    <div className="text-xs text-slate-400 mt-0.5">
-                      High: ₹{currentQuote.high} | Low: ₹{currentQuote.low}
-                    </div>
-                  </div>
-
-                  <div className="text-right">
-                    <div className="text-2xl font-black font-mono text-white">
-                      ₹{currentQuote.lastPrice.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                    </div>
-                    <div
-                      className={`text-xs font-bold font-mono ${
-                        currentQuote.change >= 0 ? 'text-emerald-400' : 'text-rose-400'
-                      }`}
-                    >
-                      {currentQuote.change >= 0 ? '+' : ''}
-                      {currentQuote.change.toFixed(2)} ({currentQuote.changePercent.toFixed(2)}%)
-                    </div>
-                  </div>
-                </div>
-
-                {/* Simulated Chart Container Styled with Tenant Accent Color */}
-                <div className="h-32 bg-black/20 rounded-xl p-3 flex flex-col justify-between border border-white/5 relative overflow-hidden">
-                  <div className="flex items-center justify-between text-[10px] text-slate-400 z-10">
-                    <span>1D Candle Trend</span>
-                    <span className="font-mono">Branded Feed: {branding?.brandName}</span>
-                  </div>
-
-                  {/* SVG Trend Wave Colored by Tenant Primary/Accent */}
-                  <div className="absolute inset-0 flex items-center opacity-30 pointer-events-none">
-                    <svg viewBox="0 0 500 100" className="w-full h-full preserve-3d">
-                      <path
-                        d="M 0,60 Q 70,20 140,55 T 280,30 T 420,70 T 500,20 L 500,100 L 0,100 Z"
-                        fill={primaryColor}
-                      />
-                      <path
-                        d="M 0,60 Q 70,20 140,55 T 280,30 T 420,70 T 500,20"
-                        fill="none"
-                        stroke={accentColor}
-                        strokeWidth="3"
-                      />
-                    </svg>
-                  </div>
-
-                  <div className="flex items-center justify-between text-[10px] text-slate-500 z-10">
-                    <span>09:15 AM</span>
-                    <span>11:30 AM</span>
-                    <span>01:45 PM</span>
-                    <span>03:30 PM</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Order Placement Box */}
-              <div
-                className="rounded-2xl border border-white/10 p-5 space-y-4 shadow-xl"
-                style={{ backgroundColor: surfaceColor }}
-              >
-                <div className="flex items-center justify-between pb-3 border-b border-white/10">
-                  <div className="flex items-center gap-2">
-                    <Sliders size={14} className="text-slate-400" />
-                    <span className="text-xs font-bold uppercase tracking-wider text-slate-300">Order Execution</span>
-                  </div>
-                  <div className="text-[11px] text-slate-400">
-                    Routing: {branding?.brandName} Core Engine
-                  </div>
-                </div>
-
-                {/* Feedback Banner if order rejected/accepted */}
-                {orderFeedback && (
-                  <div
-                    className={`p-3.5 rounded-xl text-xs flex items-start gap-2.5 transition-all ${
-                      orderFeedback.success
-                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                        : 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
-                    }`}
-                  >
-                    {orderFeedback.success ? (
-                      <CheckCircle2 size={16} className="shrink-0 mt-0.5" />
-                    ) : (
-                      <XCircle size={16} className="shrink-0 mt-0.5 text-rose-400" />
-                    )}
-                    <div className="space-y-0.5">
-                      <div className="font-bold">
-                        {orderFeedback.success ? 'Order Executed' : 'Execution Denied by Platform Controls'}
-                      </div>
-                      <div className="text-[11px] opacity-90">{orderFeedback.message}</div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Disabled Warning if feature flag trading_enabled is false */}
-                {!platformConfig?.tradingEnabled && (
-                  <div className="bg-amber-500/15 border border-amber-500/30 rounded-xl p-3 text-xs text-amber-300 flex items-center gap-2">
-                    <AlertTriangle size={15} className="shrink-0" />
-                    <span>
-                      Trading orders are currently halted for this tenant platform. All placement requests will be rejected by the backend validation layer.
-                    </span>
-                  </div>
-                )}
-
-                <form onSubmit={handlePlaceOrder} className="space-y-4">
-                  {/* BUY / SELL Switcher */}
-                  <div className="grid grid-cols-2 gap-3">
-                    <button
-                      type="button"
-                      onClick={() => setOrderSide('BUY')}
-                      className={`py-2 rounded-xl text-xs font-black transition-all cursor-pointer ${
-                        orderSide === 'BUY'
-                          ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/30'
-                          : 'bg-white/5 text-slate-400 hover:bg-white/10'
-                      }`}
-                    >
-                      BUY / LONG
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setOrderSide('SELL')}
-                      className={`py-2 rounded-xl text-xs font-black transition-all cursor-pointer ${
-                        orderSide === 'SELL'
-                          ? 'bg-rose-600 text-white shadow-lg shadow-rose-600/30'
-                          : 'bg-white/5 text-slate-400 hover:bg-white/10'
-                      }`}
-                    >
-                      SELL / SHORT
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                    {/* Order Type */}
-                    <div>
-                      <label className="block text-[11px] text-slate-400 font-medium mb-1">Order Type</label>
-                      <select
-                        value={orderType}
-                        onChange={e => setOrderType(e.target.value as any)}
-                        className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500"
-                      >
-                        <option value="MARKET">MARKET</option>
-                        <option value="LIMIT">LIMIT</option>
-                      </select>
-                    </div>
-
-                    {/* Quantity */}
-                    <div>
-                      <label className="block text-[11px] text-slate-400 font-medium mb-1">Quantity (Lots)</label>
-                      <input
-                        type="number"
-                        min="1"
-                        step="1"
-                        value={orderQuantity}
-                        onChange={e => setOrderQuantity(Number(e.target.value))}
-                        className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-blue-500"
-                      />
-                    </div>
-
-                    {/* Price */}
-                    <div>
-                      <label className="block text-[11px] text-slate-400 font-medium mb-1">Price (₹)</label>
-                      <input
-                        type="text"
-                        disabled={orderType === 'MARKET'}
-                        value={orderType === 'MARKET' ? currentQuote.lastPrice : orderPrice}
-                        onChange={e => setOrderPrice(e.target.value)}
-                        className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-blue-500 disabled:opacity-50"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Summary & Submit */}
-                  <div className="pt-2 flex flex-col sm:flex-row items-center justify-between gap-3 border-t border-white/10">
-                    <div className="text-xs text-slate-400">
-                      Total Value:{' '}
-                      <span className="font-mono font-bold text-white">
-                        ₹{(orderQuantity * (Number(orderPrice) || currentQuote.lastPrice)).toLocaleString('en-IN', {
-                          minimumFractionDigits: 2
-                        })}
-                      </span>
-                    </div>
-
-                    <button
-                      type="submit"
-                      disabled={placingOrder}
-                      className="w-full sm:w-auto px-6 py-2.5 rounded-xl text-white font-bold text-xs shadow-lg transition-all hover:opacity-90 disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
-                      style={{
-                        backgroundColor: orderSide === 'BUY' ? '#10b981' : '#ef4444'
-                      }}
-                    >
-                      {placingOrder ? (
-                        <>
-                          <RefreshCw size={13} className="animate-spin" />
-                          <span>Routing Order...</span>
-                        </>
-                      ) : (
-                        <>
-                          <span>Submit {orderSide} Order</span>
-                          <ArrowRight size={13} />
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </form>
-              </div>
-
-              {/* Recent Orders on this Platform */}
-              <div
-                className="rounded-2xl border border-white/10 p-5 space-y-3"
-                style={{ backgroundColor: surfaceColor }}
-              >
-                <div className="flex items-center justify-between pb-2 border-b border-white/10">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300">
-                    Orders Executed on {branding?.brandName} ({recentOrders.length})
-                  </h3>
-                  <span className="text-[11px] text-slate-400">Isolated to Tenant: {branding?.tenantName}</span>
-                </div>
-
-                {recentOrders.length === 0 ? (
-                  <div className="text-center py-6 text-xs text-slate-500">
-                    No orders placed on this platform yet. Place an order above to test execution.
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs">
-                      <thead>
-                        <tr className="border-b border-white/10 text-slate-400 text-[11px]">
-                          <th className="py-2">Order ID</th>
-                          <th className="py-2">Symbol</th>
-                          <th className="py-2">Side</th>
-                          <th className="py-2">Qty</th>
-                          <th className="py-2">Price</th>
-                          <th className="py-2">Status</th>
-                          <th className="py-2">Time</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-white/5 font-mono">
-                        {recentOrders.slice(0, 6).map(order => (
-                          <tr key={order.id || order.order_id} className="hover:bg-white/5">
-                            <td className="py-2 font-bold text-white">{order.order_id}</td>
-                            <td className="py-2 text-slate-200">{order.symbol}</td>
-                            <td className="py-2">
-                              <span
-                                className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                                  order.side === 'BUY'
-                                    ? 'bg-emerald-500/20 text-emerald-400'
-                                    : 'bg-rose-500/20 text-rose-400'
-                                }`}
-                              >
-                                {order.side}
-                              </span>
-                            </td>
-                            <td className="py-2 text-slate-200">{order.quantity}</td>
-                            <td className="py-2 text-white">₹{order.price?.toFixed(2)}</td>
-                            <td className="py-2">
-                              <span className="px-2 py-0.5 rounded text-[10px] bg-blue-500/20 text-blue-400 font-semibold">
-                                {order.status}
-                              </span>
-                            </td>
-                            <td className="py-2 text-slate-400 text-[11px]">{order.created_at}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
+            {/* Right Column: Live Spotlight Terminal (SILVER FUT), Range, Bid/Ask, Buy/Sell, Benchmarks, Margin */}
+            <div className="lg:col-span-4 sticky top-16">
+              <LiveSpotlightTerminal
+                instrument={selectedInstrument}
+                benchmarks={benchmarks}
+                wallet={wallet}
+                onOpenOrder={handleOpenOrder}
+                onOpenChart={inst => {
+                  setChartModalInstrument(inst);
+                  setChartModalOpen(true);
+                }}
+                onOpenWallet={() => setWalletModalOpen(true)}
+              />
             </div>
           </div>
         )}
-      </div>
 
-      {/* Tenant Branded Footer */}
-      <footer
-        className="mt-auto px-4 lg:px-8 py-6 border-t border-white/10 text-xs transition-colors shrink-0"
-        style={{ backgroundColor: surfaceColor }}
-      >
-        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div className="text-slate-400 text-center sm:text-left">
-            <div>{branding?.legalLinks?.footerText || `© 2024 ${branding?.brandName || 'Trading Desk'}. All Rights Reserved.`}</div>
-            <div className="text-[11px] opacity-75 mt-0.5">
-              Powered by TradePro Multi-Tenant Engine - Domain: <span className="font-mono text-slate-300">{currentDomain}</span>
+        {/* TAB 2: ORDERS VIEW */}
+        {activeTab === 'orders' && (
+          <TradingOrdersView
+            orders={orders}
+            onCancelOrder={handleCancelOrder}
+            onOpenPlaceOrder={() => handleOpenOrder(selectedInstrument, 'BUY')}
+            onOpenChart={(sym) => {
+              const inst = instruments.find(i => i.symbol === sym) || selectedInstrument;
+              setChartModalInstrument(inst);
+              setChartModalOpen(true);
+            }}
+            onRepeatOrder={(ord) => {
+              const inst = instruments.find(i => i.symbol === ord.symbol) || selectedInstrument;
+              handleOpenOrder(inst, ord.type);
+            }}
+          />
+        )}
+
+        {/* TAB 3: PORTFOLIO VIEW */}
+        {activeTab === 'portfolio' && (
+          <TradingPortfolioView
+            positions={positions}
+            wallet={wallet}
+            onSquareOff={handleSquareOff}
+            onSquareOffAll={handleSquareOffAll}
+            onOpenOrder={(sym, side) => {
+              const inst = instruments.find(i => i.symbol === sym) || selectedInstrument;
+              handleOpenOrder(inst, side);
+            }}
+            onOpenChart={(sym) => {
+              const inst = instruments.find(i => i.symbol === sym) || selectedInstrument;
+              setChartModalInstrument(inst);
+              setChartModalOpen(true);
+            }}
+            onOpenWallet={() => setWalletModalOpen(true)}
+          />
+        )}
+
+        {/* TAB 4: HISTORY VIEW */}
+        {activeTab === 'history' && (
+          <TradingHistoryView
+            orders={orders}
+            onOpenWalletLedger={() => setWalletModalOpen(true)}
+          />
+        )}
+
+        {/* TAB 5: PROFILE VIEW */}
+        {activeTab === 'profile' && (
+          <TradingProfileView
+            client={client}
+            wallet={wallet}
+            onLogout={() => {
+              if (onReturnToAdmin) {
+                onReturnToAdmin();
+              } else {
+                location.reload();
+              }
+            }}
+            onOpenWallet={() => setWalletModalOpen(true)}
+            onOpenNotifications={() => setNotificationsOpen(true)}
+            onOpenTour={() => setTourModalOpen(true)}
+          />
+        )}
+      </main>
+
+      {/* 4. MODALS & SLIDEOVERS */}
+      {/* Order Placement Modal */}
+      <OrderModal
+        isOpen={orderModalOpen}
+        instrument={orderModalInstrument}
+        initialSide={orderModalSide}
+        wallet={wallet}
+        onClose={() => setOrderModalOpen(false)}
+        onPlaceOrder={handlePlaceOrder}
+        onOpenChart={inst => {
+          setChartModalInstrument(inst);
+          setChartModalOpen(true);
+        }}
+        onOpenOptionChain={inst => {
+          setOptionChainInstrument(inst);
+          setOptionChainModalOpen(true);
+        }}
+      />
+
+      {/* Technical Candlestick Chart Modal */}
+      <TechnicalChartModal
+        isOpen={chartModalOpen}
+        instrument={chartModalInstrument}
+        onClose={() => setChartModalOpen(false)}
+        onOpenOrder={handleOpenOrder}
+      />
+
+      {/* Option Chain Modal */}
+      <OptionChainModal
+        isOpen={optionChainModalOpen}
+        instrument={optionChainInstrument}
+        onClose={() => setOptionChainModalOpen(false)}
+        onSelectStrike={(strikeSymbol, side, price) => {
+          handleOpenOrder(
+            {
+              ...selectedInstrument,
+              symbol: strikeSymbol,
+              lastPrice: price,
+              intraday: price * selectedInstrument.lotSize,
+              holding: price * selectedInstrument.lotSize
+            },
+            side
+          );
+        }}
+      />
+
+      {/* Wallet & Funds Modal */}
+      <WalletModal
+        isOpen={walletModalOpen}
+        wallet={wallet}
+        onClose={() => setWalletModalOpen(false)}
+        onDeposit={handleDeposit}
+        onWithdraw={handleWithdraw}
+      />
+
+      {/* Central Controls & White-Label Modal */}
+      <CentralControlsModal
+        isOpen={centralControlsOpen}
+        onClose={() => setCentralControlsOpen(false)}
+        tenantName={branding.tenantName}
+        tenantCode={branding.tenantCode}
+        tagline={branding.tagline}
+        isTradingEnabled={branding.isTradingEnabled}
+        isOptionsEnabled={branding.isOptionsEnabled}
+        marketStatus={marketStatus}
+        onUpdateTenantConfig={cfg => {
+          setBranding(prev => ({
+            ...prev,
+            tenantName: cfg.tenantName || prev.tenantName,
+            tenantCode: cfg.tenantCode || prev.tenantCode,
+            tagline: cfg.tagline || prev.tagline,
+            isTradingEnabled: cfg.isTradingEnabled !== undefined ? cfg.isTradingEnabled : prev.isTradingEnabled,
+            isOptionsEnabled: cfg.isOptionsEnabled !== undefined ? cfg.isOptionsEnabled : prev.isOptionsEnabled
+          }));
+          if (cfg.marketStatus) setMarketStatus(cfg.marketStatus);
+          onNotify?.('Tenant platform configuration updated.', 'success');
+        }}
+        onResetDemoData={handleResetDemoData}
+      />
+
+      {/* Quick Tour Modal */}
+      {tourModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xs select-none animate-in fade-in">
+          <div className="w-full max-w-lg bg-white dark:bg-[#0C1422] border border-slate-200 dark:border-[#1E2E44] rounded-2xl shadow-2xl p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <HelpCircle className="w-5 h-5 text-amber-500" />
+                <h3 className="text-base font-black text-slate-900 dark:text-white">
+                  Welcome to {branding.tenantName}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setTourModalOpen(false)}
+                className="text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
-          </div>
-
-          <div className="flex flex-wrap items-center justify-center gap-4 text-[11px] text-slate-400">
-            <a href={branding?.legalLinks?.termsUrl || '#'} className="hover:text-white transition-colors">Terms of Service</a>
-            <a href={branding?.legalLinks?.privacyUrl || '#'} className="hover:text-white transition-colors">Privacy Policy</a>
-            <a href={branding?.legalLinks?.riskDisclosureUrl || '#'} className="hover:text-white transition-colors">Risk Disclosure</a>
-            <a href={branding?.contactInfo?.helpSupportUrl || '#'} className="hover:text-white transition-colors">Contact Support</a>
+            <div className="text-xs text-slate-400 space-y-2.5">
+              <p>• <strong>Watchlist:</strong> Search and select multi-asset instruments across Commodity (Gold, Silver, Crude), Equities (NIFTY, Reliance), Crypto (BTC), and Forex.</p>
+              <p>• <strong>Spotlight Terminal:</strong> View live 24h range, bid/ask depth, and execute 1-click orders directly via ⚡ BUY / ⚡ SELL.</p>
+              <p>• <strong>Technical Charts:</strong> Interactive candlestick charts with customizable timeframes and order execution.</p>
+              <p>• <strong>Wallet & Margin:</strong> Manage deposits via UPI / NetBanking and request instant 24/7 withdrawals.</p>
+              <p>• <strong>Multi-Tenant:</strong> Switch between broker branding or adjust platform parameters in Central Controls.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setTourModalOpen(false)}
+              className="w-full py-2.5 rounded-xl bg-amber-500 text-slate-950 font-black text-xs cursor-pointer"
+            >
+              Start Trading
+            </button>
           </div>
         </div>
-      </footer>
+      )}
+
+      {/* Notifications Drawer */}
+      {notificationsOpen && (
+        <div className="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-xs select-none animate-in fade-in">
+          <div className="w-full max-w-sm bg-white dark:bg-[#0C1422] border-l border-slate-200 dark:border-[#1E2E44] h-full shadow-2xl p-5 flex flex-col justify-between">
+            <div className="space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-100 dark:border-[#162234] pb-3">
+                <div className="flex items-center gap-2">
+                  <Bell className="w-4 h-4 text-amber-500" />
+                  <h3 className="font-black text-sm text-slate-900 dark:text-white">Notifications</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setNotificationsOpen(false)}
+                  className="text-slate-400 hover:text-white cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="space-y-3">
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-[#080E18] border border-slate-200 dark:border-[#162234] text-xs">
+                  <div className="flex items-center gap-1.5 text-emerald-500 font-bold mb-1">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Order Executed</span>
+                  </div>
+                  <p className="text-slate-400">Order ORD-90124 for 2 Lots GOLD FUT filled at ₹1,57,366.34.</p>
+                  <span className="text-[10px] text-slate-500 font-mono mt-1 block">10 minutes ago</span>
+                </div>
+
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-[#080E18] border border-slate-200 dark:border-[#162234] text-xs">
+                  <div className="flex items-center gap-1.5 text-amber-500 font-bold mb-1">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Margin Credit Added</span>
+                  </div>
+                  <p className="text-slate-400">₹50,000 UPI Instant deposit credited to Available Margin.</p>
+                  <span className="text-[10px] text-slate-500 font-mono mt-1 block">1 hour ago</span>
+                </div>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setNotificationsOpen(false)}
+              className="w-full py-2.5 rounded-xl bg-slate-100 dark:bg-[#152338] text-slate-700 dark:text-slate-300 text-xs font-bold cursor-pointer"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

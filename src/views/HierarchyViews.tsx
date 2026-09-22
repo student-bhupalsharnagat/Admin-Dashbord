@@ -40,6 +40,7 @@ export interface HierarchyViewsProps {
   onAddClient?: () => void;
   onToggleStatus?: (type: string, id: string, current: string) => Promise<void>;
   onNotify?: (message: string, type?: 'info' | 'success' | 'warning') => void;
+  onOpenTradingPlatform?: (clientData?: any) => void;
 }
 
 // Initial screenshot dataset for Masters
@@ -391,7 +392,8 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
   onCreateBroker,
   onAddClient,
   onToggleStatus,
-  onNotify
+  onNotify,
+  onOpenTradingPlatform
 }) => {
   // Local state for entities ensuring screenshot data is shown and editable
   const [mastersList, setMastersList] = useState(initialMastersData);
@@ -912,6 +914,7 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
           }
         }}
         onNotify={notify}
+        onOpenTradingPlatform={onOpenTradingPlatform}
       />
     );
   }

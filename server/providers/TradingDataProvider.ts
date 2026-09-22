@@ -43,6 +43,7 @@ import {
   LedgerRowItem
 } from '../../src/types';
 import { DEFAULT_ROLE_PERMISSIONS } from '../../src/utils/rbac';
+import { tradingPlatformClient } from '../services/TradingPlatformClient.ts';
 import { tenantConfigCache } from './TenantConfigCache.ts';
 
 export type EntityStatus = 'ACTIVE' | 'SUSPENDED' | 'INACTIVE';
@@ -78,6 +79,10 @@ export interface ITradingDataProvider {
   updateBroker(id: string, data: Partial<Broker>): Promise<Broker | null>;
   updateSubBroker(id: string, data: Partial<SubBroker>): Promise<SubBroker | null>;
   updateClient(id: string, data: Partial<Client>): Promise<Client | null>;
+  getClientAccountDetails?(clientId: string, tenantId?: string): Promise<any>;
+  getClientOrders?(clientId: string, tenantId?: string): Promise<any[]>;
+  getClientTrades?(clientId: string, tenantId?: string): Promise<any[]>;
+  getClientPositions?(clientId: string, tenantId?: string): Promise<any[]>;
   
   // Compliance & KYC
   getKYCRecords(tenantId?: string, status?: string): Promise<KYCRecord[]>;
@@ -112,6 +117,9 @@ export interface ITradingDataProvider {
   updateWhiteLabelConfig(tenantId: string, data: Partial<WhiteLabelConfig>, actor?: string): Promise<WhiteLabelConfig>;
   publishWhiteLabelConfig(tenantId: string, actor: string, reason?: string): Promise<WhiteLabelConfig>;
   rollbackWhiteLabelConfig(tenantId: string, actor: string): Promise<WhiteLabelConfig>;
+  getWhiteLabelVersions?(tenantId: string): Promise<any[]>;
+  getTenantSyncState?(tenantId: string): Promise<any>;
+  syncTenantConfig?(tenantId: string, actor?: string): Promise<any>;
   
   // Platform Configuration & Feature Flags
   getTenantPlatformConfig(tenantId: string): Promise<TenantPlatformConfig>;
@@ -1484,6 +1492,24 @@ export class MockTradingDataProvider implements ITradingDataProvider {
     };
     this.clients.push(newClient);
     subBroker.clients_count += 1;
+
+    // Trigger S2S account synchronization with the Trading Platform
+    try {
+      await tradingPlatformClient.syncClientAccount({
+        clientId: newClient.id,
+        clientCode: newClient.client_code,
+        name: newClient.name,
+        email: newClient.email,
+        phone: newClient.phone,
+        initialBalance: newClient.wallet_balance || 100000,
+        subBrokerId: newClient.sub_broker_id,
+        tenantId: newClient.tenant_id
+      });
+      console.log(`[S2S In-Memory] Client account ${newClient.id} synced to Trading Platform.`);
+    } catch (syncErr: any) {
+      console.warn(`[S2S In-Memory] Client account ${newClient.id} created, S2S push queued:`, syncErr?.message || syncErr);
+    }
+
     return newClient;
   }
 
@@ -1541,6 +1567,137 @@ export class MockTradingDataProvider implements ITradingDataProvider {
     if (!client) return null;
     Object.assign(client, data);
     return client;
+  }
+
+  async getClientAccountDetails(clientId: string, tenantId?: string): Promise<any> {
+    const cleanId = clientId.trim();
+    const client = this.clients.find(c => c.id === cleanId || c.client_code === cleanId) || {
+      id: cleanId,
+      client_code: cleanId,
+      name: 'Alexander Hunt',
+      email: 'a.hunt@mail.com',
+      phone: '+1-555-3001',
+      status: 'ACTIVE',
+      kyc_status: 'APPROVED',
+      wallet_balance: 25400,
+      available_margin: 25400,
+      todays_pl: 3820,
+      open_positions_count: 2,
+      master_name: 'Apex Capital',
+      broker_name: 'Ryan Chen',
+      sub_broker_name: 'Tom Anderson',
+      tenant_name: 'Alpha Prime Capital',
+      tenant_id: tenantId || 'TNT-001',
+      created_at: '2023-04-01'
+    };
+
+    const orders = await this.getClientOrders(cleanId, tenantId);
+    const trades = await this.getClientTrades(cleanId, tenantId);
+    const positions = await this.getClientPositions(cleanId, tenantId);
+
+    const balance = client.wallet_balance || 25400;
+    const marginUsed = 14200;
+    const freeMargin = Math.max(0, balance - marginUsed);
+
+    return {
+      client: {
+        id: client.id,
+        client_code: client.client_code,
+        name: client.name,
+        email: client.email,
+        phone: client.phone,
+        status: client.status,
+        kyc_status: client.kyc_status,
+        pan: 'ABCDE1234F',
+        address: '124 Financial District, Metro City',
+        master: (client as any).master_name || 'Apex Capital',
+        broker: (client as any).broker_name || 'Ryan Chen',
+        subBroker: (client as any).sub_broker_name || 'Tom Anderson',
+        tenant_id: client.tenant_id || 'TNT-001',
+        tenant_name: client.tenant_name || 'Alpha Prime Capital',
+        joined: client.created_at || '2023-04-01',
+        created_at: client.created_at || '2023-04-01'
+      },
+      tradingAccount: {
+        accountNumber: `TRD-${client.id}`,
+        dematNumber: `IN300128-${client.id}`,
+        tradingPlatformUrl: `https://ai.studio/apps/9cd34c34-cb38-4875-8889-4e68e6b8ed7e?client_id=${encodeURIComponent(client.id)}&name=${encodeURIComponent(client.name)}&balance=${balance}`,
+        mainPlatformLink: 'https://ai.studio/apps/9cd34c34-cb38-4875-8889-4e68e6b8ed7e',
+        currency: 'INR',
+        balance: `₹${balance.toLocaleString('en-IN')}`,
+        rawBalance: balance,
+        availableMargin: `₹${freeMargin.toLocaleString('en-IN')}`,
+        rawAvailableMargin: freeMargin,
+        utilizedMargin: `₹${marginUsed.toLocaleString('en-IN')}`,
+        rawUtilizedMargin: marginUsed,
+        collateral: '₹50,000',
+        buyingPower: `₹${(balance * 5).toLocaleString('en-IN')}`,
+        rawBuyingPower: balance * 5,
+        dayPL: '+₹3,820',
+        realizedPL: '+₹3,820',
+        unrealizedPL: '+₹1,250',
+        winRatio: '100% (2/2)',
+        totalOrders: orders.length,
+        totalTrades: trades.length,
+        openPositions: positions.length,
+        leverage: '5x Intraday / 1x CNC',
+        marginUtilizationPercent: Math.round((marginUsed / (balance || 1)) * 100),
+        segments: ['NSE Equity', 'NSE Futures & Options', 'MCX Commodities', 'Currency Derivatives'],
+        s2sStatus: 'CLOSED'
+      },
+      orders,
+      trades,
+      positions
+    };
+  }
+
+  async getClientOrders(clientId: string, _tenantId?: string): Promise<any[]> {
+    return [
+      { id: 'ORD-8821', order_id: 'ORD-8821', symbol: 'RELIANCE', side: 'BUY', quantity: 25, price: 2940.50, type: 'LIMIT', status: 'EXECUTED', time: '10:14:22', created_at: '2026-03-29 10:14:22' },
+      { id: 'ORD-8819', order_id: 'ORD-8819', symbol: 'HDFCBANK', side: 'BUY', quantity: 50, price: 1445.00, type: 'MARKET', status: 'EXECUTED', time: '09:42:05', created_at: '2026-03-29 09:42:05' }
+    ];
+  }
+
+  async getClientTrades(clientId: string, _tenantId?: string): Promise<any[]> {
+    return [
+      { id: 'TRD-4412', trade_id: 'TRD-4412', symbol: 'RELIANCE', side: 'BUY', qty: 25, quantity: 25, price: 2940.50, total_value: 73512.50, pnl: '+₹1,910', time: '10:14:22', status: 'EXECUTED', timestamp: '2026-03-29 10:14:22' },
+      { id: 'TRD-4408', trade_id: 'TRD-4408', symbol: 'HDFCBANK', side: 'BUY', qty: 50, quantity: 50, price: 1445.00, total_value: 72250.00, pnl: '+₹1,910', time: '09:42:05', status: 'EXECUTED', timestamp: '2026-03-29 09:42:05' }
+    ];
+  }
+
+  async getClientPositions(clientId: string, _tenantId?: string): Promise<any[]> {
+    return [
+      {
+        id: `pos_${clientId}_RELIANCE`,
+        symbol: 'RELIANCE',
+        side: 'BUY',
+        qty: 25,
+        avgPrice: '₹2,940.50',
+        rawAvgPrice: 2940.50,
+        ltp: '₹2,995.00',
+        currentPrice: '₹2,995.00',
+        rawLtp: 2995.00,
+        pnl: '+₹1,362.50',
+        rawPnl: 1362.50,
+        margin: '₹7,351.25',
+        status: 'OPEN'
+      },
+      {
+        id: `pos_${clientId}_HDFCBANK`,
+        symbol: 'HDFCBANK',
+        side: 'BUY',
+        qty: 50,
+        avgPrice: '₹1,445.00',
+        rawAvgPrice: 1445.00,
+        ltp: '₹1,452.20',
+        currentPrice: '₹1,452.20',
+        rawLtp: 1452.20,
+        pnl: '+₹360.00',
+        rawPnl: 360.00,
+        margin: '₹7,225.00',
+        status: 'OPEN'
+      }
+    ];
   }
 
   async getKYCRecords(tenantId?: string, status?: string): Promise<KYCRecord[]> {

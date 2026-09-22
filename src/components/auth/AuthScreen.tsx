@@ -77,12 +77,12 @@ const DEMO_ACCOUNTS: Record<DemoRoleKey, DemoAccountConfig> = {
   },
   'Client': {
     key: 'Client',
-    label: 'Client',
+    label: 'Client (Trading Platform)',
     email: 'client@alphaprime.com',
     role: 'CLIENT',
-    name: 'Arjun Patel',
+    name: 'Demo Trader',
     tenantId: 'TNT-001',
-    tenantName: 'Alpha Prime Capital',
+    tenantName: 'VERTEX Trading',
     password: 'password123'
   }
 };

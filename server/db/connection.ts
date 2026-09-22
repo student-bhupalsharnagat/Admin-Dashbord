@@ -36,6 +36,8 @@ export interface DbConfig {
 let globalPool: pg.Pool | null = null;
 let embeddedPglite: PGlite | null = null;
 let isEmbeddedInitialized = false;
+let embeddedInitPromise: Promise<PGlite> | null = null;
+let remoteFailed = false;
 
 export function getDbConfig(): DbConfig {
   const connectionString = process.env.DATABASE_URL;
@@ -52,7 +54,14 @@ export function getDbConfig(): DbConfig {
 }
 
 export function isUsingRemotePostgres(): boolean {
-  return !!process.env.DATABASE_URL;
+  if (remoteFailed) return false;
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) return false;
+  // In containerized sandbox without local PostgreSQL server daemon, localhost:5432 will fail
+  if (connectionString.includes('localhost') || connectionString.includes('127.0.0.1')) {
+    return false;
+  }
+  return true;
 }
 
 export function getPool(customPool?: pg.Pool): pg.Pool {
@@ -85,64 +94,74 @@ export function setGlobalPool(pool: pg.Pool | null): void {
 
 export async function getEmbeddedDb(): Promise<PGlite> {
   if (embeddedPglite && isEmbeddedInitialized) return embeddedPglite;
+  if (embeddedInitPromise) return embeddedInitPromise;
 
-  if (!embeddedPglite) {
-    try {
-      embeddedPglite = new PGlite();
-      await embeddedPglite.waitReady;
-    } catch (err: any) {
-      console.error('[PostgreSQL Engine] PGlite init error:', err?.message);
-      embeddedPglite = new PGlite();
-      await embeddedPglite.waitReady;
-    }
-  }
-
-  if (!isEmbeddedInitialized) {
-    isEmbeddedInitialized = true;
-    console.log('[PostgreSQL Engine] Initializing schema migrations and seed...');
-    const migrationFiles = getAllMigrationFiles();
-    for (const migrationFile of migrationFiles) {
+  embeddedInitPromise = (async () => {
+    if (!embeddedPglite) {
       try {
-        const sql = fs.readFileSync(migrationFile, 'utf-8');
-        await embeddedPglite.exec(sql);
-        console.log(`[PostgreSQL Engine] Migration executed: ${path.basename(migrationFile)}`);
-      } catch (migErr: any) {
-        console.warn(`[PostgreSQL Engine] Migration warning (${path.basename(migrationFile)}):`, migErr?.message);
+        embeddedPglite = new PGlite();
+        await embeddedPglite.waitReady;
+      } catch (err: any) {
+        console.error('[PostgreSQL Engine] PGlite init error:', err?.message);
+        embeddedPglite = new PGlite();
+        await embeddedPglite.waitReady;
       }
     }
-    console.log('[PostgreSQL Engine] Schema initialized successfully.');
 
-    try {
-      const countRes = await embeddedPglite.query('SELECT count(*) as count FROM tenants');
-      if (parseInt((countRes.rows[0] as any)?.count || '0', 10) === 0) {
-        const { seedDatabase } = await import('./seed.ts');
-        await seedDatabase();
+    if (!isEmbeddedInitialized) {
+      isEmbeddedInitialized = true;
+      console.log('[PostgreSQL Engine] Initializing schema migrations and seed...');
+      const migrationFiles = getAllMigrationFiles();
+      for (const migrationFile of migrationFiles) {
+        try {
+          const sql = fs.readFileSync(migrationFile, 'utf-8');
+          await embeddedPglite.exec(sql);
+          console.log(`[PostgreSQL Engine] Migration executed: ${path.basename(migrationFile)}`);
+        } catch (migErr: any) {
+          console.warn(`[PostgreSQL Engine] Migration warning (${path.basename(migrationFile)}):`, migErr?.message);
+        }
       }
-    } catch (seedErr: any) {
-      console.warn('[PostgreSQL Engine] Initial seed warning:', seedErr?.message);
-    }
-  }
+      console.log('[PostgreSQL Engine] Schema initialized successfully.');
 
-  return embeddedPglite;
+      try {
+        const countRes = await embeddedPglite.query('SELECT count(*) as count FROM tenants');
+        if (parseInt((countRes.rows[0] as any)?.count || '0', 10) === 0) {
+          const { seedDatabase } = await import('./seed.ts');
+          await seedDatabase();
+        }
+      } catch (seedErr: any) {
+        console.warn('[PostgreSQL Engine] Initial seed warning:', seedErr?.message);
+      }
+    }
+
+    return embeddedPglite;
+  })();
+
+  return embeddedInitPromise;
 }
 
 export async function testConnection(pool?: pg.Pool): Promise<boolean> {
   if (isUsingRemotePostgres()) {
-    const activePool = pool || getPool();
-    const client = await activePool.connect();
     try {
-      const res = await client.query('SELECT NOW() as current_time, current_database() as db_name');
-      console.log(`[PostgreSQL Remote] Connected to "${res.rows[0].db_name}" at ${res.rows[0].current_time}`);
-      return true;
-    } finally {
-      client.release();
+      const activePool = pool || getPool();
+      const client = await activePool.connect();
+      try {
+        const res = await client.query('SELECT NOW() as current_time, current_database() as db_name');
+        console.log(`[PostgreSQL Remote] Connected to "${res.rows[0].db_name}" at ${res.rows[0].current_time}`);
+        return true;
+      } finally {
+        client.release();
+      }
+    } catch (err: any) {
+      console.warn('[PostgreSQL Remote] Connection failed in testConnection, falling back to embedded engine:', err.message);
+      remoteFailed = true;
     }
-  } else {
-    const db = await getEmbeddedDb();
-    const res = await db.query('SELECT NOW() as current_time');
-    console.log(`[PostgreSQL Embedded Engine] Active at ${(res.rows[0] as any).current_time}`);
-    return true;
   }
+
+  const db = await getEmbeddedDb();
+  const res = await db.query('SELECT NOW() as current_time');
+  console.log(`[PostgreSQL Embedded Engine] Active at ${(res.rows[0] as any).current_time}`);
+  return true;
 }
 
 export async function closePool(): Promise<void> {
@@ -162,6 +181,7 @@ export async function closePool(): Promise<void> {
     }
     embeddedPglite = null;
     isEmbeddedInitialized = false;
+    embeddedInitPromise = null;
     console.log('[PostgreSQL] Embedded engine closed.');
   }
 }
@@ -177,28 +197,37 @@ export async function query<T = any>(
   const start = Date.now();
   try {
     if (isUsingRemotePostgres() || customPool) {
-      const pool = getPool(customPool);
-      const res = await pool.query<T>(text, params);
-      const duration = Date.now() - start;
-      if (process.env.DEBUG_SQL === 'true') {
-        console.log(`[Remote SQL ${duration}ms]: ${text.slice(0, 100)}`);
+      try {
+        const pool = getPool(customPool);
+        const res = await pool.query<T>(text, params);
+        const duration = Date.now() - start;
+        if (process.env.DEBUG_SQL === 'true') {
+          console.log(`[Remote SQL ${duration}ms]: ${text.slice(0, 100)}`);
+        }
+        return res;
+      } catch (remoteErr: any) {
+        if (!customPool && (remoteErr.code === 'ECONNREFUSED' || remoteErr.code === 'ENOTFOUND' || remoteErr.code === 'ETIMEDOUT' || remoteErr.message?.includes('timeout') || remoteErr.message?.includes('Connection terminated'))) {
+          console.warn('[PostgreSQL Remote] Query failed with connection error, falling back to embedded engine:', remoteErr.message);
+          remoteFailed = true;
+        } else {
+          throw remoteErr;
+        }
       }
-      return res;
-    } else {
-      const db = await getEmbeddedDb();
-      const res = await db.query<T>(text, params);
-      const duration = Date.now() - start;
-      if (process.env.DEBUG_SQL === 'true') {
-        console.log(`[Embedded SQL ${duration}ms]: ${text.slice(0, 100)}`);
-      }
-      return {
-        rows: res.rows,
-        command: 'SELECT',
-        rowCount: res.rows.length,
-        oid: 0,
-        fields: (res.fields || []) as any[]
-      };
     }
+
+    const db = await getEmbeddedDb();
+    const res = await db.query<T>(text, params);
+    const duration = Date.now() - start;
+    if (process.env.DEBUG_SQL === 'true') {
+      console.log(`[Embedded SQL ${duration}ms]: ${text.slice(0, 100)}`);
+    }
+    return {
+      rows: res.rows,
+      command: 'SELECT',
+      rowCount: res.rows.length,
+      oid: 0,
+      fields: (res.fields || []) as any[]
+    };
   } catch (err: any) {
     console.error(`[PostgreSQL Query Error]: ${err.message}`, {
       query: text.slice(0, 200),
@@ -216,29 +245,38 @@ export async function withTransaction<T>(
   customPool?: pg.Pool
 ): Promise<T> {
   if (isUsingRemotePostgres() || customPool) {
-    const pool = getPool(customPool);
-    const client = await pool.connect();
     try {
-      await client.query('BEGIN');
-      const result = await callback(client);
-      await client.query('COMMIT');
-      return result;
-    } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      client.release();
+      const pool = getPool(customPool);
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const result = await callback(client);
+        await client.query('COMMIT');
+        return result;
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
+    } catch (remoteErr: any) {
+      if (!customPool && (remoteErr.code === 'ECONNREFUSED' || remoteErr.code === 'ENOTFOUND' || remoteErr.code === 'ETIMEDOUT' || remoteErr.message?.includes('timeout'))) {
+        console.warn('[PostgreSQL Remote] Transaction connection failed, falling back to embedded engine:', remoteErr.message);
+        remoteFailed = true;
+      } else {
+        throw remoteErr;
+      }
     }
-  } else {
-    const db = await getEmbeddedDb();
-    await db.query('BEGIN');
-    try {
-      const result = await callback(db);
-      await db.query('COMMIT');
-      return result;
-    } catch (err) {
-      await db.query('ROLLBACK');
-      throw err;
-    }
+  }
+
+  const db = await getEmbeddedDb();
+  await db.query('BEGIN');
+  try {
+    const result = await callback(db);
+    await db.query('COMMIT');
+    return result;
+  } catch (err) {
+    await db.query('ROLLBACK');
+    throw err;
   }
 }

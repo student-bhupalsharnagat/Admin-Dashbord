@@ -337,6 +337,9 @@ export interface WhiteLabelConfig {
   risk_disclosure_url?: string;
   disclaimer_url?: string;
   status?: 'DRAFT' | 'PUBLISHED' | 'ARCHIVED';
+  sync_status?: 'SYNCED' | 'FAILED' | 'PENDING';
+  last_published_at?: string;
+  last_published_by?: string;
   version?: number;
   created_at?: string;
   updated_at?: string;
