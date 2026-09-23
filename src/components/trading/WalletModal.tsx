@@ -155,6 +155,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
         <div className="flex border-b border-slate-200 dark:border-[#1A2638] px-5 pt-2">
           <button
             type="button"
+            id="wallet-tab-deposit-btn"
             onClick={() => setActiveTab('DEPOSIT')}
             className={`pb-2.5 px-4 text-xs font-bold border-b-2 transition-all cursor-pointer ${
               activeTab === 'DEPOSIT'
@@ -166,6 +167,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
           </button>
           <button
             type="button"
+            id="wallet-tab-withdraw-btn"
             onClick={() => setActiveTab('WITHDRAW')}
             className={`pb-2.5 px-4 text-xs font-bold border-b-2 transition-all cursor-pointer ${
               activeTab === 'WITHDRAW'
@@ -177,6 +179,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
           </button>
           <button
             type="button"
+            id="wallet-tab-history-btn"
             onClick={() => setActiveTab('TRANSACTIONS')}
             className={`pb-2.5 px-4 text-xs font-bold border-b-2 transition-all cursor-pointer ${
               activeTab === 'TRANSACTIONS'
@@ -275,6 +278,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
 
               <button
                 type="submit"
+                id="wallet-deposit-submit-btn"
                 disabled={isProcessing}
                 className="w-full py-3 rounded-xl bg-amber-500 hover:bg-amber-400 active:scale-98 text-slate-950 font-black text-xs uppercase tracking-wider shadow-md transition-all cursor-pointer flex items-center justify-center gap-1.5"
               >
@@ -328,6 +332,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
 
               <button
                 type="submit"
+                id="wallet-withdraw-submit-btn"
                 disabled={isProcessing}
                 className="w-full py-3 rounded-xl bg-emerald-500 hover:bg-emerald-600 active:scale-98 text-white font-black text-xs uppercase tracking-wider shadow-md transition-all cursor-pointer flex items-center justify-center gap-1.5"
               >

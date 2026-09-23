@@ -11,7 +11,9 @@ import {
   Wallet,
   Bell,
   HelpCircle,
-  ChevronDown
+  ChevronDown,
+  Shield,
+  LayoutDashboard
 } from 'lucide-react';
 
 export type TradingTabKey = 'watchlist' | 'orders' | 'portfolio' | 'history' | 'profile';
@@ -30,6 +32,8 @@ interface TradingHeaderProps {
   onOpenWallet: () => void;
   onOpenNotifications: () => void;
   onOpenTour: () => void;
+  onOpenCentralControls?: () => void;
+  onReturnToAdmin?: () => void;
   clientInitials?: string;
   clientFullName?: string;
 }
@@ -48,6 +52,8 @@ export const TradingHeader: React.FC<TradingHeaderProps> = ({
   onOpenWallet,
   onOpenNotifications,
   onOpenTour,
+  onOpenCentralControls,
+  onReturnToAdmin,
   clientInitials = 'DT',
   clientFullName = 'Demo Trader'
 }) => {
@@ -170,8 +176,36 @@ export const TradingHeader: React.FC<TradingHeaderProps> = ({
           </button>
         </nav>
 
-        {/* Right side utility icons & buttons matching screenshot */}
-        <div className="flex items-center gap-2 sm:gap-2.5">
+        {/* Right side utility icons & buttons */}
+        <div className="flex items-center gap-1.5 sm:gap-2.5">
+          {/* Central Admin Switcher (If accessible) */}
+          {onReturnToAdmin && (
+            <button
+              type="button"
+              id="header-admin-panel-btn"
+              onClick={onReturnToAdmin}
+              className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-blue-600/15 hover:bg-blue-600/25 border border-blue-500/30 text-blue-400 hover:text-blue-300 font-bold text-xs transition-colors cursor-pointer"
+              title="Return to Central Admin Dashboard"
+            >
+              <LayoutDashboard className="w-3.5 h-3.5 text-blue-400" />
+              <span>Admin Panel</span>
+            </button>
+          )}
+
+          {/* Central Controls */}
+          {onOpenCentralControls && (
+            <button
+              type="button"
+              id="header-central-controls-btn"
+              onClick={onOpenCentralControls}
+              className="px-2.5 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-500 font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+              title="Central Policy & Risk Controls"
+            >
+              <Shield className="w-3.5 h-3.5 text-amber-500" />
+              <span className="hidden md:inline">Central Controls</span>
+            </button>
+          )}
+
           {/* Theme toggle */}
           <button
             type="button"
@@ -190,7 +224,7 @@ export const TradingHeader: React.FC<TradingHeaderProps> = ({
               type="button"
               id="header-lang-btn"
               onClick={() => setLangDropdownOpen(!langDropdownOpen)}
-              className="px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-[#0E1626] dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700/60 text-slate-700 dark:text-slate-300 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer active:scale-95"
+              className="px-2 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-[#0E1626] dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700/60 text-slate-700 dark:text-slate-300 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer active:scale-95"
             >
               <Globe className="w-3.5 h-3.5 text-amber-500" />
               <span className="hidden sm:inline">{selectedLanguage}</span>
@@ -223,11 +257,11 @@ export const TradingHeader: React.FC<TradingHeaderProps> = ({
             type="button"
             id="header-wallet-btn"
             onClick={onOpenWallet}
-            className="px-3 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-600 dark:text-amber-400 hover:text-amber-700 dark:hover:text-amber-300 font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs active:scale-95"
+            className="px-2.5 sm:px-3 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-600 dark:text-amber-400 hover:text-amber-700 dark:hover:text-amber-300 font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs active:scale-95"
             title="Open Wallet & Manage Funds"
           >
             <Wallet className="w-3.5 h-3.5" />
-            <span>Wallet</span>
+            <span className="hidden sm:inline">Wallet</span>
           </button>
 
           {/* Notifications Bell */}

@@ -34,6 +34,12 @@ import {
   CentralControlsModal
 } from '../components/trading/CentralControlsModal';
 import {
+  SupportTicketsModal
+} from '../components/trading/SupportTicketsModal';
+import {
+  TourModal
+} from '../components/trading/TourModal';
+import {
   TradingOrdersView
 } from '../components/trading/TradingOrdersView';
 import {
@@ -153,6 +159,7 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
   const [centralControlsOpen, setCentralControlsOpen] = useState(false);
   const [tourModalOpen, setTourModalOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [ticketsModalOpen, setTicketsModalOpen] = useState(false);
 
   // Sync dark class on document
   useEffect(() => {
@@ -405,6 +412,8 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
         onOpenWallet={() => setWalletModalOpen(true)}
         onOpenNotifications={() => setNotificationsOpen(true)}
         onOpenTour={() => setTourModalOpen(true)}
+        onOpenCentralControls={() => setCentralControlsOpen(true)}
+        onReturnToAdmin={onReturnToAdmin}
         clientInitials={client.initials}
         clientFullName={client.fullName}
       />
@@ -523,6 +532,7 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
             onOpenWallet={() => setWalletModalOpen(true)}
             onOpenNotifications={() => setNotificationsOpen(true)}
             onOpenTour={() => setTourModalOpen(true)}
+            onOpenTickets={() => setTicketsModalOpen(true)}
           />
         )}
       </main>
@@ -605,44 +615,20 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
           onNotify?.('Tenant platform configuration updated.', 'success');
         }}
         onResetDemoData={handleResetDemoData}
+        onReturnToAdmin={onReturnToAdmin}
       />
 
       {/* Quick Tour Modal */}
-      {tourModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xs select-none animate-in fade-in">
-          <div className="w-full max-w-lg bg-white dark:bg-[#0C1422] border border-slate-200 dark:border-[#1E2E44] rounded-2xl shadow-2xl p-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <HelpCircle className="w-5 h-5 text-amber-500" />
-                <h3 className="text-base font-black text-slate-900 dark:text-white">
-                  Welcome to {branding.tenantName}
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setTourModalOpen(false)}
-                className="text-slate-400 hover:text-white"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="text-xs text-slate-400 space-y-2.5">
-              <p>• <strong>Watchlist:</strong> Search and select multi-asset instruments across Commodity (Gold, Silver, Crude), Equities (NIFTY, Reliance), Crypto (BTC), and Forex.</p>
-              <p>• <strong>Spotlight Terminal:</strong> View live 24h range, bid/ask depth, and execute 1-click orders directly via ⚡ BUY / ⚡ SELL.</p>
-              <p>• <strong>Technical Charts:</strong> Interactive candlestick charts with customizable timeframes and order execution.</p>
-              <p>• <strong>Wallet & Margin:</strong> Manage deposits via UPI / NetBanking and request instant 24/7 withdrawals.</p>
-              <p>• <strong>Multi-Tenant:</strong> Switch between broker branding or adjust platform parameters in Central Controls.</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setTourModalOpen(false)}
-              className="w-full py-2.5 rounded-xl bg-amber-500 text-slate-950 font-black text-xs cursor-pointer"
-            >
-              Start Trading
-            </button>
-          </div>
-        </div>
-      )}
+      <TourModal
+        isOpen={tourModalOpen}
+        onClose={() => setTourModalOpen(false)}
+      />
+
+      {/* Support & Compliance Tickets Modal */}
+      <SupportTicketsModal
+        isOpen={ticketsModalOpen}
+        onClose={() => setTicketsModalOpen(false)}
+      />
 
       {/* Notifications Drawer */}
       {notificationsOpen && (

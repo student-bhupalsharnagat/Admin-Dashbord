@@ -2412,6 +2412,424 @@ async function startServer() {
   });
 
   // ----------------------------------------------------
+  // DEMO QUICK-ACCESS & TRADING PLATFORM API ENDPOINTS
+  // ----------------------------------------------------
+
+  // 1-Click Demo Login Endpoint
+  app.post('/api/auth/demo', async (req, res) => {
+    try {
+      const { role = 'CLIENT' } = req.body;
+      const isClient = role === 'CLIENT';
+      const email = isClient ? 'client@alphaprime.com' : 'admin@platform.com';
+      const name = isClient ? 'Demo Trader' : 'Admin John';
+      const tenantId = isClient ? 'TNT-001' : null;
+      const tenantName = isClient ? 'VERTEX Trading' : 'All Tenants (Global Scope)';
+      const clientCode = isClient ? 'vtx123' : undefined;
+
+      const ipAddress = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
+      const userAgent = (req.headers['user-agent'] as string) || 'Demo Session';
+
+      // Find or create the demo user record
+      let userRes = await query('SELECT * FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1', [email]);
+      let userRecord = userRes.rows[0];
+
+      if (!userRecord) {
+        const passwordHash = await hashPassword('password123');
+        const newUserId = isClient ? 'usr_demo_client_1' : 'usr_demo_admin_1';
+        await query(
+          `INSERT INTO users (
+            id, tenant_id, name, email, role, status, password_hash,
+            phone, hierarchy_level, hierarchy_id, is_suspended, created_at, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, 'ACTIVE', $6, '+91 98765 43210', $7, $8, false, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          ON CONFLICT (id) DO UPDATE SET status = 'ACTIVE'`,
+          [
+            newUserId,
+            tenantId,
+            name,
+            email,
+            role,
+            passwordHash,
+            isClient ? 'CLIENT' : 'PLATFORM',
+            tenantId
+          ]
+        );
+        userRes = await query('SELECT * FROM users WHERE id = $1 LIMIT 1', [newUserId]);
+        userRecord = userRes.rows[0];
+      }
+
+      const { token, sessionId, expiresAt } = await createAuthenticatedSession({
+        userId: userRecord.id,
+        tenantId: userRecord.tenant_id,
+        userName: userRecord.name,
+        role: userRecord.role as UserRole,
+        hierarchyLevel: (userRecord.hierarchy_level as HierarchyLevel) || (userRecord.tenant_id ? 'TENANT' : 'PLATFORM'),
+        hierarchyId: userRecord.hierarchy_id,
+        email: userRecord.email,
+        ipAddress,
+        device: userAgent.substring(0, 128)
+      });
+
+      res.cookie('tradepro_session', token, {
+        httpOnly: true,
+        secure: true,
+        sameSite: 'none',
+        maxAge: 24 * 60 * 60 * 1000
+      });
+
+      const permissions = await getPermissionsForRole(userRecord.role as UserRole);
+
+      res.json({
+        success: true,
+        token,
+        user: {
+          id: userRecord.id,
+          name: userRecord.name,
+          email: userRecord.email,
+          role: userRecord.role,
+          tenant_id: userRecord.tenant_id,
+          tenant_name: tenantName,
+          client_code: clientCode || (userRecord as any).client_code || 'vtx123',
+          hierarchy_level: userRecord.hierarchy_level,
+          hierarchy_id: userRecord.hierarchy_id,
+          status: userRecord.status,
+          permissions
+        },
+        sessionId,
+        expiresAt
+      });
+    } catch (err: any) {
+      console.error('[Auth API] Demo login exception:', err);
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message });
+    }
+  });
+
+  // Trading Memory Store
+  let tradingWalletState = {
+    availableBalance: 897804.97,
+    usedMargin: 100308.0,
+    todayPnL: 252227.0,
+    totalPnL: 381321.15,
+    marginCoverageRatio: 89.2
+  };
+
+  let tradingPositionsState = [
+    {
+      id: 'pos-1',
+      symbol: 'GOLD FUT',
+      name: 'Gold Mini Futures 100G',
+      side: 'BUY',
+      productType: 'INTRADAY',
+      lots: 2,
+      quantity: 200,
+      buyAvgPrice: 157366.34,
+      currentPrice: 158496.61,
+      unrealizedPnL: 226054.0,
+      pnlPercent: 0.72,
+      marginUsed: 62808.0,
+      entryTime: '09:45 AM'
+    },
+    {
+      id: 'pos-2',
+      symbol: 'CRUDE OIL FUT',
+      name: 'Crude Oil Futures',
+      side: 'BUY',
+      productType: 'HOLDING',
+      lots: 5,
+      quantity: 500,
+      buyAvgPrice: 6132.0,
+      currentPrice: 6184.0,
+      unrealizedPnL: 26000.0,
+      pnlPercent: 0.85,
+      marginUsed: 37500.0,
+      entryTime: '10:12 AM'
+    }
+  ];
+
+  let tradingOrdersState = [
+    {
+      id: 'ORD-90124',
+      symbol: 'GOLD FUT',
+      name: 'Gold Mini Futures 100G',
+      side: 'BUY',
+      productType: 'INTRADAY',
+      orderType: 'MARKET',
+      lots: 2,
+      quantity: 200,
+      price: 157366.34,
+      triggerPrice: 0,
+      status: 'EXECUTED',
+      placedAt: '22 Sep 2026, 09:45:12 AM',
+      filledQuantity: 200
+    },
+    {
+      id: 'ORD-90125',
+      symbol: 'CRUDE OIL FUT',
+      name: 'Crude Oil Futures',
+      side: 'BUY',
+      productType: 'HOLDING',
+      orderType: 'LIMIT',
+      lots: 5,
+      quantity: 500,
+      price: 6132.0,
+      triggerPrice: 0,
+      status: 'EXECUTED',
+      placedAt: '22 Sep 2026, 10:12:44 AM',
+      filledQuantity: 500
+    },
+    {
+      id: 'ORD-90126',
+      symbol: 'SILVER FUT',
+      name: 'Silver Futures',
+      side: 'BUY',
+      productType: 'INTRADAY',
+      orderType: 'LIMIT',
+      lots: 1,
+      quantity: 100,
+      price: 2360.0,
+      triggerPrice: 0,
+      status: 'OPEN',
+      placedAt: '22 Sep 2026, 10:45:10 AM',
+      filledQuantity: 0
+    }
+  ];
+
+  let tradingTicketsState = [
+    {
+      id: 'TCK-8812',
+      category: 'Trading & Orders',
+      priority: 'HIGH',
+      subject: 'Order execution rate query on GOLD FUT Intraday',
+      status: 'OPEN',
+      createdAt: '22 Sep 2026, 11:15 AM',
+      lastUpdate: '22 Sep 2026, 11:20 AM',
+      messages: [
+        {
+          id: 'MSG-1',
+          sender: 'CLIENT',
+          senderName: 'Demo Trader',
+          message: 'Hello Support, I noticed an execution variance of 2 ticks on my market buy order for GOLD FUT. Could you please check the exchange timestamp?',
+          timestamp: '22 Sep 2026, 11:15 AM'
+        },
+        {
+          id: 'MSG-2',
+          sender: 'SUPPORT',
+          senderName: 'VERTEX Compliance Desk',
+          message: 'Hi Demo Trader, our surveillance team is inspecting the millisecond order matching log for tick variance. We will update this ticket shortly.',
+          timestamp: '22 Sep 2026, 11:20 AM'
+        }
+      ]
+    }
+  ];
+
+  // GET /api/trading/portfolio
+  app.get('/api/trading/portfolio', (req, res) => {
+    res.json({
+      success: true,
+      wallet: tradingWalletState,
+      positions: tradingPositionsState
+    });
+  });
+
+  // GET /api/trading/orders
+  app.get(['/api/trading/orders', '/api/trading/order'], (req, res) => {
+    res.json({
+      success: true,
+      orders: tradingOrdersState
+    });
+  });
+
+  // POST /api/trading/order
+  app.post(['/api/trading/order', '/api/trading/orders'], (req, res) => {
+    try {
+      const {
+        symbol,
+        name = symbol,
+        side = 'BUY',
+        productType = 'INTRADAY',
+        orderType = 'MARKET',
+        lots = 1,
+        quantity = 100,
+        price = 1000,
+        triggerPrice = 0
+      } = req.body;
+
+      const orderId = `ORD-${Math.floor(10000 + Math.random() * 90000)}`;
+      const requiredMargin = Number(price) * Number(quantity) * (productType === 'INTRADAY' ? 0.2 : 1.0);
+
+      if (requiredMargin > tradingWalletState.availableBalance) {
+        return res.status(400).json({
+          success: false,
+          error: 'INSUFFICIENT_MARGIN',
+          message: `Insufficient margin. Required ₹${requiredMargin.toFixed(2)}, Available ₹${tradingWalletState.availableBalance.toFixed(2)}`
+        });
+      }
+
+      const newOrder = {
+        id: orderId,
+        symbol,
+        name,
+        side,
+        productType,
+        orderType,
+        lots: Number(lots),
+        quantity: Number(quantity),
+        price: Number(price),
+        triggerPrice: Number(triggerPrice),
+        status: orderType === 'MARKET' ? 'EXECUTED' : 'OPEN',
+        placedAt: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        filledQuantity: orderType === 'MARKET' ? Number(quantity) : 0
+      };
+
+      tradingOrdersState = [newOrder, ...tradingOrdersState];
+
+      if (orderType === 'MARKET') {
+        tradingWalletState.availableBalance -= requiredMargin;
+        tradingWalletState.usedMargin += requiredMargin;
+
+        const newPos = {
+          id: `pos-${Date.now()}`,
+          symbol,
+          name,
+          side,
+          productType,
+          lots: Number(lots),
+          quantity: Number(quantity),
+          buyAvgPrice: Number(price),
+          currentPrice: Number(price),
+          unrealizedPnL: 0,
+          pnlPercent: 0,
+          marginUsed: requiredMargin,
+          entryTime: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+        };
+        tradingPositionsState = [newPos, ...tradingPositionsState];
+      }
+
+      res.status(201).json({
+        success: true,
+        message: `Order ${orderId} placed successfully.`,
+        order: newOrder,
+        wallet: tradingWalletState
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // POST /api/trading/orders/:id/cancel
+  app.post('/api/trading/orders/:id/cancel', (req, res) => {
+    const { id } = req.params;
+    tradingOrdersState = tradingOrdersState.map(o => o.id === id ? { ...o, status: 'CANCELLED' } : o);
+    res.json({ success: true, message: `Order ${id} cancelled.` });
+  });
+
+  // POST /api/trading/positions/close
+  app.post('/api/trading/positions/close', (req, res) => {
+    const { positionId } = req.body;
+    const target = tradingPositionsState.find(p => p.id === positionId);
+    if (!target) {
+      return res.status(404).json({ success: false, error: 'Position not found' });
+    }
+
+    tradingWalletState.availableBalance += target.marginUsed + target.unrealizedPnL;
+    tradingWalletState.usedMargin -= target.marginUsed;
+    tradingWalletState.totalPnL += target.unrealizedPnL;
+
+    tradingPositionsState = tradingPositionsState.filter(p => p.id !== positionId);
+
+    res.json({
+      success: true,
+      message: `Position for ${target.symbol} closed.`,
+      wallet: tradingWalletState,
+      positions: tradingPositionsState
+    });
+  });
+
+  // POST /api/trading/positions/close-all
+  app.post('/api/trading/positions/close-all', (req, res) => {
+    let releasedMargin = 0;
+    let totalPnLRealized = 0;
+
+    tradingPositionsState.forEach(p => {
+      releasedMargin += p.marginUsed;
+      totalPnLRealized += p.unrealizedPnL;
+    });
+
+    tradingWalletState.availableBalance += releasedMargin + totalPnLRealized;
+    tradingWalletState.usedMargin = 0;
+    tradingWalletState.totalPnL += totalPnLRealized;
+    tradingPositionsState = [];
+
+    res.json({
+      success: true,
+      message: 'All open positions squared off.',
+      wallet: tradingWalletState,
+      positions: []
+    });
+  });
+
+  // POST /api/trading/funds/deposit
+  app.post('/api/trading/funds/deposit', (req, res) => {
+    const { amount = 50000, method = 'UPI' } = req.body;
+    const numAmount = Number(amount);
+    tradingWalletState.availableBalance += numAmount;
+
+    res.json({
+      success: true,
+      message: `₹${numAmount.toLocaleString()} successfully credited via ${method}.`,
+      wallet: tradingWalletState
+    });
+  });
+
+  // POST /api/trading/funds/withdraw
+  app.post('/api/trading/funds/withdraw', (req, res) => {
+    const { amount = 10000 } = req.body;
+    const numAmount = Number(amount);
+    if (numAmount > tradingWalletState.availableBalance) {
+      return res.status(400).json({ success: false, error: 'INSUFFICIENT_FUNDS' });
+    }
+    tradingWalletState.availableBalance -= numAmount;
+
+    res.json({
+      success: true,
+      message: `₹${numAmount.toLocaleString()} withdrawal submitted via IMPS.`,
+      wallet: tradingWalletState
+    });
+  });
+
+  // GET /api/trading/tickets
+  app.get('/api/trading/tickets', (req, res) => {
+    res.json({
+      success: true,
+      tickets: tradingTicketsState
+    });
+  });
+
+  // POST /api/trading/tickets
+  app.post('/api/trading/tickets', (req, res) => {
+    const { category, priority, subject, message } = req.body;
+    const newTicket = {
+      id: `TCK-${Math.floor(1000 + Math.random() * 9000)}`,
+      category: category || 'Trading & Orders',
+      priority: priority || 'MEDIUM',
+      subject: subject || 'Support request',
+      status: 'OPEN',
+      createdAt: 'Just now',
+      lastUpdate: 'Just now',
+      messages: [
+        {
+          id: `MSG-${Date.now()}`,
+          sender: 'CLIENT',
+          senderName: 'Demo Trader',
+          message: message || '',
+          timestamp: 'Just now'
+        }
+      ]
+    };
+    tradingTicketsState = [newTicket, ...tradingTicketsState];
+    res.status(201).json({ success: true, ticket: newTicket });
+  });
+
+  // ----------------------------------------------------
   // Vite Integration (Dev Middleware & Production Static)
   // ----------------------------------------------------
   if (process.env.NODE_ENV !== 'production') {

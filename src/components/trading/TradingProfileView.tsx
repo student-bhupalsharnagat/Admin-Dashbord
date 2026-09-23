@@ -24,6 +24,7 @@ interface TradingProfileViewProps {
   onOpenWallet?: () => void;
   onOpenNotifications?: () => void;
   onOpenTour?: () => void;
+  onOpenTickets?: () => void;
 }
 
 export const TradingProfileView: React.FC<TradingProfileViewProps> = ({
@@ -32,7 +33,8 @@ export const TradingProfileView: React.FC<TradingProfileViewProps> = ({
   onLogout,
   onOpenWallet,
   onOpenNotifications,
-  onOpenTour
+  onOpenTour,
+  onOpenTickets
 }) => {
   const [activeSection, setActiveSection] = useState<string | null>(null);
 
@@ -194,7 +196,13 @@ export const TradingProfileView: React.FC<TradingProfileViewProps> = ({
 
         {/* Support Tickets */}
         <div
-          onClick={() => setActiveSection(activeSection === 'support' ? null : 'support')}
+          onClick={() => {
+            if (onOpenTickets) {
+              onOpenTickets();
+            } else {
+              setActiveSection(activeSection === 'support' ? null : 'support');
+            }
+          }}
           className="p-4 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-[#0E1626] transition-colors cursor-pointer"
         >
           <div className="flex items-center gap-3">
