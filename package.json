@@ -1,3 +1,4 @@
+
 {
   "name": "react-example",
   "private": true,
@@ -5,7 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --sourcemap --outfile=dist/server.cjs",
+    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --external:lightningcss --external:esbuild --sourcemap --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
     "preview": "vite preview",
     "db:migrate": "tsx server/db/migrate.ts",
