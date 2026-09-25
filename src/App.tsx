@@ -162,30 +162,27 @@ export default function App() {
             if (data.user.tenant_id && data.user.tenant_id !== 'GLOBAL') {
               setSelectedTenantScope(data.user.tenant_id);
             }
+            if (data.user.role === 'CLIENT') {
+              const clientInfo = {
+                id: data.user.id,
+                userId: data.user.client_code || data.user.id || 'vtx123',
+                fullName: data.user.name || 'Demo Trader',
+                email: data.user.email,
+                tenantId: data.user.tenant_id,
+                tenantName: data.user.tenant_name || 'VERTEX Trading',
+                tenantCode: 'VTX',
+                initials: data.user.name
+                  ? data.user.name.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase()
+                  : 'DT'
+              };
+              setActiveTradingClient(clientInfo);
+              setAppMode('trading-platform');
+            }
             loadDashboardData();
             loadHierarchyData();
           }
-        } else {
-          // If no active cookie session exists yet, default to initial Super Admin session for immediate access
-          const loginRes = await fetch('/api/auth/login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              email: 'admin@platform.com',
-              password: 'password123'
-            }),
-            credentials: 'include'
-          });
-          if (loginRes.ok) {
-            const loginData = await loginRes.json();
-            if (loginData.user && isMounted) {
-              setCurrentUser(loginData.user);
-              loadDashboardData();
-              loadHierarchyData();
-            }
-          } else if (isMounted) {
-            setCurrentUser(null);
-          }
+        } else if (isMounted) {
+          setCurrentUser(null);
         }
       } catch (err) {
         console.warn('Authentication session check error:', err);
@@ -315,13 +312,14 @@ export default function App() {
     setHierarchyError(null);
     try {
       const scopeParam = selectedTenantScope ? `?tenantId=${selectedTenantScope}` : '';
-      const [mRes, bRes, sbRes, cRes, kRes, tRes] = await Promise.all([
+      const [mRes, bRes, sbRes, cRes, kRes, tRes, tnRes] = await Promise.all([
         fetch(`/api/admin/masters${scopeParam}`, { credentials: 'include' }),
         fetch(`/api/admin/brokers${scopeParam}`, { credentials: 'include' }),
         fetch(`/api/admin/sub-brokers${scopeParam}`, { credentials: 'include' }),
         fetch(`/api/admin/clients${scopeParam}`, { credentials: 'include' }),
         fetch(`/api/admin/kyc${scopeParam}`, { credentials: 'include' }),
-        fetch(`/api/admin/trades${scopeParam}`, { credentials: 'include' })
+        fetch(`/api/admin/trades${scopeParam}`, { credentials: 'include' }),
+        fetch('/api/admin/tenants', { credentials: 'include' })
       ]);
 
       if (mRes.ok) setMasters(await mRes.json());
@@ -330,6 +328,10 @@ export default function App() {
       if (cRes.ok) setClients(await cRes.json());
       if (kRes.ok) setKycRecords(await kRes.json());
       if (tRes.ok) setTrades(await tRes.json());
+      if (tnRes.ok) {
+        const tnList = await tnRes.json();
+        if (Array.isArray(tnList) && tnList.length > 0) setTenants(tnList);
+      }
     } catch (err: any) {
       console.warn('Hierarchy API sync warning:', err);
       setHierarchyError('Failed to load hierarchy entities from central API');
@@ -347,6 +349,84 @@ export default function App() {
       loadHierarchyData();
     }
   }, [currentUser?.id, selectedTenantScope, loadDashboardData, loadHierarchyData]);
+
+  // Real-time EventSource listener for S2S events from Trading Platform
+  useEffect(() => {
+    if (!currentUser) return;
+    let eventSource: EventSource | null = null;
+    try {
+      eventSource = new EventSource('/api/admin/events/stream');
+      eventSource.onmessage = (e) => {
+        try {
+          const event = JSON.parse(e.data);
+          if (!event || !event.eventType) return;
+
+          switch (event.eventType) {
+            case 'trade.executed':
+              if (event.payload) {
+                const newTrade: Trade = {
+                  id: event.payload.id || `trd_${Date.now()}`,
+                  trade_id: event.payload.tradeId || `TRD-${Date.now()}`,
+                  tenant_id: event.tenantId,
+                  tenant_name: event.payload.tenantName || 'Alpha Prime Capital',
+                  client_id: event.payload.clientId || 'CLI-001',
+                  client_name: event.payload.clientName || 'Live Client',
+                  symbol: event.payload.symbol || 'NIFTY50',
+                  exchange: event.payload.exchange || 'NSE',
+                  side: event.payload.side || 'BUY',
+                  quantity: event.payload.quantity || 1,
+                  price: event.payload.price || 100,
+                  total_value: Number(event.payload.totalValue || (event.payload.price * event.payload.quantity) || 0),
+                  pl: Number(event.payload.pl || 0),
+                  status: 'EXECUTED',
+                  timestamp: event.timestamp || new Date().toISOString()
+                };
+                setTrades(prev => [newTrade, ...prev.slice(0, 99)]);
+                setRecentTrades(prev => [newTrade, ...prev.slice(0, 9)]);
+              }
+              loadDashboardData();
+              break;
+            case 'order.created':
+            case 'order.updated':
+            case 'position.updated':
+              loadDashboardData();
+              break;
+            case 'kyc.updated':
+              if (event.payload?.id && event.payload?.status) {
+                setKycRecords(prev => prev.map(k => k.id === event.payload.id ? { ...k, status: event.payload.status } : k));
+              }
+              break;
+            case 'wallet.updated':
+            case 'client.account_updated':
+              if (event.payload?.clientId) {
+                setClients(prev => prev.map(c => c.id === event.payload.clientId ? { ...c, wallet_balance: event.payload.balance ?? c.wallet_balance } : c));
+              }
+              break;
+            case 'notification.created':
+              if (event.payload?.title) {
+                showToast(`New Notification: ${event.payload.title}`, 'info');
+              }
+              break;
+            case 'tenant.config.updated':
+            case 'tenant.branding.updated':
+            case 'tenant.status.updated':
+              loadHierarchyData();
+              break;
+          }
+        } catch {
+          // ignore parsing error
+        }
+      };
+    } catch (err) {
+      console.warn('Real-time EventSource connection error:', err);
+    }
+
+    return () => {
+      if (eventSource) {
+        eventSource.close();
+      }
+    };
+  }, [currentUser?.id, loadDashboardData, loadHierarchyData]);
 
   // Dynamic breadcrumb generation matching screenshot (e.g. Dashboard > Trades)
   const getBreadcrumbs = () => {
@@ -640,6 +720,7 @@ export default function App() {
       <TradingPlatformView
         initialTenantDomain={activeTradingDomain}
         initialClient={activeTradingClient}
+        isAdmin={currentUser?.role !== 'CLIENT'}
         onReturnToAdmin={currentUser?.role === 'CLIENT' ? handleLogout : () => setAppMode('admin')}
         onNotify={showToast}
       />

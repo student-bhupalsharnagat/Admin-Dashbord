@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Wallet, ArrowDownRight, ArrowUpRight, Copy, Check, ShieldCheck, RefreshCw } from 'lucide-react';
+import { X, Wallet, ArrowDownRight, ArrowUpRight, Copy, Check, ShieldCheck, RefreshCw, QrCode, Building2 } from 'lucide-react';
 import { ClientWallet } from '../../types/trading';
 
 interface WalletModalProps {
@@ -21,7 +21,8 @@ export const WalletModal: React.FC<WalletModalProps> = ({
 
   const [activeTab, setActiveTab] = useState<'DEPOSIT' | 'WITHDRAW' | 'TRANSACTIONS'>('DEPOSIT');
   const [depositAmount, setDepositAmount] = useState('50000');
-  const [depositMethod, setDepositMethod] = useState<'UPI' | 'NETBANKING'>('UPI');
+  const [depositMethod, setDepositMethod] = useState<'UPI' | 'NETBANKING' | 'IMPS'>('UPI');
+  const [showQrCode, setShowQrCode] = useState(false);
   const [withdrawAmount, setWithdrawAmount] = useState('10000');
   const [selectedBank, setSelectedBank] = useState('HDFC Bank •••• 8912');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -200,7 +201,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                 <label className="text-[11px] font-bold text-slate-400 block mb-1.5 uppercase">
                   Deposit Method
                 </label>
-                <div className="grid grid-cols-2 gap-2 bg-slate-100 dark:bg-[#070D18] p-1 rounded-xl border border-slate-200 dark:border-[#162234]">
+                <div className="grid grid-cols-3 gap-2 bg-slate-100 dark:bg-[#070D18] p-1 rounded-xl border border-slate-200 dark:border-[#162234]">
                   <button
                     type="button"
                     onClick={() => setDepositMethod('UPI')}
@@ -208,7 +209,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                       depositMethod === 'UPI' ? 'bg-amber-500 text-slate-950 font-black shadow-xs' : 'text-slate-400'
                     }`}
                   >
-                    UPI Instant (GPay / PhonePe)
+                    UPI Instant
                   </button>
                   <button
                     type="button"
@@ -217,7 +218,16 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                       depositMethod === 'NETBANKING' ? 'bg-amber-500 text-slate-950 font-black shadow-xs' : 'text-slate-400'
                     }`}
                   >
-                    Net Banking (Instant)
+                    Net Banking
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDepositMethod('IMPS')}
+                    className={`py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      depositMethod === 'IMPS' ? 'bg-amber-500 text-slate-950 font-black shadow-xs' : 'text-slate-400'
+                    }`}
+                  >
+                    IMPS / NEFT
                   </button>
                 </div>
               </div>
@@ -253,7 +263,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
               </div>
 
               {depositMethod === 'UPI' ? (
-                <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-[#09111D] border border-slate-200 dark:border-[#162234] space-y-2 text-xs">
+                <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-[#09111D] border border-slate-200 dark:border-[#162234] space-y-3 text-xs">
                   <div className="flex items-center justify-between">
                     <span className="text-slate-400">Merchant VPA:</span>
                     <button
@@ -265,14 +275,80 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                       {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                     </button>
                   </div>
-                  <p className="text-[11px] text-slate-500">
-                    Scan or transfer to this verified trading merchant VPA for zero-fee instant deposit.
+
+                  <div className="flex items-center justify-between pt-1">
+                    <span className="text-[11px] text-slate-400">Zero-fee instant credit via any UPI app</span>
+                    <button
+                      type="button"
+                      onClick={() => setShowQrCode(!showQrCode)}
+                      className="text-xs text-amber-500 font-bold flex items-center gap-1 hover:underline cursor-pointer"
+                    >
+                      <QrCode className="w-3.5 h-3.5" />
+                      <span>{showQrCode ? 'Hide QR Code' : 'Show UPI QR Code'}</span>
+                    </button>
+                  </div>
+
+                  {showQrCode && (
+                    <div className="p-4 rounded-xl bg-white dark:bg-[#0B111C] border border-slate-200 dark:border-[#1A2638] flex flex-col items-center text-center space-y-2 animate-in fade-in">
+                      <div className="p-3 bg-white rounded-xl shadow-md border border-slate-200">
+                        {/* Simulated high-res crisp UPI QR Code */}
+                        <div className="w-36 h-36 bg-slate-900 p-2 rounded-lg flex flex-col justify-between">
+                          <div className="flex justify-between">
+                            <div className="w-9 h-9 border-4 border-white rounded-sm flex items-center justify-center">
+                              <div className="w-4 h-4 bg-white" />
+                            </div>
+                            <div className="w-9 h-9 border-4 border-white rounded-sm flex items-center justify-center">
+                              <div className="w-4 h-4 bg-white" />
+                            </div>
+                          </div>
+                          <div className="text-center text-[10px] text-amber-400 font-mono font-black tracking-widest">
+                            UPI PAY
+                          </div>
+                          <div className="flex justify-between">
+                            <div className="w-9 h-9 border-4 border-white rounded-sm flex items-center justify-center">
+                              <div className="w-4 h-4 bg-white" />
+                            </div>
+                            <div className="w-6 h-6 bg-white/30 rounded-sm self-end" />
+                          </div>
+                        </div>
+                      </div>
+                      <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                        Amount: <strong className="text-slate-900 dark:text-white">₹{parseInt(depositAmount || '0').toLocaleString()}</strong>
+                      </span>
+                      <p className="text-[10px] text-slate-400">
+                        Scan with GPay, PhonePe, Paytm, or BHIM UPI
+                      </p>
+                    </div>
+                  )}
+                </div>
+              ) : depositMethod === 'NETBANKING' ? (
+                <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-[#09111D] border border-slate-200 dark:border-[#162234] text-xs space-y-2">
+                  <span className="text-slate-400 block font-semibold">Select Net Banking Bank:</span>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    {['HDFC Bank', 'ICICI Bank', 'State Bank of India', 'Axis Bank', 'Kotak Mahindra', 'Yes Bank'].map(b => (
+                      <div key={b} className="p-2 rounded-lg bg-white dark:bg-[#0E1626] border border-slate-200 dark:border-[#1E2E44] text-center font-bold text-[11px] text-slate-700 dark:text-slate-200">
+                        {b}
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-slate-500 pt-1">
+                    Instant 24/7 payment gateway settlement directly into your available trading margin.
                   </p>
                 </div>
               ) : (
-                <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-[#09111D] border border-slate-200 dark:border-[#162234] text-xs space-y-1">
-                  <span className="text-slate-400 block font-semibold">Supported Banks:</span>
-                  <span className="text-slate-300">HDFC Bank, ICICI Bank, State Bank of India, Axis Bank, Kotak Mahindra.</span>
+                <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-[#09111D] border border-slate-200 dark:border-[#162234] text-xs space-y-2 font-mono">
+                  <div className="flex justify-between py-1 border-b border-slate-200 dark:border-[#162234]">
+                    <span className="text-slate-400 font-sans">Beneficiary Name</span>
+                    <strong className="text-slate-900 dark:text-white">VERTEX CLEARING CORP</strong>
+                  </div>
+                  <div className="flex justify-between py-1 border-b border-slate-200 dark:border-[#162234]">
+                    <span className="text-slate-400 font-sans">Virtual Account</span>
+                    <strong className="text-amber-500">VTX9021481902</strong>
+                  </div>
+                  <div className="flex justify-between py-1">
+                    <span className="text-slate-400 font-sans">IFSC Code</span>
+                    <strong className="text-slate-900 dark:text-white">HDFC0000240</strong>
+                  </div>
                 </div>
               )}
 

@@ -274,6 +274,39 @@ export class TradingPlatformClient {
           };
         }
 
+        // If 404 on canonical /v1 path, attempt fallback to unversioned /api/internal/ path
+        if (response.status === 404 && options.path.startsWith('/api/internal/v1/')) {
+          const fallbackPath = options.path.replace('/api/internal/v1/', '/api/internal/');
+          const fallbackSig = this.generateSignature(timestamp, options.method, fallbackPath, bodyString);
+          const fallbackHeaders = {
+            ...headers,
+            'X-Signature-SHA256': fallbackSig,
+            'X-HMAC-Signature': fallbackSig
+          };
+          try {
+            const fallbackRes = await fetch(`${this.baseUrl}${fallbackPath}`, {
+              method: options.method,
+              headers: fallbackHeaders,
+              body: ['POST', 'PUT', 'PATCH'].includes(options.method) ? bodyString : undefined,
+              signal: controller.signal
+            });
+            if (fallbackRes.ok) {
+              const data = (await fallbackRes.json().catch(() => ({}))) as T;
+              this.recordSuccess();
+              return {
+                success: true,
+                statusCode: fallbackRes.status,
+                data,
+                correlationId,
+                latencyMs: Date.now() - startTime,
+                fromFallback: true
+              };
+            }
+          } catch {
+            // Ignore fallback network error and proceed
+          }
+        }
+
         // 4xx errors are client errors (do not retry, record as rejection)
         if (response.status >= 400 && response.status < 500) {
           const errBody = await response.json().catch(() => ({}));
@@ -336,13 +369,16 @@ export class TradingPlatformClient {
       operational_limits?: any;
       subscription?: any;
       domains?: string[];
-      config_version: number;
+      maintenance_mode?: boolean;
+      maintenance_message?: string;
+      config_version?: number;
+      [key: string]: any;
     },
-    options?: { actor?: string; correlationId?: string }
+    options?: { actor?: string; correlationId?: string; reason?: string }
   ): Promise<S2SResponse> {
     return this.request({
       method: 'POST',
-      path: `/api/internal/tenants/${tenantId}/sync`,
+      path: `/api/internal/v1/tenants/${tenantId}/sync`,
       tenantId,
       body: {
         tenantId,
@@ -366,7 +402,7 @@ export class TradingPlatformClient {
   ): Promise<S2SResponse> {
     return this.request({
       method: 'POST',
-      path: `/api/internal/white-label/${tenantId}/sync`,
+      path: `/api/internal/v1/white-label/${tenantId}/sync`,
       tenantId,
       body: {
         tenantId,
@@ -392,7 +428,7 @@ export class TradingPlatformClient {
   ): Promise<S2SResponse> {
     return this.request({
       method: 'POST',
-      path: '/api/internal/emergency/trading',
+      path: '/api/internal/v1/emergency/trading',
       tenantId,
       body: { active, actor, reason: reason || 'Emergency trading action', tenantId },
       idempotencyKey: `emg_trade_${Date.now()}_${active}`,
@@ -412,7 +448,7 @@ export class TradingPlatformClient {
   ): Promise<S2SResponse> {
     return this.request({
       method: 'POST',
-      path: '/api/internal/emergency/kill-switch',
+      path: '/api/internal/v1/emergency/kill-switch',
       tenantId,
       body: { action, actor, reason: reason || 'Emergency kill-switch action', tenantId },
       idempotencyKey: `emg_kill_${action}_${Date.now()}`,
@@ -431,7 +467,7 @@ export class TradingPlatformClient {
   ): Promise<S2SResponse> {
     return this.request({
       method: 'POST',
-      path: '/api/internal/emergency/registrations',
+      path: '/api/internal/v1/emergency/registrations',
       tenantId,
       body: { enabled, actor, tenantId },
       idempotencyKey: `emg_reg_${enabled}_${Date.now()}`,
@@ -450,7 +486,7 @@ export class TradingPlatformClient {
   ): Promise<S2SResponse> {
     return this.request({
       method: 'POST',
-      path: '/api/internal/emergency/api-access',
+      path: '/api/internal/v1/emergency/api-access',
       tenantId,
       body: { enabled, actor, tenantId },
       idempotencyKey: `emg_api_${enabled}_${Date.now()}`,
@@ -474,7 +510,7 @@ export class TradingPlatformClient {
   ): Promise<S2SResponse> {
     return this.request({
       method: 'POST',
-      path: '/api/internal/emergency/freeze',
+      path: '/api/internal/v1/emergency/freeze',
       tenantId: payload.tenantId,
       body: payload,
       idempotencyKey: `emg_frz_${payload.entityType}_${payload.entityId}_${payload.action}`,
@@ -491,7 +527,7 @@ export class TradingPlatformClient {
   ): Promise<S2SResponse> {
     return this.request({
       method: 'POST',
-      path: '/api/internal/emergency/cancel-all-orders',
+      path: '/api/internal/v1/emergency/cancel-all-orders',
       tenantId: payload.tenantId,
       body: payload,
       idempotencyKey: `emg_cancel_all_${payload.tenantId || 'global'}_${Date.now()}`,
@@ -508,7 +544,7 @@ export class TradingPlatformClient {
   ): Promise<S2SResponse> {
     return this.request({
       method: 'POST',
-      path: `/api/internal/emergency/positions/${payload.positionId}/square-off`,
+      path: `/api/internal/v1/emergency/positions/${payload.positionId}/square-off`,
       tenantId: payload.tenantId,
       body: payload,
       idempotencyKey: `emg_sq_${payload.positionId}_${Date.now()}`,
@@ -522,7 +558,7 @@ export class TradingPlatformClient {
   public async getLiveOrders(tenantId?: string): Promise<S2SResponse> {
     return this.request({
       method: 'GET',
-      path: '/api/internal/trading/orders',
+      path: '/api/internal/v1/trading/orders',
       tenantId
     });
   }
@@ -530,7 +566,7 @@ export class TradingPlatformClient {
   public async getLiveTrades(tenantId?: string): Promise<S2SResponse> {
     return this.request({
       method: 'GET',
-      path: '/api/internal/trading/trades',
+      path: '/api/internal/v1/trading/trades',
       tenantId
     });
   }
@@ -538,7 +574,7 @@ export class TradingPlatformClient {
   public async getLivePositions(tenantId?: string): Promise<S2SResponse> {
     return this.request({
       method: 'GET',
-      path: '/api/internal/trading/positions',
+      path: '/api/internal/v1/trading/positions',
       tenantId
     });
   }
@@ -546,7 +582,7 @@ export class TradingPlatformClient {
   public async getLiveRiskSummary(tenantId?: string): Promise<S2SResponse> {
     return this.request({
       method: 'GET',
-      path: '/api/internal/trading/risk-summary',
+      path: '/api/internal/v1/trading/risk-summary',
       tenantId
     });
   }
@@ -557,7 +593,7 @@ export class TradingPlatformClient {
   public async getClientTradingAccount(clientId: string, tenantId?: string): Promise<S2SResponse> {
     return this.request({
       method: 'GET',
-      path: `/api/internal/trading/clients/${clientId}/account`,
+      path: `/api/internal/v1/trading/clients/${clientId}/account`,
       tenantId
     });
   }
@@ -565,7 +601,7 @@ export class TradingPlatformClient {
   public async getClientOrders(clientId: string, tenantId?: string): Promise<S2SResponse> {
     return this.request({
       method: 'GET',
-      path: `/api/internal/trading/clients/${clientId}/orders`,
+      path: `/api/internal/v1/trading/clients/${clientId}/orders`,
       tenantId
     });
   }
@@ -573,7 +609,7 @@ export class TradingPlatformClient {
   public async getClientTrades(clientId: string, tenantId?: string): Promise<S2SResponse> {
     return this.request({
       method: 'GET',
-      path: `/api/internal/trading/clients/${clientId}/trades`,
+      path: `/api/internal/v1/trading/clients/${clientId}/trades`,
       tenantId
     });
   }
@@ -581,7 +617,7 @@ export class TradingPlatformClient {
   public async getClientPositions(clientId: string, tenantId?: string): Promise<S2SResponse> {
     return this.request({
       method: 'GET',
-      path: `/api/internal/trading/clients/${clientId}/positions`,
+      path: `/api/internal/v1/trading/clients/${clientId}/positions`,
       tenantId
     });
   }
@@ -601,7 +637,7 @@ export class TradingPlatformClient {
   }): Promise<S2SResponse> {
     return this.request({
       method: 'POST',
-      path: '/api/internal/trading/clients/sync',
+      path: '/api/internal/v1/trading/clients/sync',
       body: {
         event: 'CLIENT_ACCOUNT_CREATED',
         clientId: data.clientId,
@@ -624,7 +660,7 @@ export class TradingPlatformClient {
   public async checkHealth(): Promise<S2SResponse> {
     return this.request({
       method: 'GET',
-      path: '/api/internal/health',
+      path: '/api/internal/v1/health',
       timeoutMs: 2000,
       retries: 0
     });

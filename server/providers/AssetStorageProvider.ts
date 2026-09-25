@@ -12,6 +12,7 @@ export interface StoredAsset {
   mime_type: string;
   size_bytes: number;
   public_url: string;
+  contentBuffer?: Buffer;
   created_at: string;
 }
 
@@ -83,10 +84,22 @@ export class LocalAssetStorageProvider implements IAssetStorageProvider {
   ): Promise<StoredAsset> {
     const id = `ast-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
     
-    // For local development, if a data URL or valid image URL is passed, we store and serve directly
-    const publicUrl = contentBase64OrUrl.startsWith('data:') || contentBase64OrUrl.startsWith('http')
-      ? contentBase64OrUrl
-      : `data:${mimeType};base64,${contentBase64OrUrl}`;
+    let publicUrl = contentBase64OrUrl;
+    let contentBuffer: Buffer | undefined;
+
+    if (contentBase64OrUrl.startsWith('http://') || contentBase64OrUrl.startsWith('https://')) {
+      publicUrl = contentBase64OrUrl;
+    } else {
+      try {
+        const base64Data = contentBase64OrUrl.includes(';base64,')
+          ? contentBase64OrUrl.split(';base64,')[1]
+          : contentBase64OrUrl;
+        contentBuffer = Buffer.from(base64Data, 'base64');
+        publicUrl = `/api/assets/${id}`;
+      } catch {
+        publicUrl = contentBase64OrUrl;
+      }
+    }
 
     const newAsset: StoredAsset = {
       id,
@@ -94,8 +107,9 @@ export class LocalAssetStorageProvider implements IAssetStorageProvider {
       asset_type: assetType,
       filename,
       mime_type: mimeType,
-      size_bytes: Math.round(contentBase64OrUrl.length * 0.75),
+      size_bytes: contentBuffer ? contentBuffer.length : Math.round(contentBase64OrUrl.length * 0.75),
       public_url: publicUrl,
+      contentBuffer,
       created_at: new Date().toISOString()
     };
 

@@ -35,6 +35,7 @@ export const TradingPortfolioView: React.FC<TradingPortfolioViewProps> = ({
 }) => {
   const [activeSubTab, setActiveSubTab] = useState<'POSITIONS' | 'HOLDINGS'>('POSITIONS');
   const [productFilter, setProductFilter] = useState<'ALL' | 'INTRADAY' | 'HOLDING'>('ALL');
+  const [showExitAllModal, setShowExitAllModal] = useState(false);
 
   // Calculate live MTM stats
   const totalUnrealizedPnL = positions.reduce((acc, p) => acc + p.pnl, 0);
@@ -91,11 +92,7 @@ export const TradingPortfolioView: React.FC<TradingPortfolioViewProps> = ({
             <button
               type="button"
               id="portfolio-exit-all-btn"
-              onClick={() => {
-                if (window.confirm('⚠️ Confirm Square Off: Are you sure you want to Exit ALL open positions at market price?')) {
-                  onSquareOffAll();
-                }
-              }}
+              onClick={() => setShowExitAllModal(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-500 hover:text-rose-400 font-bold text-xs tracking-wider transition-all cursor-pointer"
             >
               <AlertTriangle className="w-3.5 h-3.5" />
@@ -390,6 +387,51 @@ export const TradingPortfolioView: React.FC<TradingPortfolioViewProps> = ({
           })
         )}
       </div>
+
+      {/* Exit All Positions Confirmation Modal */}
+      {showExitAllModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xs select-none animate-in fade-in">
+          <div
+            className="w-full max-w-md bg-white dark:bg-[#0B111C] border border-slate-200 dark:border-[#1E2E44] rounded-2xl shadow-2xl p-6 space-y-4"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="w-12 h-12 rounded-xl bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-rose-500 mx-auto">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+
+            <div className="text-center space-y-1">
+              <h3 className="text-lg font-black text-slate-900 dark:text-white">
+                Square Off All Positions?
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                This will immediately execute market exit orders for all <strong className="text-slate-900 dark:text-white">{positions.length} open position(s)</strong> and realize the net P&L of <strong className={isTotalPos ? 'text-emerald-500' : 'text-rose-500'}>₹{totalUnrealizedPnL.toFixed(2)}</strong>.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowExitAllModal(false)}
+                className="py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-[#152338] dark:hover:bg-[#1E304C] text-slate-700 dark:text-slate-300 font-bold text-xs transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                id="confirm-exit-all-btn"
+                onClick={() => {
+                  onSquareOffAll();
+                  setShowExitAllModal(false);
+                }}
+                className="py-2.5 rounded-xl bg-rose-500 hover:bg-rose-600 active:scale-95 text-white font-bold text-xs shadow-md shadow-rose-500/20 transition-all cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <X className="w-4 h-4 stroke-[2.5]" />
+                <span>Square Off All</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

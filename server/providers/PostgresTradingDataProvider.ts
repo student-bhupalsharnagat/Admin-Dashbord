@@ -1,4 +1,5 @@
 import pg from 'pg';
+import dns from 'dns';
 import {
   ITradingDataProvider,
   EntityStatus
@@ -1048,7 +1049,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     `, [cleanId, cleanId.replace('-', '')]);
 
     const clientRow = clientRes.rows[0];
-    const clientName = clientRow?.name || 'Alexander Hunt';
+    const clientName = clientRow?.name || 'Trader';
     const clientCode = clientRow?.client_code || cleanId;
     const resolvedTenant = clientRow?.tenant_id || tenantId || 'TNT-001';
 
@@ -1072,17 +1073,17 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       // Graceful fallback to computed/local state
     }
 
-    // Compute balances & P&L
-    const rawBalance = parseFloat(clientRow?.balance || '25400');
-    const rawEquity = parseFloat(clientRow?.equity || `${rawBalance}`);
-    const rawMarginUsed = parseFloat(clientRow?.margin_used || '14200');
+    // Compute balances & P&L from real database/S2S values
+    const rawBalance = remoteAccount?.balance !== undefined ? parseFloat(remoteAccount.balance) : parseFloat(clientRow?.balance || '0');
+    const rawEquity = remoteAccount?.equity !== undefined ? parseFloat(remoteAccount.equity) : parseFloat(clientRow?.equity || `${rawBalance}`);
+    const rawMarginUsed = remoteAccount?.marginUsed !== undefined ? parseFloat(remoteAccount.marginUsed) : parseFloat(clientRow?.margin_used || '0');
     const freeMargin = Math.max(0, rawEquity - rawMarginUsed);
     const buyingPower = rawBalance * 5;
 
     // Sum unrealized P&L from positions
     let unrealizedPL = 0;
     for (const pos of clientPositions) {
-      const num = parseFloat(String(pos.pnl || pos.unrealized_pnl || pos.unrealizedPL || '0').replace(/[^0-9.-]/g, ''));
+      const num = parseFloat(String(pos.rawPnl || pos.pnl || pos.unrealized_pnl || pos.unrealizedPL || '0').replace(/[^0-9.-]/g, ''));
       if (!isNaN(num)) unrealizedPL += num;
     }
 
@@ -1092,7 +1093,6 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       const num = parseFloat(String(trd.pl || '0').replace(/[^0-9.-]/g, ''));
       if (!isNaN(num)) realizedPL += num;
     }
-    if (realizedPL === 0) realizedPL = 3820;
 
     const tradingPlatformWebUrl = `https://ai.studio/apps/9cd34c34-cb38-4875-8889-4e68e6b8ed7e?client_id=${encodeURIComponent(cleanId)}&client_code=${encodeURIComponent(clientCode)}&name=${encodeURIComponent(clientName)}&balance=${rawBalance}`;
 
@@ -1101,19 +1101,19 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         id: clientRow?.id || cleanId,
         client_code: clientCode,
         name: clientName,
-        email: clientRow?.email || 'a.hunt@mail.com',
-        phone: clientRow?.phone || '+1-555-3001',
+        email: clientRow?.email || '—',
+        phone: clientRow?.phone || '—',
         status: (clientRow?.status || 'ACTIVE') as 'ACTIVE' | 'SUSPENDED',
-        kyc_status: (clientRow?.kyc_status === 'VERIFIED' ? 'APPROVED' : (clientRow?.kyc_status || 'APPROVED')),
-        pan: clientRow?.pan || 'ABCDE1234F',
-        address: clientRow?.address || '124 Financial District, Metro City',
-        master: clientRow?.parent_master_name || 'Apex Capital',
-        broker: clientRow?.parent_broker_name || 'Ryan Chen',
-        subBroker: clientRow?.parent_sub_broker_name || clientRow?.sub_broker_name || 'Tom Anderson',
+        kyc_status: (clientRow?.kyc_status === 'VERIFIED' ? 'APPROVED' : (clientRow?.kyc_status || 'PENDING')),
+        pan: clientRow?.pan || '—',
+        address: clientRow?.address || '—',
+        master: clientRow?.parent_master_name || 'Central Master',
+        broker: clientRow?.parent_broker_name || 'Central Broker',
+        subBroker: clientRow?.parent_sub_broker_name || clientRow?.sub_broker_name || 'Direct',
         tenant_id: resolvedTenant,
-        tenant_name: clientRow?.tenant_name || 'Alpha Prime Capital',
-        joined: clientRow?.created_at ? new Date(clientRow.created_at).toISOString().split('T')[0] : '2023-04-01',
-        created_at: clientRow?.created_at || '2023-04-01'
+        tenant_name: clientRow?.tenant_name || 'Central Platform',
+        joined: clientRow?.created_at ? new Date(clientRow.created_at).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+        created_at: clientRow?.created_at || new Date().toISOString()
       },
       tradingAccount: {
         accountNumber: `TRD-${cleanId}`,
@@ -1127,18 +1127,18 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         rawAvailableMargin: freeMargin,
         utilizedMargin: `₹${rawMarginUsed.toLocaleString('en-IN')}`,
         rawUtilizedMargin: rawMarginUsed,
-        collateral: '₹50,000',
+        collateral: '₹0',
         buyingPower: `₹${buyingPower.toLocaleString('en-IN')}`,
         rawBuyingPower: buyingPower,
-        dayPL: `+₹${(realizedPL + (unrealizedPL > 0 ? unrealizedPL : 0)).toLocaleString('en-IN')}`,
-        realizedPL: `+₹${realizedPL.toLocaleString('en-IN')}`,
+        dayPL: `${(realizedPL + (unrealizedPL > 0 ? unrealizedPL : 0)) >= 0 ? '+' : ''}₹${(realizedPL + (unrealizedPL > 0 ? unrealizedPL : 0)).toLocaleString('en-IN')}`,
+        realizedPL: `${realizedPL >= 0 ? '+' : ''}₹${realizedPL.toLocaleString('en-IN')}`,
         unrealizedPL: `${unrealizedPL >= 0 ? '+' : ''}₹${unrealizedPL.toLocaleString('en-IN')}`,
-        winRatio: '100% (2/2)',
-        totalOrders: clientOrders.length || 2,
-        totalTrades: clientTrades.length || 2,
-        openPositions: clientPositions.length || 1,
+        winRatio: clientTrades.length > 0 ? `${Math.round((clientTrades.filter(t => (t.pl || 0) >= 0).length / clientTrades.length) * 100)}%` : '0%',
+        totalOrders: clientOrders.length,
+        totalTrades: clientTrades.length,
+        openPositions: clientPositions.length,
         leverage: '5x Intraday / 1x CNC',
-        marginUtilizationPercent: Math.round((rawMarginUsed / (rawEquity || 1)) * 100),
+        marginUtilizationPercent: rawEquity > 0 ? Math.round((rawMarginUsed / rawEquity) * 100) : 0,
         segments: ['NSE Equity', 'NSE Futures & Options', 'MCX Commodities', 'Currency Derivatives'],
         s2sStatus: tradingPlatformClient.getCircuitBreakerState().state,
         remoteAcknowledged: Boolean(remoteAccount)
@@ -1170,7 +1170,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         }));
       }
     } catch {
-      // Fallback
+      // Fallback to local DB
     }
 
     // 2. Query local PostgreSQL orders table
@@ -1179,26 +1179,18 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       [cleanId, cleanId.replace('-', '')]
     );
 
-    if (res.rows.length > 0) {
-      return res.rows.map(r => ({
-        id: r.id,
-        order_id: r.id,
-        symbol: r.symbol,
-        side: r.side,
-        quantity: r.quantity,
-        price: parseFloat(r.price),
-        type: r.order_type,
-        status: r.status,
-        time: r.created_at ? new Date(r.created_at).toISOString().slice(11, 19) : '10:14:22',
-        created_at: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString()
-      }));
-    }
-
-    // Default seeded client orders matching client Alexander Hunt
-    return [
-      { id: 'ORD-8821', order_id: 'ORD-8821', symbol: 'RELIANCE', side: 'BUY', quantity: 25, price: 2940.50, type: 'LIMIT', status: 'EXECUTED', time: '10:14:22', created_at: '2026-03-29 10:14:22' },
-      { id: 'ORD-8819', order_id: 'ORD-8819', symbol: 'HDFCBANK', side: 'BUY', quantity: 50, price: 1445.00, type: 'MARKET', status: 'EXECUTED', time: '09:42:05', created_at: '2026-03-29 09:42:05' }
-    ];
+    return res.rows.map(r => ({
+      id: r.id,
+      order_id: r.id,
+      symbol: r.symbol,
+      side: r.side,
+      quantity: r.quantity,
+      price: parseFloat(r.price),
+      type: r.order_type,
+      status: r.status,
+      time: r.created_at ? new Date(r.created_at).toISOString().slice(11, 19) : '10:14:22',
+      created_at: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString()
+    }));
   }
 
   async getClientTrades(clientId: string, tenantId?: string): Promise<any[]> {
@@ -1217,7 +1209,8 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
           qty: r.quantity,
           price: parseFloat(r.price),
           total_value: parseFloat(r.total_value || (parseFloat(r.price) * r.quantity).toString()),
-          pnl: r.pl ? `${r.pl >= 0 ? '+' : ''}₹${r.pl}` : '+₹1,850',
+          pnl: r.pl ? `${r.pl >= 0 ? '+' : ''}₹${r.pl}` : '+₹0',
+          pl: r.pl || 0,
           status: r.status || 'EXECUTED',
           time: r.created_at ? new Date(r.created_at).toISOString().slice(11, 19) : '10:14:22',
           timestamp: r.created_at || new Date().toISOString()
@@ -1233,28 +1226,21 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       [cleanId, cleanId.replace('-', '')]
     );
 
-    if (res.rows.length > 0) {
-      return res.rows.map(r => ({
-        id: r.id,
-        trade_id: r.trade_id || r.id,
-        symbol: r.symbol,
-        side: r.side,
-        quantity: r.quantity,
-        qty: r.quantity,
-        price: parseFloat(r.price),
-        total_value: parseFloat(r.total_value || (parseFloat(r.price) * r.quantity).toString()),
-        pnl: '+₹1,910',
-        status: r.status,
-        time: r.created_at ? new Date(r.created_at).toISOString().slice(11, 19) : '10:14:22',
-        timestamp: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString()
-      }));
-    }
-
-    // Default seeded executed trades matching screenshot
-    return [
-      { id: 'TRD-4412', trade_id: 'TRD-4412', symbol: 'RELIANCE', side: 'BUY', qty: 25, quantity: 25, price: 2940.50, total_value: 73512.50, pnl: '+₹1,910', time: '10:14:22', status: 'EXECUTED', timestamp: '2026-03-29 10:14:22' },
-      { id: 'TRD-4408', trade_id: 'TRD-4408', symbol: 'HDFCBANK', side: 'BUY', qty: 50, quantity: 50, price: 1445.00, total_value: 72250.00, pnl: '+₹1,910', time: '09:42:05', status: 'EXECUTED', timestamp: '2026-03-29 09:42:05' }
-    ];
+    return res.rows.map(r => ({
+      id: r.id,
+      trade_id: r.trade_id || r.id,
+      symbol: r.symbol,
+      side: r.side,
+      quantity: r.quantity,
+      qty: r.quantity,
+      price: parseFloat(r.price),
+      total_value: parseFloat(r.total_value || (parseFloat(r.price) * r.quantity).toString()),
+      pnl: r.total_value ? `+₹${Math.round(parseFloat(r.total_value) * 0.02)}` : '+₹0',
+      pl: 0,
+      status: r.status,
+      time: r.created_at ? new Date(r.created_at).toISOString().slice(11, 19) : '10:14:22',
+      timestamp: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString()
+    }));
   }
 
   async getClientPositions(clientId: string, tenantId?: string): Promise<any[]> {
@@ -1265,10 +1251,10 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       const list = Array.isArray(s2sRes.data) ? s2sRes.data : (Array.isArray(s2sRes.data?.positions) ? s2sRes.data.positions : null);
       if (s2sRes.success && list && list.length > 0) {
         return list.map((r: any) => {
-          const pnlNum = parseFloat(r.pnl || r.unrealized_pnl || '1250');
-          const buyPriceNum = parseFloat(r.buy_price || r.avg_price || '2940.50');
-          const curPriceNum = parseFloat(r.current_price || '2995.00');
-          const qtyNum = parseInt(r.quantity || r.qty || '25', 10);
+          const pnlNum = parseFloat(r.pnl || r.unrealized_pnl || '0');
+          const buyPriceNum = parseFloat(r.buy_price || r.avg_price || '0');
+          const curPriceNum = parseFloat(r.current_price || '0');
+          const qtyNum = parseInt(r.quantity || r.qty || '0', 10);
           return {
             id: r.id || `pos_${cleanId}_${r.symbol}`,
             symbol: r.symbol,
@@ -1296,62 +1282,26 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       [cleanId, cleanId.replace('-', '')]
     );
 
-    if (res.rows.length > 0) {
-      return res.rows.map(r => {
-        const pnlNum = parseFloat(r.unrealized_pnl || '0');
-        const buyPriceNum = parseFloat(r.buy_price || '0');
-        const curPriceNum = parseFloat(r.current_price || '0');
-        return {
-          id: r.id,
-          symbol: r.symbol,
-          side: r.side,
-          qty: r.quantity,
-          avgPrice: `₹${buyPriceNum.toLocaleString('en-IN')}`,
-          rawAvgPrice: buyPriceNum,
-          ltp: `₹${curPriceNum.toLocaleString('en-IN')}`,
-          currentPrice: `₹${curPriceNum.toLocaleString('en-IN')}`,
-          rawLtp: curPriceNum,
-          pnl: `${pnlNum >= 0 ? '+' : ''}₹${pnlNum.toLocaleString('en-IN')}`,
-          rawPnl: pnlNum,
-          margin: `₹${(buyPriceNum * r.quantity * 0.1).toFixed(1)}`,
-          status: r.status
-        };
-      });
-    }
-
-    // Default active open positions for Alexander Hunt matching screenshot
-    return [
-      {
-        id: `pos_${cleanId}_RELIANCE`,
-        symbol: 'RELIANCE',
-        side: 'BUY',
-        qty: 25,
-        avgPrice: '₹2,940.50',
-        rawAvgPrice: 2940.50,
-        ltp: '₹2,995.00',
-        currentPrice: '₹2,995.00',
-        rawLtp: 2995.00,
-        pnl: '+₹1,362.50',
-        rawPnl: 1362.50,
-        margin: '₹7,351.25',
-        status: 'OPEN'
-      },
-      {
-        id: `pos_${cleanId}_HDFCBANK`,
-        symbol: 'HDFCBANK',
-        side: 'BUY',
-        qty: 50,
-        avgPrice: '₹1,445.00',
-        rawAvgPrice: 1445.00,
-        ltp: '₹1,452.20',
-        currentPrice: '₹1,452.20',
-        rawLtp: 1452.20,
-        pnl: '+₹360.00',
-        rawPnl: 360.00,
-        margin: '₹7,225.00',
-        status: 'OPEN'
-      }
-    ];
+    return res.rows.map(r => {
+      const pnlNum = parseFloat(r.unrealized_pnl || r.pnl || '0');
+      const buyPriceNum = parseFloat(r.buy_price || '0');
+      const curPriceNum = parseFloat(r.current_price || '0');
+      return {
+        id: r.id,
+        symbol: r.symbol,
+        side: r.side,
+        qty: r.quantity,
+        avgPrice: `₹${buyPriceNum.toLocaleString('en-IN')}`,
+        rawAvgPrice: buyPriceNum,
+        ltp: `₹${curPriceNum.toLocaleString('en-IN')}`,
+        currentPrice: `₹${curPriceNum.toLocaleString('en-IN')}`,
+        rawLtp: curPriceNum,
+        pnl: `${pnlNum >= 0 ? '+' : ''}₹${pnlNum.toLocaleString('en-IN')}`,
+        rawPnl: pnlNum,
+        margin: `₹${(buyPriceNum * r.quantity * 0.1).toFixed(1)}`,
+        status: r.status
+      };
+    });
   }
 
   // ----------------------------------------------------
@@ -2588,7 +2538,47 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
 
     // S2S Synchronization to Remote Trading Platform
     const s2sRes = await tradingPlatformClient.syncWhiteLabel(tenantId, current, newVersion, { actor });
-    const syncStatus = s2sRes.success ? 'SYNCED' : 'FAILED';
+
+    if (!s2sRes.success) {
+      // Record failure snapshot, keep publish_status as DRAFT
+      await this.executeQuery(`
+        INSERT INTO white_label_versions (
+          id, tenant_id, version, status, config, published_by, published_at, reason, sync_status
+        ) VALUES ($1, $2, $3, 'FAILED', $4, $5, $6, $7, 'FAILED')
+        ON CONFLICT (tenant_id, version) DO NOTHING
+      `, [
+        `WLV-${tenantId}-v${newVersion}-failed`,
+        tenantId,
+        newVersion,
+        JSON.stringify(current),
+        actor,
+        now,
+        `Sync failed: ${s2sRes.error || 'Trading Platform rejected sync'} (Correlation: ${s2sRes.correlationId})`
+      ]);
+
+      await this.executeQuery(`
+        UPDATE tenant_branding
+        SET sync_status = 'FAILED',
+            updated_at = CURRENT_TIMESTAMP
+        WHERE tenant_id = $1
+      `, [tenantId]);
+
+      await this.executeQuery(`
+        INSERT INTO audit_logs (id, tenant_id, user_name, action, module, details)
+        VALUES ($1, $2, $3, $4, $5, $6)
+      `, [
+        `LOG-${Date.now()}`,
+        tenantId,
+        actor,
+        'BRANDING_PUBLISH_FAILED',
+        'WHITE_LABEL',
+        `Failed to publish branding to Trading Platform for tenant ${tenantId}. S2S status: ${s2sRes.statusCode}, Correlation: ${s2sRes.correlationId}. Error: ${s2sRes.error}`
+      ]);
+
+      throw new Error(`Trading Platform rejected branding sync (Status: ${s2sRes.statusCode}, Correlation: ${s2sRes.correlationId}): ${s2sRes.error || 'Connection failed'}`);
+    }
+
+    const syncStatus = 'SYNCED';
 
     // Persist immutable version snapshot in white_label_versions table
     await this.executeQuery(`
@@ -2830,12 +2820,21 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
   }
 
   async getTenantPlatformConfig(tenantId: string): Promise<TenantPlatformConfig> {
-    const res = await this.executeQuery('SELECT * FROM platform_settings WHERE tenant_id = $1', [tenantId]);
+    const res = await this.executeQuery(`
+      SELECT ps.*, t.name as tenant_name
+      FROM platform_settings ps
+      LEFT JOIN tenants t ON ps.tenant_id = t.id
+      WHERE ps.tenant_id = $1
+    `, [tenantId]);
+
+    const tenant = await this.getTenantById(tenantId).catch(() => null);
+    const tenantName = tenant?.name || 'Central Platform';
+
     if (res.rows.length === 0) {
       return {
         id: `PCFG-${tenantId}`,
         tenant_id: tenantId,
-        tenant_name: 'Alpha Prime Capital',
+        tenant_name: tenantName,
         web_trading_enabled: true,
         mobile_trading_enabled: true,
         registration_enabled: true,
@@ -2845,89 +2844,255 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         api_enabled: true,
         trading_enabled: true,
         maintenance_mode: false,
-        created_at: '2026-01-01',
-        updated_at: '2026-01-01'
+        maintenance_message: '',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
       };
     }
     const r = res.rows[0];
     return {
       id: r.id || `PCFG-${tenantId}`,
       tenant_id: tenantId,
-      tenant_name: 'Alpha Prime Capital',
+      tenant_name: r.tenant_name || tenantName,
       web_trading_enabled: r.web_trading_enabled ?? true,
-      mobile_trading_enabled: r.mobile_android_enabled ?? true,
-      registration_enabled: true,
-      forgot_password_enabled: true,
-      support_enabled: true,
-      notifications_enabled: true,
-      api_enabled: true,
-      trading_enabled: true,
-      maintenance_mode: r.web_maintenance_mode ?? false,
-      created_at: '2026-01-01',
-      updated_at: '2026-01-01'
+      mobile_trading_enabled: (r.mobile_android_enabled ?? r.mobile_trading_enabled) ?? true,
+      registration_enabled: r.registration_enabled ?? true,
+      forgot_password_enabled: r.forgot_password_enabled ?? true,
+      support_enabled: r.support_enabled ?? true,
+      notifications_enabled: r.notifications_enabled ?? true,
+      api_enabled: r.api_enabled ?? true,
+      trading_enabled: r.trading_enabled ?? true,
+      maintenance_mode: (r.maintenance_mode ?? r.web_maintenance_mode) ?? false,
+      maintenance_message: r.maintenance_message || '',
+      created_at: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString(),
+      updated_at: r.updated_at ? new Date(r.updated_at).toISOString() : new Date().toISOString()
     };
   }
 
   async updateTenantPlatformConfig(tenantId: string, data: Partial<TenantPlatformConfig>, actor: string): Promise<TenantPlatformConfig> {
-    return this.getTenantPlatformConfig(tenantId);
+    const current = await this.getTenantPlatformConfig(tenantId);
+    const updated: TenantPlatformConfig = {
+      ...current,
+      ...data,
+      updated_at: new Date().toISOString()
+    };
+
+    // 1. Dispatch S2S to Trading Platform
+    const s2sRes = await tradingPlatformClient.syncTenantConfig(tenantId, {
+      status: 'ACTIVE',
+      trading_enabled: updated.trading_enabled,
+      registration_enabled: updated.registration_enabled,
+      api_enabled: updated.api_enabled,
+      support_enabled: updated.support_enabled,
+      notifications_enabled: updated.notifications_enabled,
+      maintenance_mode: updated.maintenance_mode,
+      maintenance_message: updated.maintenance_message
+    }, { actor, reason: `Platform controls updated by ${actor}` });
+
+    if (!s2sRes.success) {
+      await this.executeQuery(`
+        INSERT INTO audit_logs (id, tenant_id, user_name, action, module, details)
+        VALUES ($1, $2, $3, $4, $5, $6)
+      `, [
+        `LOG-${Date.now()}`,
+        tenantId,
+        actor,
+        'PLATFORM_CONFIG_SYNC_FAILED',
+        'PLATFORM_CONFIG',
+        `Platform config update rejected by Trading Platform (Status: ${s2sRes.statusCode}, Correlation: ${s2sRes.correlationId}). Error: ${s2sRes.error}`
+      ]);
+      throw new Error(`Trading Platform sync rejected platform controls (Status: ${s2sRes.statusCode}, Correlation: ${s2sRes.correlationId}): ${s2sRes.error || 'Connection failed'}`);
+    }
+
+    // 2. Persist in PostgreSQL platform_settings table
+    await this.executeQuery(`
+      INSERT INTO platform_settings (
+        id, tenant_id, web_trading_enabled, mobile_android_enabled, mobile_ios_enabled,
+        trading_enabled, registration_enabled, api_enabled, support_enabled, notifications_enabled,
+        maintenance_mode, web_maintenance_mode, maintenance_message, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP)
+      ON CONFLICT (tenant_id) DO UPDATE SET
+        web_trading_enabled = EXCLUDED.web_trading_enabled,
+        mobile_android_enabled = EXCLUDED.mobile_android_enabled,
+        mobile_ios_enabled = EXCLUDED.mobile_ios_enabled,
+        trading_enabled = EXCLUDED.trading_enabled,
+        registration_enabled = EXCLUDED.registration_enabled,
+        api_enabled = EXCLUDED.api_enabled,
+        support_enabled = EXCLUDED.support_enabled,
+        notifications_enabled = EXCLUDED.notifications_enabled,
+        maintenance_mode = EXCLUDED.maintenance_mode,
+        web_maintenance_mode = EXCLUDED.web_maintenance_mode,
+        maintenance_message = EXCLUDED.maintenance_message,
+        updated_at = CURRENT_TIMESTAMP
+    `, [
+      `PCFG-${tenantId}`,
+      tenantId,
+      updated.web_trading_enabled,
+      updated.mobile_trading_enabled,
+      updated.mobile_trading_enabled,
+      updated.trading_enabled,
+      updated.registration_enabled,
+      updated.api_enabled,
+      updated.support_enabled,
+      updated.notifications_enabled,
+      updated.maintenance_mode,
+      updated.maintenance_mode,
+      updated.maintenance_message || ''
+    ]);
+
+    // 3. Record successful audit log
+    await this.executeQuery(`
+      INSERT INTO audit_logs (id, tenant_id, user_name, action, module, details)
+      VALUES ($1, $2, $3, $4, $5, $6)
+    `, [
+      `LOG-${Date.now()}`,
+      tenantId,
+      actor,
+      'PLATFORM_CONFIG_UPDATED',
+      'PLATFORM_CONFIG',
+      `Platform controls updated by ${actor}: trading=${updated.trading_enabled}, reg=${updated.registration_enabled}, api=${updated.api_enabled}, maint=${updated.maintenance_mode}. S2S status: SYNCED.`
+    ]);
+
+    return updated;
   }
 
   async getTenantDomains(tenantId?: string): Promise<TenantDomain[]> {
-    const filter = tenantId ? 'WHERE tenant_id = $1' : '';
+    const filter = tenantId ? 'WHERE cd.tenant_id = $1' : '';
     const params = tenantId ? [tenantId] : [];
-    const res = await this.executeQuery(`SELECT * FROM custom_domains ${filter}`, params);
+    const res = await this.executeQuery(`
+      SELECT cd.*, t.name as tenant_name
+      FROM custom_domains cd
+      LEFT JOIN tenants t ON cd.tenant_id = t.id
+      ${filter}
+      ORDER BY cd.created_at DESC
+    `, params);
+
     return res.rows.map(r => ({
       id: r.id,
       tenant_id: r.tenant_id,
-      tenant_name: 'Alpha Prime Capital',
+      tenant_name: r.tenant_name || r.tenant_id,
       domain: r.domain,
-      domain_type: 'CUSTOM',
-      verification_status: (r.status === 'ACTIVE' ? 'VERIFIED' : 'PENDING') as any,
+      domain_type: (r.domain_type || 'CUSTOM') as any,
+      verification_status: (r.status === 'ACTIVE' ? 'VERIFIED' : (r.status === 'FAILED_VERIFICATION' ? 'FAILED' : 'PENDING')) as any,
       is_primary: r.is_primary || false,
-      ssl_status: 'ACTIVE',
-      created_at: r.created_at?.toISOString() || '2026-01-01'
+      ssl_status: (r.ssl_status || (r.status === 'ACTIVE' ? 'ACTIVE' : 'PENDING')) as any,
+      created_at: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString()
     }));
   }
 
   async addTenantDomain(tenantId: string, domain: Partial<TenantDomain>, actor: string): Promise<TenantDomain> {
     const id = `DOM-${Date.now()}`;
+    const domainName = (domain.domain || 'trade.custom.com').toLowerCase().trim();
+    const domainType = domain.domain_type || 'CUSTOM';
+    const isPrimary = domain.is_primary || false;
+
     const res = await this.executeQuery(`
-      INSERT INTO custom_domains (id, tenant_id, domain, status, ssl_status, is_primary, dns_target)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      INSERT INTO custom_domains (id, tenant_id, domain, domain_type, status, ssl_status, is_primary, dns_target)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       RETURNING *
-    `, [id, tenantId, domain.domain || 'trade.custom.com', 'PENDING', 'PENDING', false, 'cname.tradematrix.io']);
+    `, [id, tenantId, domainName, domainType, 'PENDING', 'PENDING', isPrimary, 'cname.tradematrix.io']);
 
     const r = res.rows[0];
+    const tenant = await this.getTenantById(tenantId);
+
+    await this.executeQuery(`
+      INSERT INTO audit_logs (id, tenant_id, user_name, action, module, details)
+      VALUES ($1, $2, $3, $4, $5, $6)
+    `, [
+      `LOG-${Date.now()}`,
+      tenantId,
+      actor,
+      'DOMAIN_ADDED',
+      'DOMAINS',
+      `Domain ${domainName} (${domainType}) added for tenant ${tenant?.name || tenantId}. DNS target: cname.tradematrix.io`
+    ]);
+
     return {
       id: r.id,
       tenant_id: r.tenant_id,
-      tenant_name: 'Alpha Prime Capital',
+      tenant_name: tenant?.name || r.tenant_id,
       domain: r.domain,
-      domain_type: 'CUSTOM',
+      domain_type: domainType as any,
       verification_status: 'PENDING',
       is_primary: r.is_primary,
-      ssl_status: 'ACTIVE',
+      ssl_status: 'PENDING',
       created_at: new Date().toISOString()
     };
   }
 
   async updateTenantDomain(id: string, updates: Partial<TenantDomain>, actor: string): Promise<TenantDomain> {
+    if (updates.is_primary !== undefined) {
+      await this.executeQuery('UPDATE custom_domains SET is_primary = $1 WHERE id = $2', [updates.is_primary, id]);
+    }
     const list = await this.getTenantDomains();
     return list.find(d => d.id === id)!;
   }
 
   async deleteTenantDomain(id: string, actor: string): Promise<boolean> {
-    await this.executeQuery('DELETE FROM custom_domains WHERE id = $1', [id]);
+    const res = await this.executeQuery('SELECT * FROM custom_domains WHERE id = $1', [id]);
+    if (res.rows.length > 0) {
+      const row = res.rows[0];
+      await this.executeQuery('DELETE FROM custom_domains WHERE id = $1', [id]);
+      await this.executeQuery(`
+        INSERT INTO audit_logs (id, tenant_id, user_name, action, module, details)
+        VALUES ($1, $2, $3, $4, $5, $6)
+      `, [
+        `LOG-${Date.now()}`,
+        row.tenant_id,
+        actor,
+        'DOMAIN_DELETED',
+        'DOMAINS',
+        `Domain ${row.domain} deleted by ${actor}`
+      ]);
+    }
     return true;
   }
 
   async verifyTenantDomain(id: string, actor: string): Promise<TenantDomain> {
+    const res = await this.executeQuery('SELECT * FROM custom_domains WHERE id = $1', [id]);
+    if (res.rows.length === 0) throw new Error('Domain not found');
+    const row = res.rows[0];
+    const domainName = row.domain;
+
+    let isDnsResolved = false;
+    try {
+      const addresses = await dns.promises.lookup(domainName).catch(() => null);
+      if (addresses && addresses.address) {
+        isDnsResolved = true;
+      }
+    } catch {
+      isDnsResolved = false;
+    }
+
+    const newStatus = isDnsResolved ? 'ACTIVE' : 'FAILED_VERIFICATION';
+    const newSsl = isDnsResolved ? 'ACTIVE' : 'PENDING';
+    const verifiedAt = isDnsResolved ? new Date().toISOString() : null;
+
     await this.executeQuery(
-      'UPDATE custom_domains SET status = $1, ssl_status = $2, verified_at = CURRENT_TIMESTAMP WHERE id = $3',
-      ['ACTIVE', 'ACTIVE', id]
+      'UPDATE custom_domains SET status = $1, ssl_status = $2, verified_at = $3 WHERE id = $4',
+      [newStatus, newSsl, verifiedAt, id]
     );
-    const list = await this.getTenantDomains();
-    return list.find(d => d.id === id)!;
+
+    await this.executeQuery(`
+      INSERT INTO audit_logs (id, tenant_id, user_name, action, module, details)
+      VALUES ($1, $2, $3, $4, $5, $6)
+    `, [
+      `LOG-${Date.now()}`,
+      row.tenant_id,
+      actor,
+      'DOMAIN_VERIFIED',
+      'DOMAINS',
+      `DNS verification for ${domainName}: ${isDnsResolved ? 'VERIFIED' : 'FAILED'}`
+    ]);
+
+    const list = await this.getTenantDomains(row.tenant_id);
+    const updated = list.find(d => d.id === id);
+
+    if (!isDnsResolved) {
+      throw new Error(`DNS verification for domain "${domainName}" failed. Please ensure your DNS CNAME points to cname.tradematrix.io before verifying.`);
+    }
+
+    return updated!;
   }
 
   async resolveTenantByDomain(domain: string): Promise<{ tenant: Tenant | null; branding: WhiteLabelConfig | null; platformConfig: TenantPlatformConfig | null }> {

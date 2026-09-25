@@ -4,7 +4,11 @@ import {
   TrendingDown,
   BarChart2,
   Shield,
-  Zap
+  Zap,
+  Layers,
+  Wallet,
+  ArrowUpRight,
+  ArrowDownRight
 } from 'lucide-react';
 import { TradingInstrument, BenchmarkQuote, ClientWallet } from '../../types/trading';
 
@@ -14,6 +18,7 @@ interface LiveSpotlightTerminalProps {
   wallet: ClientWallet;
   onOpenOrder: (instrument: TradingInstrument, side: 'BUY' | 'SELL') => void;
   onOpenChart: (instrument: TradingInstrument) => void;
+  onOpenOptionChain?: (instrument: TradingInstrument) => void;
   onOpenWallet: () => void;
 }
 
@@ -23,6 +28,7 @@ export const LiveSpotlightTerminal: React.FC<LiveSpotlightTerminalProps> = ({
   wallet,
   onOpenOrder,
   onOpenChart,
+  onOpenOptionChain,
   onOpenWallet
 }) => {
   const isPositive = instrument.change >= 0;
@@ -33,11 +39,18 @@ export const LiveSpotlightTerminal: React.FC<LiveSpotlightTerminalProps> = ({
 
   // Margin health calculation
   const totalMargin = (wallet.availableBalance || 0) + (wallet.usedMargin || 0);
-  const marginUsedPct = totalMargin > 0 ? Math.min(100, Math.round(((wallet.usedMargin || 0) / totalMargin) * 100)) : 26;
+  const marginUsedPct = totalMargin > 0 ? Math.min(100, Math.round(((wallet.usedMargin || 0) / totalMargin) * 100)) : 18;
+
+  // Option Chain capability
+  const hasOptionChain =
+    instrument.category === 'INDEX' ||
+    instrument.category === 'COMMODITY' ||
+    instrument.symbol.includes('FUT') ||
+    instrument.category === 'EQUITY';
 
   return (
     <div id="live-spotlight-terminal" className="space-y-4 select-none">
-      {/* Main Spotlight Card */}
+      {/* 1. Main Spotlight Card */}
       <div className="bg-white dark:bg-[#0B111C] border border-slate-200 dark:border-[#1A2638] rounded-2xl p-4 sm:p-5 shadow-sm space-y-4 transition-colors">
         {/* Terminal Header */}
         <div className="flex items-center justify-between">
@@ -53,13 +66,22 @@ export const LiveSpotlightTerminal: React.FC<LiveSpotlightTerminalProps> = ({
         </div>
 
         {/* Symbol and Expiry */}
-        <div className="flex items-baseline justify-between">
-          <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-wide">
-            {instrument.symbol}
-          </h2>
-          <span className="text-xs font-bold text-slate-400 dark:text-slate-500">
-            {instrument.expiry}
-          </span>
+        <div>
+          <div className="flex items-baseline justify-between">
+            <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-wide">
+              {instrument.symbol}
+            </h2>
+            {instrument.expiry && (
+              <span className="text-xs font-bold text-slate-400 dark:text-slate-500">
+                {instrument.expiry}
+              </span>
+            )}
+          </div>
+          {instrument.name && instrument.name !== instrument.symbol && (
+            <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
+              {instrument.name}
+            </p>
+          )}
         </div>
 
         {/* Price & Change */}
@@ -72,7 +94,7 @@ export const LiveSpotlightTerminal: React.FC<LiveSpotlightTerminalProps> = ({
               isPositive ? 'text-emerald-500' : 'text-rose-500'
             }`}
           >
-            <span>{isPositive ? '↗' : '↘'}</span>
+            {isPositive ? <ArrowUpRight className="w-4 h-4" /> : <ArrowDownRight className="w-4 h-4" />}
             <span>
               {isPositive ? '+' : ''}{instrument.change.toFixed(2)} ({isPositive ? '+' : ''}
               {instrument.changePercent.toFixed(2)}%)
@@ -80,7 +102,7 @@ export const LiveSpotlightTerminal: React.FC<LiveSpotlightTerminalProps> = ({
           </span>
         </div>
 
-        {/* 24h Range */}
+        {/* 24h Range Bar */}
         <div className="space-y-1.5 pt-1">
           <div className="flex items-center justify-between text-[11px] font-mono text-slate-500 dark:text-slate-400">
             <span>L: ₹{instrument.low.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
@@ -149,19 +171,42 @@ export const LiveSpotlightTerminal: React.FC<LiveSpotlightTerminalProps> = ({
           </button>
         </div>
 
-        {/* Open Technical Chart Button */}
-        <button
-          type="button"
-          id="spotlight-open-chart-btn"
-          onClick={() => onOpenChart(instrument)}
-          className="w-full py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-[#101A29] dark:hover:bg-[#16243A] text-slate-700 dark:text-slate-300 font-bold text-xs flex items-center justify-center gap-2 border border-slate-200 dark:border-[#1E2E44] transition-colors cursor-pointer active:scale-98"
-        >
-          <BarChart2 className="w-4 h-4 text-amber-500" />
-          <span>Open Technical Chart</span>
-        </button>
+        {/* Technical Chart & Option Chain Action Buttons */}
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            id="spotlight-open-chart-btn"
+            onClick={() => onOpenChart(instrument)}
+            className="py-2.5 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-[#101A29] dark:hover:bg-[#16243A] text-slate-700 dark:text-slate-300 font-bold text-xs flex items-center justify-center gap-1.5 border border-slate-200 dark:border-[#1E2E44] transition-colors cursor-pointer active:scale-98"
+          >
+            <BarChart2 className="w-4 h-4 text-amber-500" />
+            <span>Chart</span>
+          </button>
+
+          {hasOptionChain && onOpenOptionChain ? (
+            <button
+              type="button"
+              id="spotlight-open-optionchain-btn"
+              onClick={() => onOpenOptionChain(instrument)}
+              className="py-2.5 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-[#101A29] dark:hover:bg-[#16243A] text-slate-700 dark:text-slate-300 font-bold text-xs flex items-center justify-center gap-1.5 border border-slate-200 dark:border-[#1E2E44] transition-colors cursor-pointer active:scale-98"
+            >
+              <Layers className="w-4 h-4 text-blue-400" />
+              <span>Option Chain</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onOpenWallet}
+              className="py-2.5 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-[#101A29] dark:hover:bg-[#16243A] text-slate-700 dark:text-slate-300 font-bold text-xs flex items-center justify-center gap-1.5 border border-slate-200 dark:border-[#1E2E44] transition-colors cursor-pointer active:scale-98"
+            >
+              <Wallet className="w-4 h-4 text-emerald-400" />
+              <span>Add Funds</span>
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Key Benchmarks Card */}
+      {/* 2. Key Benchmarks Card */}
       <div className="bg-white dark:bg-[#0B111C] border border-slate-200 dark:border-[#1A2638] rounded-2xl p-4 shadow-sm space-y-2.5 transition-colors">
         <div className="flex items-center justify-between text-xs pb-1 border-b border-slate-100 dark:border-[#162234]">
           <span className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
@@ -195,7 +240,7 @@ export const LiveSpotlightTerminal: React.FC<LiveSpotlightTerminalProps> = ({
         </div>
       </div>
 
-      {/* Margin Health Card */}
+      {/* 3. Margin Health Card */}
       <div className="bg-white dark:bg-[#0B111C] border border-slate-200 dark:border-[#1A2638] rounded-2xl p-4 shadow-sm space-y-3 transition-colors">
         <div className="flex items-center justify-between">
           <span className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">

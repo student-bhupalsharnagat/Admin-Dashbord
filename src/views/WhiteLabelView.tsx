@@ -46,14 +46,37 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
   // Navigation Sub-Tabs within White Label
   const [activeSubTab, setActiveSubTab] = useState<'branding' | 'platform' | 'domains' | 'audit' | 'preview'>('branding');
 
-  // Tenants List
-  const [tenants, setTenants] = useState<Array<{ id: string; name: string; code: string }>>([
-    { id: 'ten-01', name: 'AlphaPrime Capital', code: 'APC' },
-    { id: 'ten-02', name: 'Zenith Markets', code: 'ZMK' },
-    { id: 'ten-03', name: 'Quantum Alpha', code: 'QAL' },
-    { id: 'ten-04', name: 'Apex Securities', code: 'APX' }
-  ]);
-  const [selectedTenantId, setSelectedTenantId] = useState<string>(selectedTenantScope || 'ten-01');
+  // Tenants List loaded dynamically from real backend
+  const [tenants, setTenants] = useState<Array<{ id: string; name: string; code: string }>>([]);
+  const [selectedTenantId, setSelectedTenantId] = useState<string>(selectedTenantScope || '');
+
+  // Fetch real tenants on mount
+  useEffect(() => {
+    let isMounted = true;
+    async function loadTenantsList() {
+      try {
+        const res = await fetch('/api/admin/tenants');
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data) && data.length > 0 && isMounted) {
+            const mapped = data.map((t: any) => ({
+              id: t.id,
+              name: t.name || t.tenant_name || t.id,
+              code: t.code || t.tenant_code || t.id.slice(0, 3).toUpperCase()
+            }));
+            setTenants(mapped);
+            if (!selectedTenantScope && mapped[0]) {
+              setSelectedTenantId(mapped[0].id);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to load tenants list in WhiteLabelView:', e);
+      }
+    }
+    loadTenantsList();
+    return () => { isMounted = false; };
+  }, []);
 
   // Active Branding State
   const [branding, setBranding] = useState<TenantBranding | null>(null);
@@ -240,7 +263,8 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
         // Reload audit logs
         loadTenantData(selectedTenantId);
       } else {
-        throw new Error('Failed to publish branding');
+        const errJson = await pRes.json().catch(() => ({}));
+        throw new Error(errJson.error || errJson.message || 'Failed to publish branding to Trading Platform');
       }
     } catch (err: any) {
       onNotify?.(err.message || 'Failed to publish changes', 'warning');
@@ -251,10 +275,6 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
 
   // 3. Rollback to Previous Version Workflow
   const handleRollback = async () => {
-    if (!window.confirm('Rollback branding to the previous published version? This will restore the last snapshot.')) {
-      return;
-    }
-
     setRollingBack(true);
     try {
       const res = await fetch(`/api/admin/white-label/${selectedTenantId}/rollback`, {
@@ -268,8 +288,8 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
         onNotify?.('Successfully rolled back to previous branding version!', 'info');
         loadTenantData(selectedTenantId);
       } else {
-        const errData = await res.json();
-        throw new Error(errData.error || 'No previous version snapshot available to restore.');
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || errData.message || 'No previous version snapshot available to restore.');
       }
     } catch (err: any) {
       onNotify?.(err.message, 'warning');
@@ -291,9 +311,12 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
         const updated = await res.json();
         setPlatformConfig(updated);
         onNotify?.('Platform feature flags and controls updated successfully.', 'success');
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || errData.message || 'Failed to update platform controls on Trading Platform');
       }
     } catch (err: any) {
-      onNotify?.('Failed to update platform controls', 'warning');
+      onNotify?.(err.message || 'Failed to update platform controls', 'warning');
     }
   };
 

@@ -6,10 +6,32 @@
 
 import { query } from '../db/connection.ts';
 import { tradingPlatformClient } from './TradingPlatformClient.ts';
+import { EventEmitter } from 'events';
+
+export const adminEventBus = new EventEmitter();
+adminEventBus.setMaxListeners(100);
 
 export interface TradingPlatformEvent {
   eventId: string;
-  eventType: 'trade.executed' | 'risk.margin_breach' | 'execution.failure' | 'emergency.control_activated' | 'reconciliation.mismatch' | 'client.account_updated';
+  eventType:
+    | 'order.created'
+    | 'order.updated'
+    | 'trade.executed'
+    | 'position.updated'
+    | 'wallet.updated'
+    | 'tenant.config.updated'
+    | 'tenant.branding.updated'
+    | 'tenant.status.updated'
+    | 'fund.created'
+    | 'fund.updated'
+    | 'kyc.updated'
+    | 'notification.created'
+    | 'support.updated'
+    | 'risk.margin_breach'
+    | 'execution.failure'
+    | 'emergency.control_activated'
+    | 'reconciliation.mismatch'
+    | 'client.account_updated';
   tenantId: string;
   timestamp: string;
   correlationId?: string;
@@ -142,8 +164,41 @@ export class EventHandler {
     // 4. Dispatch event by type
     try {
       switch (eventData.eventType) {
+        case 'order.created':
+        case 'order.updated':
+          await this.handleOrderEvent(eventData);
+          break;
         case 'trade.executed':
           await this.handleTradeExecuted(eventData);
+          break;
+        case 'position.updated':
+          await this.handlePositionUpdated(eventData);
+          break;
+        case 'wallet.updated':
+        case 'client.account_updated':
+          await this.handleClientAccountUpdated(eventData);
+          break;
+        case 'tenant.config.updated':
+          await this.handleTenantConfigUpdated(eventData);
+          break;
+        case 'tenant.branding.updated':
+          await this.handleTenantBrandingUpdated(eventData);
+          break;
+        case 'tenant.status.updated':
+          await this.handleTenantStatusUpdated(eventData);
+          break;
+        case 'fund.created':
+        case 'fund.updated':
+          await this.handleFundEvent(eventData);
+          break;
+        case 'kyc.updated':
+          await this.handleKycUpdated(eventData);
+          break;
+        case 'notification.created':
+          await this.handleNotificationCreated(eventData);
+          break;
+        case 'support.updated':
+          await this.handleSupportUpdated(eventData);
           break;
         case 'risk.margin_breach':
           await this.handleMarginBreach(eventData);
@@ -157,12 +212,12 @@ export class EventHandler {
         case 'reconciliation.mismatch':
           await this.handleReconciliationMismatch(eventData);
           break;
-        case 'client.account_updated':
-          await this.handleClientAccountUpdated(eventData);
-          break;
         default:
-          console.warn(`[EventHandler] Unhandled event type: ${eventData.eventType}`);
+          console.warn(`[EventHandler] Generic event received: ${eventData.eventType}`);
       }
+
+      // Broadcast event to active admin listeners (SSE / WebSocket)
+      adminEventBus.emit('event', eventData);
 
       // 5. Record in processed_events table
       await query(
@@ -352,6 +407,191 @@ export class EventHandler {
         [p.balance ?? null, p.equity ?? null, p.marginUsed ?? null, p.clientId]
       );
     }
+  }
+
+  private async handleOrderEvent(event: TradingPlatformEvent): Promise<void> {
+    const p = event.payload;
+    if (!p) return;
+    const orderId = p.orderId || p.id || `ORD-${Date.now()}`;
+    const clientId = p.clientId || 'CLT-001';
+    const clientName = p.clientName || 'Trader';
+    const clientCode = p.clientCode || 'CLT001';
+
+    await query(
+      `INSERT INTO orders (
+        id, tenant_id, client_id, client_code, client_name, symbol, exchange, order_type, side, quantity, price, status, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ON CONFLICT (id) DO UPDATE SET
+        status = EXCLUDED.status,
+        quantity = EXCLUDED.quantity,
+        price = EXCLUDED.price,
+        updated_at = CURRENT_TIMESTAMP`,
+      [
+        orderId,
+        event.tenantId,
+        clientId,
+        clientCode,
+        clientName,
+        p.symbol || 'NIFTY50',
+        p.exchange || 'NSE',
+        p.orderType || p.type || 'LIMIT',
+        p.side || 'BUY',
+        Number(p.quantity || 1),
+        Number(p.price || 0),
+        p.status || 'PENDING'
+      ]
+    );
+  }
+
+  private async handlePositionUpdated(event: TradingPlatformEvent): Promise<void> {
+    const p = event.payload;
+    if (!p) return;
+    const posId = p.id || p.positionId || `POS-${p.clientId}-${p.symbol}`;
+    const clientId = p.clientId || 'CLT-001';
+    const clientName = p.clientName || 'Trader';
+    const clientCode = p.clientCode || 'CLT001';
+    const buyPrice = Number(p.buyPrice || p.avgPrice || 0);
+    const curPrice = Number(p.currentPrice || p.ltp || buyPrice);
+    const qty = Number(p.quantity || p.qty || 0);
+    const pnl = Number(p.pnl || p.unrealizedPnl || ((curPrice - buyPrice) * qty));
+
+    await query(
+      `INSERT INTO positions (
+        id, tenant_id, client_id, client_code, client_name, symbol, exchange, side, quantity, buy_price, current_price, pnl, status, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ON CONFLICT (id) DO UPDATE SET
+        quantity = EXCLUDED.quantity,
+        current_price = EXCLUDED.current_price,
+        pnl = EXCLUDED.pnl,
+        status = EXCLUDED.status,
+        updated_at = CURRENT_TIMESTAMP`,
+      [
+        posId,
+        event.tenantId,
+        clientId,
+        clientCode,
+        clientName,
+        p.symbol || 'NIFTY50',
+        p.exchange || 'NSE',
+        p.side || 'BUY',
+        qty,
+        buyPrice,
+        curPrice,
+        pnl,
+        p.status || (qty === 0 ? 'CLOSED' : 'OPEN')
+      ]
+    );
+  }
+
+  private async handleTenantConfigUpdated(event: TradingPlatformEvent): Promise<void> {
+    const p = event.payload;
+    if (!p) return;
+    await query(
+      `UPDATE platform_settings
+       SET trading_enabled = COALESCE($1, trading_enabled),
+           registration_enabled = COALESCE($2, registration_enabled),
+           api_enabled = COALESCE($3, api_enabled),
+           support_enabled = COALESCE($4, support_enabled),
+           notifications_enabled = COALESCE($5, notifications_enabled),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE tenant_id = $6`,
+      [
+        p.trading_enabled ?? null,
+        p.registration_enabled ?? null,
+        p.api_enabled ?? null,
+        p.support_enabled ?? null,
+        p.notifications_enabled ?? null,
+        event.tenantId
+      ]
+    );
+  }
+
+  private async handleTenantBrandingUpdated(event: TradingPlatformEvent): Promise<void> {
+    const p = event.payload;
+    if (!p) return;
+    await query(
+      `UPDATE tenant_branding
+       SET sync_status = 'SYNCED',
+           publish_status = 'PUBLISHED',
+           version = COALESCE($1, version),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE tenant_id = $2`,
+      [p.version ?? null, event.tenantId]
+    );
+  }
+
+  private async handleTenantStatusUpdated(event: TradingPlatformEvent): Promise<void> {
+    const p = event.payload;
+    if (!p || !p.status) return;
+    await query(
+      `UPDATE tenants SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+      [p.status, event.tenantId]
+    );
+  }
+
+  private async handleFundEvent(event: TradingPlatformEvent): Promise<void> {
+    const p = event.payload;
+    if (!p) return;
+    if (event.eventType === 'fund.created' || p.type === 'DEPOSIT') {
+      const depId = p.id || p.transactionId || `DEP-${Date.now()}`;
+      await query(
+        `INSERT INTO fund_deposits (
+          id, tenant_id, client_id, client_code, client_name, amount, currency, payment_method, transaction_ref, status, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
+        ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status`,
+        [
+          depId,
+          event.tenantId,
+          p.clientId || 'CLT-001',
+          p.clientCode || 'CLT001',
+          p.clientName || 'Trader',
+          Number(p.amount || 0),
+          p.currency || 'INR',
+          p.method || 'UPI',
+          p.reference || `TXN-${Date.now()}`,
+          p.status || 'PENDING'
+        ]
+      );
+    }
+  }
+
+  private async handleKycUpdated(event: TradingPlatformEvent): Promise<void> {
+    const p = event.payload;
+    if (!p || !p.clientId) return;
+    const status = p.status || 'APPROVED';
+    await query(
+      `UPDATE clients SET kyc_status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 OR client_code = $2`,
+      [status, p.clientId]
+    );
+    await query(
+      `UPDATE kyc_records SET kyc_status = $1, updated_at = CURRENT_TIMESTAMP WHERE client_id = $2`,
+      [status, p.clientId]
+    );
+  }
+
+  private async handleNotificationCreated(event: TradingPlatformEvent): Promise<void> {
+    const p = event.payload;
+    if (!p) return;
+    await query(
+      `INSERT INTO notifications (id, tenant_id, title, message, notification_type, is_read, created_at)
+       VALUES ($1, $2, $3, $4, $5, false, CURRENT_TIMESTAMP)`,
+      [
+        p.id || `NOTIF-${Date.now()}`,
+        event.tenantId,
+        p.title || 'Platform Notification',
+        p.message || '',
+        p.type || 'INFO'
+      ]
+    );
+  }
+
+  private async handleSupportUpdated(event: TradingPlatformEvent): Promise<void> {
+    const p = event.payload;
+    if (!p || !p.ticketId) return;
+    await query(
+      `UPDATE support_tickets SET status = COALESCE($1, status), updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+      [p.status ?? null, p.ticketId]
+    );
   }
 
   public getMetrics() {

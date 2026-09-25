@@ -37,6 +37,9 @@ import {
   SupportTicketsModal
 } from '../components/trading/SupportTicketsModal';
 import {
+  MarketClosedModal
+} from '../components/trading/MarketClosedModal';
+import {
   TourModal
 } from '../components/trading/TourModal';
 import {
@@ -74,6 +77,7 @@ import { X, HelpCircle, Bell, CheckCircle2 } from 'lucide-react';
 interface TradingPlatformViewProps {
   initialTenantDomain?: string;
   initialClient?: any;
+  isAdmin?: boolean;
   onReturnToAdmin?: () => void;
   onNotify?: (msg: string, type?: 'info' | 'success' | 'warning') => void;
 }
@@ -81,6 +85,7 @@ interface TradingPlatformViewProps {
 export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
   initialTenantDomain = 'trade.vertextrading.com',
   initialClient = null,
+  isAdmin = false,
   onReturnToAdmin,
   onNotify
 }) => {
@@ -160,6 +165,7 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
   const [tourModalOpen, setTourModalOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [ticketsModalOpen, setTicketsModalOpen] = useState(false);
+  const [marketClosedModalOpen, setMarketClosedModalOpen] = useState(false);
 
   // Sync dark class on document
   useEffect(() => {
@@ -249,6 +255,10 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
 
   // Handlers for Orders
   const handleOpenOrder = (inst: TradingInstrument, side: 'BUY' | 'SELL') => {
+    if (marketStatus === 'CLOSED') {
+      setMarketClosedModalOpen(true);
+      return;
+    }
     if (!branding.isTradingEnabled) {
       onNotify?.('Trading is currently disabled on this tenant platform.', 'warning');
       return;
@@ -394,7 +404,7 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
         }}
         onOpenCentralControls={() => setCentralControlsOpen(true)}
         onReturnToAdmin={onReturnToAdmin}
-        isAdmin={!!onReturnToAdmin}
+        isAdmin={isAdmin}
       />
 
       {/* 2. MAIN HEADER (Logo, Watchlist, Orders, Portfolio, History, Profile Tabs + Theme, Lang, Wallet, Avatar) */}
@@ -429,8 +439,12 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
           onToggleMarketStatus={() => {
             const nextMode = marketStatus === 'LIVE' ? 'OPEN' : marketStatus === 'OPEN' ? 'CLOSED' : 'LIVE';
             setMarketStatus(nextMode);
+            if (nextMode === 'CLOSED') {
+              setMarketClosedModalOpen(true);
+            }
             onNotify?.(`Market Mode switched to: ${nextMode}`, 'info');
           }}
+          onOpenMarketHoursInfo={() => setMarketClosedModalOpen(true)}
         />
 
         {/* Top 3 Metric Cards: AVAILABLE MARGIN, TODAY'S P&L, OVERALL P&L */}
@@ -451,6 +465,14 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
                 selectedInstrumentId={selectedInstrument.id}
                 onSelectInstrument={inst => setSelectedInstrument(inst)}
                 onOpenOrder={handleOpenOrder}
+                onOpenChart={inst => {
+                  setChartModalInstrument(inst);
+                  setChartModalOpen(true);
+                }}
+                onOpenOptionChain={inst => {
+                  setOptionChainInstrument(inst);
+                  setOptionChainModalOpen(true);
+                }}
               />
             </div>
 
@@ -464,6 +486,10 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
                 onOpenChart={inst => {
                   setChartModalInstrument(inst);
                   setChartModalOpen(true);
+                }}
+                onOpenOptionChain={inst => {
+                  setOptionChainInstrument(inst);
+                  setOptionChainModalOpen(true);
                 }}
                 onOpenWallet={() => setWalletModalOpen(true)}
               />
@@ -628,6 +654,22 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
       <SupportTicketsModal
         isOpen={ticketsModalOpen}
         onClose={() => setTicketsModalOpen(false)}
+      />
+
+      {/* Official Market Closed Information & Override Modal */}
+      <MarketClosedModal
+        isOpen={marketClosedModalOpen}
+        onClose={() => setMarketClosedModalOpen(false)}
+        onSimulateOpen={() => {
+          setMarketStatus('LIVE');
+          onNotify?.('Market Mode switched to LIVE (IST)!', 'success');
+        }}
+        info={{
+          exchange: selectedInstrument.category === 'COMMODITY' ? 'MCX Commodity Exchange' : 'NSE & BSE',
+          tradingHours: selectedInstrument.category === 'COMMODITY' ? '09:00 - 23:30' : '09:15 - 15:30',
+          days: 'Mon - Fri',
+          timeZone: 'IST'
+        }}
       />
 
       {/* Notifications Drawer */}

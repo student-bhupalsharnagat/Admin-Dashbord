@@ -168,6 +168,7 @@ export interface Trade {
   total_value: number;
   pl: number;
   status: 'EXECUTED' | 'SETTLED' | 'CANCELLED';
+  exchange?: string;
   timestamp: string;
 }
 

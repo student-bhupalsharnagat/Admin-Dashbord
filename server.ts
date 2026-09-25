@@ -34,7 +34,7 @@ import { query } from './server/db/connection.ts';
 import { HierarchyLevel } from './server/auth/types.ts';
 import { appConfig } from './server/config/environment.ts';
 import { tradingPlatformClient } from './server/services/TradingPlatformClient.ts';
-import { eventHandler } from './server/services/EventHandler.ts';
+import { eventHandler, adminEventBus } from './server/services/EventHandler.ts';
 
 async function startServer() {
   const app = express();
@@ -1727,6 +1727,54 @@ async function startServer() {
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
+  });
+
+  // Serve stored branding assets (logo, favicon, etc.) as clean URLs
+  app.get('/api/assets/:id', async (req, res) => {
+    try {
+      const asset = await assetStorage.getAsset(req.params.id);
+      if (!asset) return res.status(404).send('Asset not found');
+      if (asset.contentBuffer) {
+        res.setHeader('Content-Type', asset.mime_type || 'image/png');
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        return res.send(asset.contentBuffer);
+      }
+      if (asset.public_url && (asset.public_url.startsWith('http://') || asset.public_url.startsWith('https://'))) {
+        return res.redirect(asset.public_url);
+      }
+      res.status(404).send('Asset not found');
+    } catch (err: any) {
+      res.status(500).send(err.message);
+    }
+  });
+
+  // Real-time Server-Sent Events stream for Admin Console
+  app.get('/api/admin/events/stream', authenticate, (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+
+    const user = req.user;
+    const isGlobal = user?.role === 'SUPER_ADMIN' || user?.role === 'PLATFORM_OWNER';
+    const tenantScope = isGlobal ? null : user?.tenant_id;
+
+    const listener = (event: any) => {
+      if (tenantScope && event.tenantId && event.tenantId !== tenantScope) return;
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+    };
+
+    adminEventBus.on('event', listener);
+
+    // Keep-alive heartbeat every 20s
+    const heartbeat = setInterval(() => {
+      res.write(': keepalive\n\n');
+    }, 20000);
+
+    req.on('close', () => {
+      clearInterval(heartbeat);
+      adminEventBus.off('event', listener);
+    });
   });
 
   app.get('/api/admin/support', authMiddleware, async (req, res) => {

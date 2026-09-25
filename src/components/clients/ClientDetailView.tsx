@@ -230,12 +230,11 @@ export const ClientDetailView: React.FC<ClientDetailViewProps> = ({
         setLivePositions(prev => prev.filter(p => (p.id || p.symbol) !== posId));
         notify(`Position for ${pos.symbol} successfully squared off in Trading Platform.`, 'success');
       } else {
-        setLivePositions(prev => prev.filter(p => (p.id || p.symbol) !== posId));
-        notify(`Position for ${pos.symbol} closed via emergency override.`, 'success');
+        const errJson = await res.json().catch(() => ({}));
+        notify(errJson.error || errJson.message || `Square-off for ${pos.symbol} rejected by backend`, 'warning');
       }
-    } catch {
-      setLivePositions(prev => prev.filter(p => (p.id || p.symbol) !== posId));
-      notify(`Position for ${pos.symbol} closed.`, 'success');
+    } catch (err: any) {
+      notify(err.message || `Failed to square off position ${pos.symbol}`, 'warning');
     } finally {
       setSquaringOffId(null);
     }

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Shield, ChevronDown, Building, RefreshCw, LayoutDashboard } from 'lucide-react';
+import { Shield, ChevronDown, Building, RefreshCw, LayoutDashboard, LogOut } from 'lucide-react';
 
 interface TradingTopBarProps {
   tenantName: string;
@@ -50,7 +50,7 @@ export const TradingTopBar: React.FC<TradingTopBarProps> = ({
         </span>
       </div>
 
-      {/* Right side: Trading Status Pills, Tenant Switcher & Central Controls */}
+      {/* Right side: Trading Status Pills, Tenant Switcher & Central Controls / Logout */}
       <div className="flex items-center gap-2 flex-wrap">
         {/* Trading Status */}
         <div className="flex items-center gap-1.5">
@@ -117,18 +117,31 @@ export const TradingTopBar: React.FC<TradingTopBarProps> = ({
           <span>Central Controls</span>
         </button>
 
-        {/* Back to Admin Desk (if applicable) */}
+        {/* Action Button: Return to Admin Desk (if admin) OR Sign Out (if client) */}
         {onReturnToAdmin && (
-          <button
-            type="button"
-            id="admin-desk-btn"
-            onClick={onReturnToAdmin}
-            className="px-2.5 py-1 rounded-lg bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 text-xs font-semibold border border-purple-500/30 flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs active:scale-95"
-            title="Return to TradeMatrix Admin Desk"
-          >
-            <LayoutDashboard className="w-3.5 h-3.5 text-purple-400" />
-            <span>Admin Desk</span>
-          </button>
+          isAdmin ? (
+            <button
+              type="button"
+              id="admin-desk-btn"
+              onClick={onReturnToAdmin}
+              className="px-2.5 py-1 rounded-lg bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 text-xs font-semibold border border-purple-500/30 flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs active:scale-95"
+              title="Return to TradeMatrix Admin Desk"
+            >
+              <LayoutDashboard className="w-3.5 h-3.5 text-purple-400" />
+              <span>Admin Desk</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              id="client-signout-btn"
+              onClick={onReturnToAdmin}
+              className="px-2.5 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-xs font-semibold border border-rose-500/30 flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs active:scale-95"
+              title="Sign Out of Trading Account"
+            >
+              <LogOut className="w-3.5 h-3.5 text-rose-400" />
+              <span>Sign Out</span>
+            </button>
+          )
         )}
       </div>
     </div>
