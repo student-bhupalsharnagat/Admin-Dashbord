@@ -11,6 +11,7 @@ import {
   ArrowDownRight
 } from 'lucide-react';
 import { TradingInstrument, BenchmarkQuote, ClientWallet } from '../../types/trading';
+import { t } from '../../utils/tradingTranslations';
 
 interface LiveSpotlightTerminalProps {
   instrument: TradingInstrument;
@@ -20,6 +21,7 @@ interface LiveSpotlightTerminalProps {
   onOpenChart: (instrument: TradingInstrument) => void;
   onOpenOptionChain?: (instrument: TradingInstrument) => void;
   onOpenWallet: () => void;
+  currentLanguage?: string;
 }
 
 export const LiveSpotlightTerminal: React.FC<LiveSpotlightTerminalProps> = ({
@@ -29,7 +31,8 @@ export const LiveSpotlightTerminal: React.FC<LiveSpotlightTerminalProps> = ({
   onOpenOrder,
   onOpenChart,
   onOpenOptionChain,
-  onOpenWallet
+  onOpenWallet,
+  currentLanguage = 'en'
 }) => {
   const isPositive = instrument.change >= 0;
 

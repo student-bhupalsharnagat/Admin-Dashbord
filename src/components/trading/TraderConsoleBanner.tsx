@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Shield, Clock, CheckCircle, Info } from 'lucide-react';
+import { t } from '../../utils/tradingTranslations';
 
 interface TraderConsoleBannerProps {
   clientName: string;
@@ -8,6 +9,7 @@ interface TraderConsoleBannerProps {
   marketStatus: 'LIVE' | 'OPEN' | 'CLOSED';
   onToggleMarketStatus: () => void;
   onOpenMarketHoursInfo?: () => void;
+  currentLanguage?: string;
 }
 
 export const TraderConsoleBanner: React.FC<TraderConsoleBannerProps> = ({
@@ -16,7 +18,8 @@ export const TraderConsoleBanner: React.FC<TraderConsoleBannerProps> = ({
   kycStatus = 'Verified (MCX & NSE Active)',
   marketStatus = 'LIVE',
   onToggleMarketStatus,
-  onOpenMarketHoursInfo
+  onOpenMarketHoursInfo,
+  currentLanguage = 'en'
 }) => {
   const [istTime, setIstTime] = useState<string>('');
 
@@ -51,16 +54,16 @@ export const TraderConsoleBanner: React.FC<TraderConsoleBannerProps> = ({
         </div>
         <div>
           <h2 className="text-xs sm:text-sm font-black text-slate-900 dark:text-white tracking-wide">
-            Trading Console • {clientName}
+            {t(currentLanguage, 'trading_console')} • {clientName}
           </h2>
           <p className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-1.5 flex-wrap mt-0.5">
-            <span>User ID:</span>
+            <span>{t(currentLanguage, 'user_id')}:</span>
             <span className="text-amber-500 font-mono font-bold">{userId}</span>
             <span>•</span>
             <span>KYC:</span>
             <span className="text-emerald-500 font-medium flex items-center gap-1">
               <CheckCircle className="w-3.5 h-3.5 text-emerald-500 inline" />
-              {kycStatus}
+              {kycStatus || t(currentLanguage, 'kyc_verified')}
             </span>
           </p>
         </div>
@@ -89,10 +92,8 @@ export const TraderConsoleBanner: React.FC<TraderConsoleBannerProps> = ({
           <Clock className="w-3.5 h-3.5" />
           <span>
             {marketStatus === 'CLOSED'
-              ? 'Market: CLOSED'
-              : marketStatus === 'OPEN'
-              ? 'Market: OPEN (Demo)'
-              : 'Market: LIVE (IST)'}
+              ? t(currentLanguage, 'market_closed')
+              : t(currentLanguage, 'market_live')}
           </span>
         </button>
 

@@ -1,17 +1,20 @@
 import React from 'react';
+import { t } from '../../utils/tradingTranslations';
 
 interface TradingMetricsRowProps {
   availableMargin: number;
   todayPnL: number;
   overallPnL: number;
   onOpenWallet: () => void;
+  currentLanguage?: string;
 }
 
 export const TradingMetricsRow: React.FC<TradingMetricsRowProps> = ({
   availableMargin = 142840,
   todayPnL = 252227,
   overallPnL = 285727,
-  onOpenWallet
+  onOpenWallet,
+  currentLanguage = 'en'
 }) => {
   const isTodayPositive = todayPnL >= 0;
   const isOverallPositive = overallPnL >= 0;
@@ -30,7 +33,7 @@ export const TradingMetricsRow: React.FC<TradingMetricsRowProps> = ({
         title="Click to view Wallet and Manage Margin"
       >
         <div className="text-[10px] sm:text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider truncate">
-          AVAILABLE MARGIN
+          {t(currentLanguage, 'available_margin')}
         </div>
         <div className="text-sm sm:text-base lg:text-lg font-mono font-black text-slate-900 dark:text-white tracking-tight mt-0.5 truncate">
           ₹{availableMargin.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
@@ -40,7 +43,7 @@ export const TradingMetricsRow: React.FC<TradingMetricsRowProps> = ({
       {/* Today's P&L */}
       <div id="metric-today-pnl" className="text-center">
         <div className="text-[10px] sm:text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider truncate flex items-center justify-center gap-1">
-          <span>TODAY'S P&L</span>
+          <span>{t(currentLanguage, 'today_pnl')}</span>
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
         </div>
         <div
@@ -55,7 +58,7 @@ export const TradingMetricsRow: React.FC<TradingMetricsRowProps> = ({
       {/* Overall P&L */}
       <div id="metric-overall-pnl" className="text-right">
         <div className="text-[10px] sm:text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider truncate">
-          OVERALL P&L
+          {t(currentLanguage, 'overall_pnl')}
         </div>
         <div
           className={`text-sm sm:text-base lg:text-lg font-mono font-black tracking-tight mt-0.5 truncate transition-colors duration-200 ${
