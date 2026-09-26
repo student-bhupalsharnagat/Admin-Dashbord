@@ -13,7 +13,7 @@ export default defineConfig(() => {
     },
     server: {
       // Render पर डोमेन ब्लॉक होने की एरर को ठीक करने के लिए
-      allowedHosts: true,
+      allowedHosts: true as true,
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modify—file watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',

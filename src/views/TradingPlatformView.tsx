@@ -76,6 +76,7 @@ import { X, HelpCircle, Bell, CheckCircle2 } from 'lucide-react';
 
 interface TradingPlatformViewProps {
   initialTenantDomain?: string;
+  initialTenantId?: string;
   initialClient?: any;
   isAdmin?: boolean;
   onReturnToAdmin?: () => void;
@@ -84,6 +85,7 @@ interface TradingPlatformViewProps {
 
 export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
   initialTenantDomain = 'trade.vertextrading.com',
+  initialTenantId = '',
   initialClient = null,
   isAdmin = false,
   onReturnToAdmin,
@@ -106,11 +108,135 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
       return {
         ...INITIAL_TENANT_BRANDING,
         tenantName: initialClient.tenantName,
-        tenantCode: initialClient.tenantCode || 'VTX'
+        tenantCode: initialClient.tenantCode || 'VTX',
+        brandName: initialClient.tenantName,
+        shortName: initialClient.tenantCode || 'VTX'
       };
     }
     return INITIAL_TENANT_BRANDING;
   });
+
+  // Active tenant scope for multi-tenant isolation
+  const [activeTenantDomain, setActiveTenantDomain] = useState<string>(initialTenantDomain || 'trade.alphaprime.com');
+  const [activeTenantId, setActiveTenantId] = useState<string>(initialTenantId || initialClient?.tenantId || '');
+  const [availableTenantsList, setAvailableTenantsList] = useState<Array<{ id: string; name: string; code: string; domain: string }>>([
+    { id: 'TNT-001', name: 'Alpha Prime Capital', code: 'APC', domain: 'trade.alphaprime.com' },
+    { id: 'TNT-002', name: 'Apex Securities Ltd', code: 'APEX', domain: 'trade.apexsecurities.in' },
+    { id: 'TNT-003', name: 'Zenith Markets', code: 'ZMK', domain: 'trade.zenithmarkets.in' },
+    { id: 'TNT-004', name: 'Quantum Alpha Capital', code: 'QAC', domain: 'trade.quantumfx.io' }
+  ]);
+
+  // Load real tenants list from backend
+  useEffect(() => {
+    let isMounted = true;
+    async function loadTenants() {
+      try {
+        const res = await fetch('/api/admin/tenants');
+        if (res.ok) {
+          const list = await res.json();
+          if (Array.isArray(list) && list.length > 0 && isMounted) {
+            setAvailableTenantsList(list.map((t: any) => ({
+              id: t.id,
+              name: t.name || t.tenant_name,
+              code: t.code || t.tenant_code || t.id.slice(0, 3).toUpperCase(),
+              domain: t.domain || `${t.code?.toLowerCase() || 'trade'}.tradepro.com`
+            })));
+          }
+        }
+      } catch (e) {
+        console.warn('Could not load tenants list for TradingPlatformView:', e);
+      }
+    }
+    loadTenants();
+    return () => { isMounted = false; };
+  }, []);
+
+  // Tenant Branding fetcher function
+  const loadTenantBranding = async (domain?: string, tenantId?: string) => {
+    try {
+      const targetDomain = domain || activeTenantDomain;
+      const targetId = tenantId || activeTenantId;
+      const url = `/api/tenant/branding?domain=${encodeURIComponent(targetDomain)}&tenantId=${encodeURIComponent(targetId)}`;
+      const res = await fetch(url, {
+        headers: {
+          'x-tenant-domain': targetDomain,
+          'x-tenant-id': targetId
+        }
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setBranding(prev => ({
+          ...prev,
+          tenantName: data.brandName || data.tenantName || prev.tenantName,
+          tenantCode: data.shortName || data.tenantCode || prev.tenantCode,
+          brandName: data.brandName || data.tenantName || prev.tenantName,
+          shortName: data.shortName || data.tenantCode || prev.tenantCode,
+          tagline: data.tagline !== undefined ? data.tagline : prev.tagline,
+          logoText: data.shortName || data.brandName || prev.logoText,
+          logoUrl: data.logoUrl || prev.logoUrl,
+          faviconUrl: data.faviconUrl || prev.faviconUrl,
+          primaryColor: data.colors?.primary || prev.primaryColor,
+          secondaryColor: data.colors?.secondary || prev.secondaryColor,
+          accentColor: data.colors?.accent || prev.accentColor,
+          backgroundColor: data.colors?.background || prev.backgroundColor,
+          surfaceColor: data.colors?.surface || prev.surfaceColor,
+          footerCopyright: data.footerCopyright || data.legalLinks?.footerText || prev.footerCopyright,
+          colors: data.colors || prev.colors,
+          supportEmail: data.contactInfo?.supportEmail || prev.supportEmail,
+          supportPhone: data.contactInfo?.supportPhone || prev.supportPhone
+        }));
+
+        // Inject CSS Variables for Theme
+        if (data.colors) {
+          const root = document.documentElement;
+          if (data.colors.primary) {
+            root.style.setProperty('--primary', data.colors.primary);
+            root.style.setProperty('--brand-primary', data.colors.primary);
+          }
+          if (data.colors.secondary) {
+            root.style.setProperty('--secondary', data.colors.secondary);
+            root.style.setProperty('--brand-secondary', data.colors.secondary);
+          }
+          if (data.colors.accent) {
+            root.style.setProperty('--accent', data.colors.accent);
+            root.style.setProperty('--brand-accent', data.colors.accent);
+          }
+          if (data.colors.background) {
+            root.style.setProperty('--background', data.colors.background);
+            root.style.setProperty('--brand-background', data.colors.background);
+          }
+          if (data.colors.surface) {
+            root.style.setProperty('--surface', data.colors.surface);
+            root.style.setProperty('--brand-surface', data.colors.surface);
+          }
+        }
+
+        // Update document title
+        if (data.brandName) {
+          document.title = `${data.brandName} - Trading Terminal`;
+        }
+
+        // Update favicon if provided
+        if (data.faviconUrl) {
+          let link = document.querySelector("link[rel~='icon']") as HTMLLinkElement;
+          if (!link) {
+            link = document.createElement('link');
+            link.rel = 'icon';
+            document.getElementsByTagName('head')[0].appendChild(link);
+          }
+          link.href = data.faviconUrl;
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to load published tenant branding:', err);
+    }
+  };
+
+  // Fetch tenant branding on mount and when domain/tenantId changes
+  useEffect(() => {
+    loadTenantBranding(activeTenantDomain, activeTenantId);
+  }, [activeTenantDomain, activeTenantId]);
 
   // Client Profile state
   const [client, setClient] = useState<ClientAccount>(() => {
@@ -389,17 +515,23 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
     <div className={`min-h-screen ${isDark ? 'dark bg-[#060B14] text-slate-100' : 'bg-slate-100/70 text-slate-900'} font-sans transition-colors duration-150 flex flex-col`}>
       {/* 1. TOP BAR (Tenant Name, Code, Trade/Options Pills, Switch Tenant & Central Controls) */}
       <TradingTopBar
-        tenantName={branding.tenantName}
-        tenantCode={branding.tenantCode}
+        tenantName={branding.brandName || branding.tenantName}
+        tenantCode={branding.shortName || branding.tenantCode}
         tagline={branding.tagline}
         isTradingEnabled={branding.isTradingEnabled}
         isOptionsEnabled={branding.isOptionsEnabled}
+        availableTenants={availableTenantsList}
         onSelectTenant={t => {
+          setActiveTenantDomain(t.domain);
+          setActiveTenantId(t.id);
           setBranding(prev => ({
             ...prev,
             tenantName: t.name,
-            tenantCode: t.code
+            tenantCode: t.code,
+            brandName: t.name,
+            shortName: t.code
           }));
+          loadTenantBranding(t.domain, t.id);
           onNotify?.(`Switched to tenant ${t.name}`, 'info');
         }}
         onOpenCentralControls={() => setCentralControlsOpen(true)}
@@ -411,9 +543,11 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
       <TradingHeader
         activeTab={activeTab}
         onSelectTab={tab => setActiveTab(tab)}
-        brandName={branding.tenantName}
-        brandShortName={branding.tenantCode}
+        brandName={branding.brandName || branding.tenantName}
+        brandShortName={branding.shortName || branding.tenantCode}
         brandTagline={branding.tagline}
+        logoUrl={branding.logoUrl}
+        primaryColor={branding.primaryColor || branding.colors?.primary}
         ordersCount={orders.filter(o => o.status === 'OPEN').length || orders.length}
         positionsCount={positions.length}
         unreadNotificationsCount={2}
@@ -548,6 +682,10 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
           <TradingProfileView
             client={client}
             wallet={wallet}
+            supportEmail={branding.supportEmail}
+            supportPhone={branding.supportPhone}
+            brandName={branding.brandName || branding.tenantName}
+            footerCopyright={branding.footerCopyright}
             onLogout={() => {
               if (onReturnToAdmin) {
                 onReturnToAdmin();
@@ -562,6 +700,50 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
           />
         )}
       </main>
+
+      {/* 4. TENANT BRANDED FOOTER (LEGAL COMPLIANCE & SUPPORT) */}
+      <footer className="mt-auto border-t border-slate-200 dark:border-[#162234] bg-white/50 dark:bg-[#070D18]/80 py-6 px-4 text-xs text-slate-500 select-none">
+        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            {branding.logoUrl ? (
+              <img
+                src={branding.logoUrl}
+                alt={branding.brandName || branding.tenantName}
+                className="h-6 max-w-[110px] object-contain rounded bg-black/20 p-0.5 border border-white/5"
+              />
+            ) : (
+              <div
+                className="w-6 h-6 rounded flex items-center justify-center font-black text-white text-[10px]"
+                style={{ backgroundColor: branding.primaryColor || branding.colors?.primary || '#3b82f6' }}
+              >
+                {branding.shortName || branding.tenantCode}
+              </div>
+            )}
+            <span className="font-bold text-slate-700 dark:text-slate-300">
+              {branding.footerCopyright || `© 2026 ${branding.brandName || branding.tenantName}. All rights reserved.`}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-4 flex-wrap">
+            {branding.supportEmail && (
+              <a
+                href={`mailto:${branding.supportEmail}`}
+                className="text-slate-400 hover:text-blue-400 transition-colors"
+              >
+                Support: {branding.supportEmail}
+              </a>
+            )}
+            {branding.supportPhone && (
+              <span className="text-slate-400">
+                Phone: {branding.supportPhone}
+              </span>
+            )}
+            <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold">
+              SEBI Compliant Terminal
+            </span>
+          </div>
+        </div>
+      </footer>
 
       {/* 4. MODALS & SLIDEOVERS */}
       {/* Order Placement Modal */}

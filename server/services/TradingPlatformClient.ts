@@ -251,12 +251,29 @@ export class TradingPlatformClient {
       const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
 
       try {
-        const response = await fetch(url, {
-          method: options.method,
-          headers,
-          body: ['POST', 'PUT', 'PATCH'].includes(options.method) ? bodyString : undefined,
-          signal: controller.signal
-        });
+        let response: Response;
+        try {
+          response = await fetch(url, {
+            method: options.method,
+            headers,
+            body: ['POST', 'PUT', 'PATCH'].includes(options.method) ? bodyString : undefined,
+            signal: controller.signal
+          });
+        } catch (fetchErr: any) {
+          // If port 3001 was unreachable (e.g. monolithic/single server running on port 3000), fallback to current server port
+          const isConnRefused = fetchErr.code === 'ECONNREFUSED' || fetchErr.cause?.code === 'ECONNREFUSED' || fetchErr.message?.includes('fetch failed');
+          if (isConnRefused && url.includes(':3001')) {
+            const fallbackPortUrl = url.replace(':3001', `:${process.env.PORT || 3000}`);
+            response = await fetch(fallbackPortUrl, {
+              method: options.method,
+              headers,
+              body: ['POST', 'PUT', 'PATCH'].includes(options.method) ? bodyString : undefined,
+              signal: controller.signal
+            });
+          } else {
+            throw fetchErr;
+          }
+        }
 
         clearTimeout(timeoutHandle);
         const latencyMs = Date.now() - startTime;

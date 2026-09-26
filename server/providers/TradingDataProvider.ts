@@ -45,6 +45,8 @@ import {
 import { DEFAULT_ROLE_PERMISSIONS } from '../../src/utils/rbac';
 import { tradingPlatformClient } from '../services/TradingPlatformClient.ts';
 import { tenantConfigCache } from './TenantConfigCache.ts';
+import { query } from '../db/connection.ts';
+import { adminEventBus } from '../services/EventHandler.ts';
 
 export type EntityStatus = 'ACTIVE' | 'SUSPENDED' | 'INACTIVE';
 
@@ -1774,6 +1776,29 @@ export class MockTradingDataProvider implements ITradingDataProvider {
   }
 
   async updateWhiteLabelConfig(tenantId: string, data: Partial<WhiteLabelConfig>, actor: string = 'Admin'): Promise<WhiteLabelConfig> {
+    // Validate colors if provided
+    const hexOrRgbRegex = /^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{4}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$|^rgba?\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*(,\s*(0|1|0?\.\d+)\s*)?\)$/i;
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    if (data.primary_color && !hexOrRgbRegex.test(data.primary_color.trim())) {
+      throw new Error(`Invalid primary color: "${data.primary_color}". Please provide a valid HEX or RGB/RGBA code.`);
+    }
+    if (data.secondary_color && !hexOrRgbRegex.test(data.secondary_color.trim())) {
+      throw new Error(`Invalid secondary color: "${data.secondary_color}". Please provide a valid HEX or RGB/RGBA code.`);
+    }
+    if (data.accent_color && !hexOrRgbRegex.test(data.accent_color.trim())) {
+      throw new Error(`Invalid accent color: "${data.accent_color}". Please provide a valid HEX or RGB/RGBA code.`);
+    }
+    if (data.background_color && !hexOrRgbRegex.test(data.background_color.trim())) {
+      throw new Error(`Invalid background color: "${data.background_color}". Please provide a valid HEX or RGB/RGBA code.`);
+    }
+    if (data.surface_color && !hexOrRgbRegex.test(data.surface_color.trim())) {
+      throw new Error(`Invalid surface color: "${data.surface_color}". Please provide a valid HEX or RGB/RGBA code.`);
+    }
+    if (data.support_email && data.support_email.trim() && !emailRegex.test(data.support_email.trim())) {
+      throw new Error(`Invalid support email format: "${data.support_email}".`);
+    }
+
     let config = this.whiteLabelConfigs.find(c => c.tenant_id === tenantId);
     const tenant = this.tenants.find(t => t.id === tenantId);
     const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
@@ -1812,7 +1837,7 @@ export class MockTradingDataProvider implements ITradingDataProvider {
         company_address: 'Corporate Headquarters, Financial District',
         website_url: `https://${tenant?.code.toLowerCase() || 'trade'}.tradepro.com`,
         help_support_url: `https://${tenant?.code.toLowerCase() || 'trade'}.tradepro.com/support`,
-        footer_text: `© 2024 ${tenant?.name || 'TradePro'}. Powered by TradePro Commercial SaaS.`,
+        footer_text: `© 2026 ${tenant?.name || 'TradePro'}. All rights reserved.`,
         terms_url: '#',
         privacy_url: '#',
         risk_disclosure_url: '#',
@@ -1828,22 +1853,64 @@ export class MockTradingDataProvider implements ITradingDataProvider {
     // Save previous snapshot for rollback if not already saved for this version
     const history = this.brandingHistory.get(tenantId) || [];
     history.push(JSON.parse(JSON.stringify(config)));
-    if (history.length > 10) history.shift(); // keep last 10 versions
+    if (history.length > 20) history.shift();
     this.brandingHistory.set(tenantId, history);
 
-    // Apply updates
+    // Apply updates and mark status as DRAFT
     Object.assign(config, data);
+    if (config.footer_copyright && !config.footer_text) config.footer_text = config.footer_copyright;
+    if (config.footer_text && !config.footer_copyright) config.footer_copyright = config.footer_text;
+    config.status = 'DRAFT';
     config.updated_at = now;
 
-    // If status is PUBLISHED, update cache and primary domain map
-    if (config.status === 'PUBLISHED') {
-      tenantConfigCache.setBranding(tenantId, config);
-      if (config.custom_domain) {
-        tenantConfigCache.mapDomainToTenant(config.custom_domain, tenantId);
-      }
-    } else {
-      // Invalidate cache if in draft to prevent serving unverified draft changes publicly
-      tenantConfigCache.invalidateBranding(tenantId);
+    // Invalidate public cache so unverified draft changes are NOT served publicly
+    tenantConfigCache.invalidateBranding(tenantId);
+
+    // Persist draft in database
+    try {
+      await query(`
+        INSERT INTO tenant_branding (
+          id, tenant_id, company_name, portal_name, tagline, logo_url, favicon_url,
+          primary_color, secondary_color, accent_color, background_color, surface_color,
+          support_email, support_phone, copyright_text, version, publish_status, draft_config, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'DRAFT', $17, NOW())
+        ON CONFLICT (tenant_id) DO UPDATE SET
+          company_name = EXCLUDED.company_name,
+          portal_name = EXCLUDED.portal_name,
+          tagline = EXCLUDED.tagline,
+          logo_url = EXCLUDED.logo_url,
+          primary_color = EXCLUDED.primary_color,
+          secondary_color = EXCLUDED.secondary_color,
+          accent_color = EXCLUDED.accent_color,
+          background_color = EXCLUDED.background_color,
+          surface_color = EXCLUDED.surface_color,
+          support_email = EXCLUDED.support_email,
+          support_phone = EXCLUDED.support_phone,
+          copyright_text = EXCLUDED.copyright_text,
+          draft_config = EXCLUDED.draft_config,
+          publish_status = 'DRAFT',
+          updated_at = NOW()
+      `, [
+        `tb-${tenantId}`,
+        tenantId,
+        config.company_name || config.brand_name || tenant?.name || 'Company',
+        config.brand_name || tenant?.name || 'Portal',
+        config.tagline || '',
+        config.logo_url || '',
+        config.favicon_url || '/favicon.ico',
+        config.primary_color || '#3b82f6',
+        config.secondary_color || '#0f172a',
+        config.accent_color || '#10b981',
+        config.background_color || '#080d1a',
+        config.surface_color || '#0d1528',
+        config.support_email || '',
+        config.support_phone || '',
+        config.footer_copyright || config.footer_text || '',
+        config.version || 1,
+        JSON.stringify(config)
+      ]);
+    } catch (dbErr) {
+      console.warn('[TradingDataProvider] DB draft save fallback to memory:', dbErr);
     }
 
     // Record audit log
@@ -1853,13 +1920,13 @@ export class MockTradingDataProvider implements ITradingDataProvider {
       role: 'SUPER_ADMIN',
       tenant_id: tenantId,
       tenant_name: config.tenant_name,
-      action: config.status === 'PUBLISHED' ? 'BRANDING_PUBLISHED' : 'BRANDING_UPDATED',
-      entity: `Branding (v${config.version || 1})`,
+      action: 'BRANDING_UPDATED',
+      entity: `Branding Draft (v${config.version || 1})`,
       old_value: 'Draft modified',
-      new_value: `${config.status}: ${config.brand_name || config.tenant_name}`,
+      new_value: `DRAFT: ${config.brand_name || config.tenant_name}`,
       timestamp: now,
       ip_address: '103.21.58.14',
-      reason: 'White label settings updated by administrator'
+      reason: 'Draft branding configuration saved by administrator'
     });
 
     return config;
@@ -1871,23 +1938,171 @@ export class MockTradingDataProvider implements ITradingDataProvider {
       throw new Error(`White-label configuration for tenant ${tenantId} not found`);
     }
 
+    // Color and field validations
+    const hexOrRgbRegex = /^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{4}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$|^rgba?\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*(,\s*(0|1|0?\.\d+)\s*)?\)$/i;
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    if (!config.brand_name || !config.brand_name.trim()) {
+      throw new Error('Brand Name cannot be empty.');
+    }
+    if (!hexOrRgbRegex.test(config.primary_color || '')) {
+      throw new Error(`Invalid primary color: "${config.primary_color}". Please provide a valid HEX or RGB/RGBA code.`);
+    }
+    if (!hexOrRgbRegex.test(config.secondary_color || '')) {
+      throw new Error(`Invalid secondary color: "${config.secondary_color}". Please provide a valid HEX or RGB/RGBA code.`);
+    }
+    if (!hexOrRgbRegex.test(config.accent_color || '')) {
+      throw new Error(`Invalid accent color: "${config.accent_color}". Please provide a valid HEX or RGB/RGBA code.`);
+    }
+    if (!hexOrRgbRegex.test(config.background_color || '')) {
+      throw new Error(`Invalid background color: "${config.background_color}". Please provide a valid HEX or RGB/RGBA code.`);
+    }
+    if (!hexOrRgbRegex.test(config.surface_color || '')) {
+      throw new Error(`Invalid surface color: "${config.surface_color}". Please provide a valid HEX or RGB/RGBA code.`);
+    }
+    if (config.support_email && config.support_email.trim() && !emailRegex.test(config.support_email.trim())) {
+      throw new Error(`Invalid support email format: "${config.support_email}".`);
+    }
+
     // Save snapshot before publishing
     const history = this.brandingHistory.get(tenantId) || [];
     history.push(JSON.parse(JSON.stringify(config)));
     this.brandingHistory.set(tenantId, history);
 
     const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
-    config.status = 'PUBLISHED';
-    config.version = (config.version || 1) + 1;
-    config.updated_at = now;
+    const nextVersion = (config.version || 1) + 1;
 
-    // Cache updated published config
+    // Prepare published candidate
+    const publishedCandidate = {
+      ...config,
+      status: 'PUBLISHED' as const,
+      version: nextVersion,
+      updated_at: now
+    };
+
+    // Send secure S2S request to Trading Platform
+    const syncRes = await tradingPlatformClient.syncWhiteLabel(
+      tenantId,
+      publishedCandidate,
+      nextVersion,
+      { actor, correlationId: `pub_${tenantId}_v${nextVersion}_${Date.now()}` }
+    );
+
+    // If Trading Platform communication fails, DO NOT report success!
+    if (!syncRes.success) {
+      this.brandingAuditLogs.unshift({
+        id: `b-log-${Date.now()}`,
+        actor,
+        role: 'SUPER_ADMIN',
+        tenant_id: tenantId,
+        tenant_name: config.tenant_name,
+        action: 'BRANDING_UPDATED',
+        entity: `Branding Publish Failed (v${nextVersion})`,
+        old_value: 'DRAFT',
+        new_value: `S2S Sync Failed: ${syncRes.error || 'Connection refused'}`,
+        timestamp: now,
+        ip_address: '103.21.58.14',
+        reason: `Failed to push branding to Trading Platform: ${syncRes.error}`
+      });
+      throw new Error(`Trading Platform failed to synchronize: ${syncRes.error || 'Remote error'}`);
+    }
+
+    // S2S confirmed success! Commit changes
+    Object.assign(config, publishedCandidate);
+
+    // Invalidate and refresh cache
+    tenantConfigCache.invalidateBranding(tenantId);
     tenantConfigCache.setBranding(tenantId, config);
     if (config.custom_domain) {
       tenantConfigCache.mapDomainToTenant(config.custom_domain, tenantId);
     }
 
-    // Audit log
+    // Persist published configuration and version to database
+    try {
+      const tenant = this.tenants.find(t => t.id === tenantId);
+      await query(`
+        INSERT INTO tenant_branding (
+          id, tenant_id, company_name, portal_name, tagline, logo_url, favicon_url,
+          primary_color, secondary_color, accent_color, background_color, surface_color,
+          support_email, support_phone, copyright_text, version, publish_status,
+          published_config, last_published_at, last_published_by, sync_status, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'PUBLISHED', $17, NOW(), $18, 'SYNCED', NOW())
+        ON CONFLICT (tenant_id) DO UPDATE SET
+          company_name = EXCLUDED.company_name,
+          portal_name = EXCLUDED.portal_name,
+          tagline = EXCLUDED.tagline,
+          logo_url = EXCLUDED.logo_url,
+          primary_color = EXCLUDED.primary_color,
+          secondary_color = EXCLUDED.secondary_color,
+          accent_color = EXCLUDED.accent_color,
+          background_color = EXCLUDED.background_color,
+          surface_color = EXCLUDED.surface_color,
+          support_email = EXCLUDED.support_email,
+          support_phone = EXCLUDED.support_phone,
+          copyright_text = EXCLUDED.copyright_text,
+          version = EXCLUDED.version,
+          publish_status = 'PUBLISHED',
+          published_config = EXCLUDED.published_config,
+          last_published_at = NOW(),
+          last_published_by = EXCLUDED.last_published_by,
+          sync_status = 'SYNCED',
+          updated_at = NOW()
+      `, [
+        `tb-${tenantId}`,
+        tenantId,
+        config.company_name || config.brand_name || tenant?.name || 'Company',
+        config.brand_name || tenant?.name || 'Portal',
+        config.tagline || '',
+        config.logo_url || '',
+        config.favicon_url || '/favicon.ico',
+        config.primary_color || '#3b82f6',
+        config.secondary_color || '#0f172a',
+        config.accent_color || '#10b981',
+        config.background_color || '#080d1a',
+        config.surface_color || '#0d1528',
+        config.support_email || '',
+        config.support_phone || '',
+        config.footer_copyright || config.footer_text || '',
+        config.version,
+        JSON.stringify(config),
+        actor
+      ]);
+
+      await query(`
+        INSERT INTO white_label_versions (id, tenant_id, version, status, config, published_by, published_at, change_summary)
+        VALUES ($1, $2, $3, 'PUBLISHED', $4, $5, NOW(), $6)
+        ON CONFLICT (tenant_id, version) DO UPDATE SET
+          config = EXCLUDED.config,
+          published_at = NOW()
+      `, [
+        `wlv-${tenantId}-v${config.version}`,
+        tenantId,
+        config.version,
+        JSON.stringify(config),
+        actor,
+        reason || `Published version ${config.version}`
+      ]);
+    } catch (dbErr) {
+      console.warn('[TradingDataProvider] DB publish save warning:', dbErr);
+    }
+
+    // Broadcast real-time update event
+    adminEventBus.emit('tenant.branding.updated', {
+      tenantId,
+      version: config.version,
+      brandName: config.brand_name,
+      colors: {
+        primary: config.primary_color,
+        secondary: config.secondary_color,
+        accent: config.accent_color,
+        background: config.background_color,
+        surface: config.surface_color
+      },
+      logoUrl: config.logo_url,
+      updatedAt: config.updated_at
+    });
+
+    // Record audit log
     this.brandingAuditLogs.unshift({
       id: `b-log-${Date.now()}`,
       actor,
@@ -1908,27 +2123,70 @@ export class MockTradingDataProvider implements ITradingDataProvider {
 
   async rollbackWhiteLabelConfig(tenantId: string, actor: string = 'Admin'): Promise<WhiteLabelConfig> {
     const history = this.brandingHistory.get(tenantId);
-    if (!history || history.length === 0) {
+    let previousConfig: WhiteLabelConfig | null = null;
+
+    if (history && history.length > 0) {
+      previousConfig = history.pop()!;
+    } else {
+      // Check database white_label_versions for prior version
+      try {
+        const rows = await query(
+          'SELECT config FROM white_label_versions WHERE tenant_id = $1 ORDER BY version DESC LIMIT 2',
+          [tenantId]
+        );
+        if (rows.rows.length >= 2) {
+          previousConfig = typeof rows.rows[1].config === 'string'
+            ? JSON.parse(rows.rows[1].config)
+            : rows.rows[1].config;
+        }
+      } catch (e) {
+        console.warn('DB version history lookup failed in rollback:', e);
+      }
+    }
+
+    if (!previousConfig) {
       throw new Error(`No previous white-label versions available to rollback for tenant ${tenantId}`);
     }
 
-    const previousConfig = history.pop()!;
     let currentConfig = this.whiteLabelConfigs.find(c => c.tenant_id === tenantId);
     const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    const newVersion = ((currentConfig?.version || previousConfig.version || 1) + 1);
+
+    const rollbackConfig: WhiteLabelConfig = {
+      ...previousConfig,
+      tenant_id: tenantId,
+      version: newVersion,
+      status: 'PUBLISHED',
+      updated_at: now
+    };
+
+    // Sync rollback version via S2S
+    const syncRes = await tradingPlatformClient.syncWhiteLabel(
+      tenantId,
+      rollbackConfig,
+      newVersion,
+      { actor: `${actor} (Rollback)` }
+    );
+
+    if (!syncRes.success) {
+      throw new Error(`Trading Platform failed to synchronize rollback: ${syncRes.error}`);
+    }
 
     if (currentConfig) {
-      Object.assign(currentConfig, previousConfig);
-      currentConfig.updated_at = now;
+      Object.assign(currentConfig, rollbackConfig);
     } else {
-      currentConfig = previousConfig;
+      currentConfig = rollbackConfig;
       this.whiteLabelConfigs.push(currentConfig);
     }
 
+    // Invalidate and refresh cache
+    tenantConfigCache.invalidateBranding(tenantId);
     tenantConfigCache.setBranding(tenantId, currentConfig);
     if (currentConfig.custom_domain) {
       tenantConfigCache.mapDomainToTenant(currentConfig.custom_domain, tenantId);
     }
 
+    // Record audit log
     this.brandingAuditLogs.unshift({
       id: `b-log-${Date.now()}`,
       actor,
@@ -1936,15 +2194,56 @@ export class MockTradingDataProvider implements ITradingDataProvider {
       tenant_id: tenantId,
       tenant_name: currentConfig.tenant_name,
       action: 'BRANDING_ROLLED_BACK',
-      entity: `Branding (v${currentConfig.version || 1})`,
-      old_value: 'Current active',
-      new_value: `Restored version ${currentConfig.version}`,
+      entity: `Branding Version ${newVersion}`,
+      old_value: `v${newVersion - 1}`,
+      new_value: `Restored from v${previousConfig.version} as v${newVersion}`,
       timestamp: now,
       ip_address: '103.21.58.14',
       reason: 'Administrator rolled back branding to previous version'
     });
 
     return currentConfig;
+  }
+
+  async getWhiteLabelVersions(tenantId: string): Promise<any[]> {
+    const list: any[] = [];
+    const history = this.brandingHistory.get(tenantId) || [];
+    for (const item of history) {
+      list.push({
+        version: item.version,
+        status: item.status,
+        brand_name: item.brand_name,
+        published_at: item.updated_at,
+        published_by: 'Admin',
+        change_summary: `Snapshot of version ${item.version}`
+      });
+    }
+
+    const current = this.whiteLabelConfigs.find(c => c.tenant_id === tenantId);
+    if (current) {
+      list.push({
+        version: current.version,
+        status: current.status,
+        brand_name: current.brand_name,
+        published_at: current.updated_at,
+        published_by: 'Admin',
+        change_summary: `Current active (${current.status})`
+      });
+    }
+
+    try {
+      const dbRows = await query(
+        'SELECT version, status, published_by, published_at, change_summary FROM white_label_versions WHERE tenant_id = $1 ORDER BY version DESC',
+        [tenantId]
+      );
+      if (dbRows.rows.length > 0) {
+        return dbRows.rows;
+      }
+    } catch {
+      // Use in-memory list
+    }
+
+    return list.reverse();
   }
 
   // ----------------------------------------------------

@@ -2457,6 +2457,8 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     const r = res.rows[0];
     const draft = r.draft_config ? (typeof r.draft_config === 'string' ? JSON.parse(r.draft_config) : r.draft_config) : {};
 
+    const finalVersion = (r.version && r.version > 0) ? r.version : (draft.version || 1);
+
     return {
       tenant_id: r.tenant_id,
       tenant_name: r.company_name || 'Alpha Prime Capital',
@@ -2475,18 +2477,19 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       footer_text: r.copyright_text || '© 2026 Alpha Prime Capital. All rights reserved.',
       terms_url: '/terms',
       privacy_url: '/privacy',
-      version: r.version || 1,
-      status: (r.publish_status || 'DRAFT') as any,
       sync_status: (r.sync_status || 'PENDING') as any,
       last_published_at: r.last_published_at,
       last_published_by: r.last_published_by,
-      ...draft
+      ...draft,
+      version: finalVersion,
+      status: (r.publish_status || 'DRAFT') as any
     };
   }
 
   async updateWhiteLabelConfig(tenantId: string, data: Partial<WhiteLabelConfig>, actor?: string): Promise<WhiteLabelConfig> {
     const existing = await this.getWhiteLabelConfig(tenantId);
-    const updatedDraft = { ...(existing || {}), ...data };
+    const existingVersion = existing?.version || 1;
+    const updatedDraft = { ...(existing || {}), ...data, version: existingVersion };
 
     await this.executeQuery(`
       INSERT INTO tenant_branding (
@@ -2688,20 +2691,41 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       UPDATE tenant_branding
       SET version = $1,
           publish_status = 'PUBLISHED',
-          published_config = $2,
-          sync_status = $3,
-          last_published_at = $4,
-          last_published_by = $5,
+          company_name = $2,
+          portal_name = $3,
+          tagline = $4,
+          logo_url = $5,
+          primary_color = $6,
+          accent_color = $7,
+          support_email = $8,
+          support_phone = $9,
+          copyright_text = $10,
+          draft_config = $11,
+          published_config = $11,
+          sync_status = $12,
+          last_published_at = $13,
+          last_published_by = $14,
           updated_at = CURRENT_TIMESTAMP
-      WHERE tenant_id = $6
+      WHERE tenant_id = $15
     `, [
       rollbackVersion,
+      targetConfig.company_name || targetConfig.brand_name || 'Brand Corp',
+      targetConfig.brand_name || targetConfig.short_name || 'Brand Portal',
+      targetConfig.tagline || '',
+      targetConfig.logo_url || null,
+      targetConfig.primary_color || '#3b82f6',
+      targetConfig.accent_color || '#10b981',
+      targetConfig.support_email || '',
+      targetConfig.support_phone || '',
+      targetConfig.footer_copyright || targetConfig.footer_text || '',
       JSON.stringify(targetConfig),
       syncStatus,
       now,
       actor,
       tenantId
     ]);
+
+    tenantConfigCache.invalidateBranding(tenantId);
 
     // Audit log
     await this.executeQuery(`
@@ -3110,6 +3134,31 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
   }
 
   async getBrandingAuditLogs(tenantId?: string): Promise<BrandingAuditLog[]> {
+    try {
+      const sql = tenantId
+        ? `SELECT a.*, t.name as tenant_name FROM audit_logs a LEFT JOIN tenants t ON a.tenant_id = t.id WHERE a.tenant_id = $1 AND (a.module = 'WHITE_LABEL' OR a.action LIKE 'BRANDING_%' OR a.action LIKE 'DOMAIN_%' OR a.action LIKE 'PLATFORM_%') ORDER BY a.created_at DESC LIMIT 50`
+        : `SELECT a.*, t.name as tenant_name FROM audit_logs a LEFT JOIN tenants t ON a.tenant_id = t.id WHERE (a.module = 'WHITE_LABEL' OR a.action LIKE 'BRANDING_%' OR a.action LIKE 'DOMAIN_%' OR a.action LIKE 'PLATFORM_%') ORDER BY a.created_at DESC LIMIT 50`;
+      const params = tenantId ? [tenantId] : [];
+      const res = await this.executeQuery(sql, params);
+      if (res.rows && res.rows.length > 0) {
+        return res.rows.map(r => ({
+          id: r.id,
+          actor: r.user_name || 'Admin',
+          role: 'SUPER_ADMIN',
+          tenant_id: r.tenant_id,
+          tenant_name: r.tenant_name || 'Tenant',
+          action: r.action,
+          entity: r.module || 'WHITE_LABEL',
+          old_value: 'N/A',
+          new_value: r.details || 'Updated',
+          timestamp: r.timestamp || r.created_at || new Date().toISOString(),
+          ip_address: r.ip_address || '127.0.0.1',
+          reason: r.details
+        }));
+      }
+    } catch (err) {
+      console.warn('[PostgresTradingDataProvider] Failed to get branding audit logs:', err);
+    }
     return [];
   }
 

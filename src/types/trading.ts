@@ -132,8 +132,26 @@ export interface ClientAccount {
 export interface TenantBrandingConfig {
   tenantName: string;
   tenantCode: string;
+  brandName?: string;
+  shortName?: string;
   tagline: string;
   logoText: string;
+  logoUrl?: string;
+  faviconUrl?: string;
+  primaryColor?: string;
+  secondaryColor?: string;
+  accentColor?: string;
+  backgroundColor?: string;
+  surfaceColor?: string;
+  footerCopyright?: string;
+  colors?: {
+    primary: string;
+    secondary: string;
+    accent: string;
+    background: string;
+    surface: string;
+    text?: string;
+  };
   isTradingEnabled: boolean;
   isOptionsEnabled: boolean;
   theme: 'dark' | 'light';

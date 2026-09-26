@@ -333,6 +333,7 @@ export interface WhiteLabelConfig {
   website_url?: string;
   help_support_url?: string;
   footer_text: string;
+  footer_copyright?: string;
   terms_url: string;
   privacy_url: string;
   risk_disclosure_url?: string;

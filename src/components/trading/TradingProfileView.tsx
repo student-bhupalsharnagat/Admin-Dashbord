@@ -20,6 +20,10 @@ import { ClientAccount, ClientWallet } from '../../types/trading';
 interface TradingProfileViewProps {
   client: ClientAccount;
   wallet?: ClientWallet;
+  supportEmail?: string;
+  supportPhone?: string;
+  brandName?: string;
+  footerCopyright?: string;
   onLogout: () => void;
   onOpenWallet?: () => void;
   onOpenNotifications?: () => void;
@@ -30,6 +34,10 @@ interface TradingProfileViewProps {
 export const TradingProfileView: React.FC<TradingProfileViewProps> = ({
   client,
   wallet,
+  supportEmail = 'support@tradepro.com',
+  supportPhone = '+91 98765 43210',
+  brandName = 'Trading Desk',
+  footerCopyright,
   onLogout,
   onOpenWallet,
   onOpenNotifications,
@@ -258,11 +266,11 @@ export const TradingProfileView: React.FC<TradingProfileViewProps> = ({
           <Headphones className="w-5 h-5 text-amber-500" />
           <div>
             <h4 className="text-xs font-bold text-white uppercase tracking-wider">
-              Trading Desk & Compliance
+              {brandName} • Trading Desk & Compliance
             </h4>
             <p className="text-xs text-slate-400 mt-0.5">
-              Support: <strong className="text-slate-300">support@vertex.io</strong> • Hotline:{' '}
-              <strong className="text-slate-300">+91 22 6821 4400</strong>
+              Support: <strong className="text-slate-300">{supportEmail}</strong> • Hotline:{' '}
+              <strong className="text-slate-300">{supportPhone}</strong>
             </p>
           </div>
         </div>

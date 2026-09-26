@@ -35,6 +35,7 @@ import { HierarchyLevel } from './server/auth/types.ts';
 import { appConfig } from './server/config/environment.ts';
 import { tradingPlatformClient } from './server/services/TradingPlatformClient.ts';
 import { eventHandler, adminEventBus } from './server/services/EventHandler.ts';
+import { tenantConfigCache } from './server/providers/TenantConfigCache.ts';
 
 async function startServer() {
   const app = express();
@@ -90,6 +91,92 @@ async function startServer() {
       res.status(statusCode).json(result);
     } catch (err: any) {
       res.status(500).json({ error: 'INTERNAL_ERROR', message: err.message });
+    }
+  });
+
+  // ----------------------------------------------------
+  // S2S INBOUND WHITE-LABEL BRANDING SYNCHRONIZATION
+  // ----------------------------------------------------
+  const processedIdempotencyKeys = new Map<string, any>();
+
+  app.post([
+    '/api/internal/v1/white-label/:tenantId/sync',
+    '/api/internal/white-label/:tenantId/sync',
+    '/api/internal/v1/tenant/branding',
+    '/api/internal/tenant/branding'
+  ], async (req, res) => {
+    try {
+      const rawBody = (req as any).rawBody || JSON.stringify(req.body);
+      const signature = (req.headers['x-signature-sha256'] || req.headers['x-hmac-signature']) as string;
+      const timestamp = (req.headers['x-timestamp'] as string) || '';
+      const idempotencyKey = req.headers['x-idempotency-key'] as string;
+      const correlationId = (req.headers['x-correlation-id'] || req.headers['x-request-id'] || `corr_${Date.now()}`) as string;
+
+      // Verify S2S HMAC-SHA256 signature
+      const verification = tradingPlatformClient.verifyInboundSignature(signature, timestamp, req.method, req.path, rawBody);
+      if (!verification.valid) {
+        return res.status(401).json({
+          error: 'UNAUTHORIZED_S2S',
+          message: verification.reason || 'Invalid HMAC signature or timestamp outside acceptable window'
+        });
+      }
+
+      // Check Idempotency Key
+      if (idempotencyKey && processedIdempotencyKeys.has(idempotencyKey)) {
+        const cached = processedIdempotencyKeys.get(idempotencyKey);
+        return res.status(200).json({ ...cached, duplicate: true });
+      }
+
+      const tenantId = req.params.tenantId || req.body.tenantId;
+      if (!tenantId) {
+        return res.status(400).json({ error: 'MISSING_TENANT_ID', message: 'tenantId is required' });
+      }
+
+      const branding = req.body.branding || req.body;
+      const version = req.body.version || branding.version || 1;
+
+      // Invalidate existing cache and update with incoming published branding
+      tenantConfigCache.invalidateBranding(tenantId);
+      tenantConfigCache.setBranding(tenantId, branding);
+      if (branding.custom_domain) {
+        tenantConfigCache.mapDomainToTenant(branding.custom_domain, tenantId);
+      }
+
+      // Broadcast safe real-time event to connected trading clients
+      adminEventBus.emit('tenant.branding.updated', {
+        tenantId,
+        version,
+        brandName: branding.brand_name || branding.brandName,
+        colors: branding.colors || {
+          primary: branding.primary_color,
+          secondary: branding.secondary_color,
+          accent: branding.accent_color,
+          background: branding.background_color,
+          surface: branding.surface_color
+        },
+        logoUrl: branding.logo_url || branding.logoUrl,
+        updatedAt: new Date().toISOString()
+      });
+
+      const responsePayload = {
+        success: true,
+        tenantId,
+        version,
+        syncedAt: new Date().toISOString(),
+        correlationId
+      };
+
+      if (idempotencyKey) {
+        processedIdempotencyKeys.set(idempotencyKey, responsePayload);
+        if (processedIdempotencyKeys.size > 500) {
+          const firstKey = processedIdempotencyKeys.keys().next().value;
+          if (firstKey) processedIdempotencyKeys.delete(firstKey);
+        }
+      }
+
+      res.status(200).json(responsePayload);
+    } catch (err: any) {
+      res.status(500).json({ error: 'S2S_SYNC_ERROR', message: err.message });
     }
   });
 
@@ -1331,10 +1418,10 @@ async function startServer() {
     const targetDomain = domainHeader || (!isLocalhost ? cleanHost : '');
 
     // Fallback: check explicit x-tenant-id header or query param
-    const explicitTenantId = (req.headers['x-tenant-id'] as string) || (req.query.tenantId as string);
+    const explicitTenantId = (req.headers['x-tenant-id'] as string) || (req.query.tenantId as string) || (req.query.tenant_id as string);
     if (explicitTenantId) {
       const tenants = await activeTradingDataProvider.getTenants();
-      const tenant = tenants.find(t => t.id === explicitTenantId);
+      const tenant = tenants.find(t => t.id === explicitTenantId || t.code.toLowerCase() === explicitTenantId.toLowerCase());
       if (tenant) {
         const branding = await activeTradingDataProvider.getWhiteLabelConfig(tenant.id);
         const platformConfig = await activeTradingDataProvider.getTenantPlatformConfig(tenant.id);
@@ -1396,9 +1483,11 @@ async function startServer() {
           privacyUrl: branding.privacy_url || '#',
           riskDisclosureUrl: branding.risk_disclosure_url || '#',
           disclaimerUrl: branding.disclaimer_url || '#',
-          footerText: branding.footer_text || `© 2024 ${branding.brand_name || tenant.name}`
+          footerText: branding.footer_copyright || branding.footer_text || `© 2026 ${branding.brand_name || tenant.name}. All rights reserved.`
         },
+        footerCopyright: branding.footer_copyright || branding.footer_text || `© 2026 ${branding.brand_name || tenant.name}. All rights reserved.`,
         version: branding.version || 1,
+        status: branding.status || 'PUBLISHED',
         updatedAt: branding.updated_at
       };
 
@@ -1695,9 +1784,19 @@ async function startServer() {
   // ----------------------------------------------------
   // BRANDING AUDIT LOGS
   // ----------------------------------------------------
+  app.get('/api/admin/white-label/:tenantId/audit-logs', authMiddleware, async (req, res) => {
+    try {
+      const tenantScope = req.params.tenantId;
+      const logs = await activeTradingDataProvider.getBrandingAuditLogs(tenantScope);
+      res.json(logs);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get('/api/admin/white-label/audit-logs', authMiddleware, async (req, res) => {
     try {
-      const tenantScope = resolveTenantScope(req);
+      const tenantScope = (req.query.tenantId as string) || (req.query.tenant_id as string) || (req.headers['x-tenant-id'] as string) || resolveTenantScope(req);
       const logs = await activeTradingDataProvider.getBrandingAuditLogs(tenantScope);
       res.json(logs);
     } catch (err: any) {

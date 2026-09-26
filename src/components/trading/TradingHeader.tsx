@@ -24,6 +24,8 @@ interface TradingHeaderProps {
   brandName?: string;
   brandShortName?: string;
   brandTagline?: string;
+  logoUrl?: string;
+  primaryColor?: string;
   ordersCount?: number;
   positionsCount?: number;
   unreadNotificationsCount?: number;
@@ -44,6 +46,8 @@ export const TradingHeader: React.FC<TradingHeaderProps> = ({
   brandName = 'VERTEX Trading',
   brandShortName = 'VTX',
   brandTagline = 'Institutional Multi-Asset Platform',
+  logoUrl,
+  primaryColor,
   ordersCount = 3,
   positionsCount = 2,
   unreadNotificationsCount = 2,
@@ -71,14 +75,28 @@ export const TradingHeader: React.FC<TradingHeaderProps> = ({
           className="flex items-center gap-2.5 cursor-pointer select-none group shrink-0"
           title={`${brandName} - Click for Watchlist`}
         >
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-500 to-amber-600 flex items-center justify-center font-black text-slate-950 text-sm shadow-md group-hover:scale-105 transition-transform">
-            {brandShortName}
-          </div>
+          {logoUrl ? (
+            <img
+              src={logoUrl}
+              alt={brandName}
+              className="h-9 max-w-[130px] object-contain rounded-xl bg-black/20 p-1 border border-white/10 group-hover:scale-105 transition-transform"
+            />
+          ) : (
+            <div
+              className="w-9 h-9 rounded-xl flex items-center justify-center font-black text-white text-sm shadow-md group-hover:scale-105 transition-transform"
+              style={{ backgroundColor: primaryColor || '#3b82f6' }}
+            >
+              {brandShortName}
+            </div>
+          )}
           <div className="flex flex-col">
-            <span className="text-base sm:text-lg font-black tracking-tight leading-none text-amber-500 group-hover:text-amber-400 transition-colors">
+            <span
+              className="text-base sm:text-lg font-black tracking-tight leading-none group-hover:opacity-90 transition-colors"
+              style={{ color: primaryColor || '#f59e0b' }}
+            >
               {brandName}
             </span>
-            <span className="text-[10px] text-slate-500 dark:text-slate-400 font-medium truncate max-w-[150px]">
+            <span className="text-[10px] text-slate-500 dark:text-slate-400 font-medium truncate max-w-[180px]">
               {brandTagline}
             </span>
           </div>

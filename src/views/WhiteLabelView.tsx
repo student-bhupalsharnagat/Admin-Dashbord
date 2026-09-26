@@ -34,7 +34,7 @@ import { TenantBranding, TenantDomain, TenantPlatformConfig, BrandingAuditLog } 
 
 interface WhiteLabelViewProps {
   onNotify?: (msg: string, type?: 'info' | 'success' | 'warning') => void;
-  onLaunchTradingPlatform?: (domain?: string) => void;
+  onLaunchTradingPlatform?: (domain?: string, tenantId?: string) => void;
   selectedTenantScope?: string | null;
 }
 
@@ -170,6 +170,19 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
     const file = e.target.files?.[0];
     if (!file || !branding) return;
 
+    // Validate file type
+    const allowedTypes = ['image/png', 'image/svg+xml', 'image/jpeg', 'image/jpg', 'image/webp'];
+    if (!allowedTypes.includes(file.type.toLowerCase())) {
+      onNotify?.('Invalid file type. Please upload a PNG, SVG, or JPEG logo.', 'warning');
+      return;
+    }
+
+    // Validate file size (max 5MB)
+    if (file.size > 5 * 1024 * 1024) {
+      onNotify?.('File size exceeds the 5MB maximum limit.', 'warning');
+      return;
+    }
+
     try {
       const reader = new FileReader();
       reader.onload = async () => {
@@ -189,7 +202,8 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
 
         if (res.ok) {
           const stored = await res.json();
-          handleBrandingChange('logo_url', stored.publicUrl);
+          const finalUrl = stored.publicUrl || stored.public_url || base64Url;
+          handleBrandingChange('logo_url', finalUrl);
           onNotify?.(`Logo "${file.name}" uploaded and stored!`, 'success');
         } else {
           // Fallback to local data URL
@@ -431,7 +445,7 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
 
           {onLaunchTradingPlatform && (
             <button
-              onClick={() => onLaunchTradingPlatform(primaryDomain)}
+              onClick={() => onLaunchTradingPlatform(primaryDomain, selectedTenantId)}
               className="px-3.5 py-2 rounded-lg bg-[#142345] hover:bg-[#1a2f5c] border border-blue-500/30 text-blue-400 font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
               title="Launch Tenant Trading Platform in Terminal mode"
             >
@@ -771,7 +785,7 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
 
               {onLaunchTradingPlatform && (
                 <button
-                  onClick={() => onLaunchTradingPlatform(primaryDomain)}
+                  onClick={() => onLaunchTradingPlatform(primaryDomain, selectedTenantId)}
                   className="text-xs text-blue-400 hover:text-blue-300 font-semibold flex items-center gap-1 cursor-pointer"
                 >
                   <span>Open Full Platform</span>
@@ -804,15 +818,22 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
                     <img src={branding.logo_url} alt="Logo" className="h-6 object-contain" />
                   ) : (
                     <div
-                      className="w-6 h-6 rounded flex items-center justify-center text-white"
+                      className="w-6 h-6 rounded flex items-center justify-center text-white text-[10px] font-bold"
                       style={{ backgroundColor: branding?.primary_color || '#2563eb' }}
                     >
-                      <TrendingUp size={14} />
+                      {branding?.short_name || <TrendingUp size={14} />}
                     </div>
                   )}
-                  <span className="font-bold text-xs text-white tracking-tight">
-                    {branding?.brand_name || 'TradeMatrix'}
-                  </span>
+                  <div className="flex flex-col">
+                    <span className="font-bold text-xs text-white tracking-tight">
+                      {branding?.brand_name || 'TradeMatrix'}
+                    </span>
+                    {branding?.tagline && (
+                      <span className="text-[9px] text-slate-400 truncate max-w-[140px]">
+                        {branding.tagline}
+                      </span>
+                    )}
+                  </div>
                 </div>
 
                 <div
@@ -829,8 +850,13 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
                 style={{ backgroundColor: branding?.surface_color || '#0d1528' }}
               >
                 <h4 className="text-xs font-bold text-white">
-                  {branding?.login_title || 'Sign In to Your Account'}
+                  {branding?.brand_name ? `Welcome to ${branding.brand_name}` : (branding?.login_title || 'Sign In to Your Account')}
                 </h4>
+                {branding?.tagline && (
+                  <p className="text-[10px] text-slate-400 -mt-1">
+                    {branding.tagline}
+                  </p>
+                )}
                 <div className="space-y-1.5">
                   <div className="h-7 rounded bg-black/30 border border-white/10" />
                   <div className="h-7 rounded bg-black/30 border border-white/10" />
@@ -853,9 +879,25 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
                     style={{ backgroundColor: branding?.surface_color || '#0d1528' }}
                   >
                     <div className="text-[9px] text-slate-400">{sym}</div>
-                    <div className="text-[11px] font-mono font-bold text-emerald-400 mt-0.5">+0.85%</div>
+                    <div
+                      className="text-[11px] font-mono font-bold mt-0.5"
+                      style={{ color: branding?.accent_color || '#10b981' }}
+                    >
+                      +0.85%
+                    </div>
                   </div>
                 ))}
+              </div>
+
+              {/* Footer Preview with Support & Copyright */}
+              <div className="pt-2 border-t border-white/10 text-[9px] text-slate-400 space-y-1">
+                <div className="flex items-center justify-between gap-1 flex-wrap">
+                  <span className="truncate">Support: {branding?.support_email || 'support@trading.com'}</span>
+                  {branding?.support_phone && <span>Tel: {branding.support_phone}</span>}
+                </div>
+                <div className="text-[9px] text-slate-500 truncate">
+                  {branding?.footer_text || `© 2026 ${branding?.brand_name || 'Trading Desk'}. All rights reserved.`}
+                </div>
               </div>
             </div>
           </div>

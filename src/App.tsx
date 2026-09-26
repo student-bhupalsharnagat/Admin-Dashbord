@@ -719,6 +719,7 @@ export default function App() {
     return (
       <TradingPlatformView
         initialTenantDomain={activeTradingDomain}
+        initialTenantId={selectedTenantScope}
         initialClient={activeTradingClient}
         isAdmin={currentUser?.role !== 'CLIENT'}
         onReturnToAdmin={currentUser?.role === 'CLIENT' ? handleLogout : () => setAppMode('admin')}
@@ -957,7 +958,8 @@ export default function App() {
                 <WhiteLabelView
                   onNotify={showToast}
                   selectedTenantScope={selectedTenantScope}
-                  onLaunchTradingPlatform={domain => {
+                  onLaunchTradingPlatform={(domain, tenantId) => {
+                    if (tenantId) setSelectedTenantScope(tenantId);
                     if (domain) setActiveTradingDomain(domain);
                     setAppMode('trading-platform');
                   }}

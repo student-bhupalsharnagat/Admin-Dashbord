@@ -82,6 +82,13 @@ export class LocalAssetStorageProvider implements IAssetStorageProvider {
     mimeType: string,
     contentBase64OrUrl: string
   ): Promise<StoredAsset> {
+    // Validate supported image MIME types
+    const allowedMimes = ['image/png', 'image/svg+xml', 'image/jpeg', 'image/jpg', 'image/webp'];
+    const cleanMime = (mimeType || '').toLowerCase();
+    if (!allowedMimes.includes(cleanMime)) {
+      throw new Error(`Unsupported file type: ${mimeType}. Allowed formats: PNG, SVG, JPEG/JPG, WebP.`);
+    }
+
     const id = `ast-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
     
     let publicUrl = contentBase64OrUrl;
@@ -95,20 +102,28 @@ export class LocalAssetStorageProvider implements IAssetStorageProvider {
           ? contentBase64OrUrl.split(';base64,')[1]
           : contentBase64OrUrl;
         contentBuffer = Buffer.from(base64Data, 'base64');
+        
+        // Validate max file size (5MB)
+        if (contentBuffer.length > 5 * 1024 * 1024) {
+          throw new Error('File size exceeds the 5MB maximum limit.');
+        }
+
         publicUrl = `/api/assets/${id}`;
-      } catch {
+      } catch (err: any) {
+        if (err.message?.includes('File size exceeds')) throw err;
         publicUrl = contentBase64OrUrl;
       }
     }
 
-    const newAsset: StoredAsset = {
+    const newAsset: StoredAsset & { publicUrl?: string } = {
       id,
       tenant_id: tenantId,
       asset_type: assetType,
       filename,
-      mime_type: mimeType,
+      mime_type: cleanMime,
       size_bytes: contentBuffer ? contentBuffer.length : Math.round(contentBase64OrUrl.length * 0.75),
       public_url: publicUrl,
+      publicUrl,
       contentBuffer,
       created_at: new Date().toISOString()
     };
