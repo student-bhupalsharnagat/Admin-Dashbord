@@ -171,9 +171,10 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
     if (!file || !branding) return;
 
     // Validate file type
-    const allowedTypes = ['image/png', 'image/svg+xml', 'image/jpeg', 'image/jpg', 'image/webp'];
-    if (!allowedTypes.includes(file.type.toLowerCase())) {
-      onNotify?.('Invalid file type. Please upload a PNG, SVG, or JPEG logo.', 'warning');
+    const allowedTypes = ['image/png', 'image/svg+xml', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif'];
+    const hasValidExt = /\.(png|jpe?g|svg|webp|gif)$/i.test(file.name);
+    if (!allowedTypes.includes(file.type.toLowerCase()) && !hasValidExt) {
+      onNotify?.('Please upload a valid image file (PNG, SVG, JPEG, or WebP).', 'warning');
       return;
     }
 
@@ -187,28 +188,39 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
       const reader = new FileReader();
       reader.onload = async () => {
         const base64Url = reader.result as string;
-        // Upload to AssetStorageProvider backend endpoint
-        const res = await fetch('/api/admin/white-label/upload', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            tenantId: selectedTenantId,
-            assetType: 'LOGO',
-            filename: file.name,
-            mimeType: file.type,
-            contentBase64OrUrl: base64Url
-          })
-        });
+        try {
+          const token = localStorage.getItem('token') || sessionStorage.getItem('token');
+          // Upload to AssetStorageProvider backend endpoint with auth and credentials
+          const res = await fetch('/api/admin/white-label/upload', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(token ? { Authorization: `Bearer ${token}` } : {})
+            },
+            credentials: 'include',
+            body: JSON.stringify({
+              tenantId: selectedTenantId,
+              assetType: 'LOGO',
+              filename: file.name,
+              mimeType: file.type || 'image/png',
+              contentBase64OrUrl: base64Url
+            })
+          });
 
-        if (res.ok) {
-          const stored = await res.json();
-          const finalUrl = stored.publicUrl || stored.public_url || base64Url;
-          handleBrandingChange('logo_url', finalUrl);
-          onNotify?.(`Logo "${file.name}" uploaded and stored!`, 'success');
-        } else {
-          // Fallback to local data URL
+          if (res.ok) {
+            const stored = await res.json();
+            const finalUrl = stored.publicUrl || stored.public_url || base64Url;
+            handleBrandingChange('logo_url', finalUrl);
+            onNotify?.(`Platform logo "${file.name}" uploaded successfully!`, 'success');
+          } else {
+            // High reliability fallback: Store base64 data URL directly into draft config
+            handleBrandingChange('logo_url', base64Url);
+            onNotify?.(`Platform logo "${file.name}" loaded into configuration. Click Save Draft to persist.`, 'success');
+          }
+        } catch {
+          // Direct fallback to data URL in case of network or proxy issue
           handleBrandingChange('logo_url', base64Url);
-          onNotify?.('Logo updated in draft.', 'info');
+          onNotify?.(`Platform logo loaded into configuration. Click Save Draft to persist.`, 'success');
         }
       };
       reader.readAsDataURL(file);
@@ -583,43 +595,147 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
                 />
               </div>
 
-              {/* Logo Upload Section */}
-              <div>
-                <label className="block text-xs text-slate-400 font-medium mb-1.5">
-                  Platform Logo (PNG, SVG, or JPEG)
-                </label>
+              {/* Logo Configuration Section */}
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs text-slate-400 font-medium">
+                    Platform Logo (PNG, SVG, WebP, or JPEG)
+                  </label>
+                  {branding?.logo_url && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleBrandingChange('logo_url', '');
+                        onNotify?.('Logo cleared from draft configuration.', 'info');
+                      }}
+                      className="text-[11px] text-rose-400 hover:text-rose-300 font-medium cursor-pointer transition-colors"
+                    >
+                      Remove Logo
+                    </button>
+                  )}
+                </div>
+
+                {/* Direct Image URL input */}
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={branding?.logo_url || ''}
+                    onChange={e => handleBrandingChange('logo_url', e.target.value)}
+                    placeholder="Enter image URL (e.g. https://... or /kwikTradeLogo.png)"
+                    className="flex-1 bg-[#080e1c] border border-[#142038] rounded-lg px-3 py-1.5 text-xs text-slate-200 font-mono focus:outline-none focus:border-blue-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="px-3 py-1.5 bg-[#142038] hover:bg-[#1a2b4b] text-blue-400 hover:text-blue-300 text-xs font-semibold rounded-lg border border-[#1e2f52] transition-colors cursor-pointer shrink-0 flex items-center gap-1.5"
+                  >
+                    <Upload size={13} />
+                    <span>Upload File</span>
+                  </button>
+                </div>
+
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept="image/png,image/svg+xml,image/jpeg"
+                  accept="image/png,image/svg+xml,image/jpeg,image/webp,image/gif,.png,.jpg,.jpeg,.svg,.webp"
                   onChange={handleLogoUpload}
                   className="hidden"
                 />
+
+                {/* Upload & Preview Dropzone Area */}
                 <div
                   onClick={() => fileInputRef.current?.click()}
-                  className="border border-dashed border-[#1e2d4d] hover:border-blue-500 bg-[#080e1c] rounded-lg p-5 text-center cursor-pointer transition-colors group"
+                  className="border border-dashed border-[#1e2d4d] hover:border-blue-500 bg-[#080e1c] rounded-lg p-4 text-center cursor-pointer transition-colors group"
                 >
                   {branding?.logo_url ? (
-                    <div className="flex items-center justify-center gap-4">
-                      <img
-                        src={branding.logo_url}
-                        alt="Brand Logo"
-                        className="h-10 max-w-[150px] object-contain rounded bg-[#0a1122] p-1 border border-[#162444]"
-                      />
+                    <div className="flex flex-wrap items-center justify-center gap-6">
+                      {/* Dark preview */}
+                      <div className="flex items-center gap-2">
+                        <div className="text-[10px] text-slate-500 font-mono">Dark:</div>
+                        <div className="h-12 px-3 rounded-lg bg-[#070d18] border border-white/10 flex items-center justify-center">
+                          <img
+                            src={branding.logo_url}
+                            alt="Brand Logo Preview Dark"
+                            className="h-8 max-w-[140px] object-contain"
+                            onError={e => {
+                              (e.target as any).style.display = 'none';
+                            }}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Light preview */}
+                      <div className="flex items-center gap-2">
+                        <div className="text-[10px] text-slate-500 font-mono">Light:</div>
+                        <div className="h-12 px-3 rounded-lg bg-white border border-slate-300 flex items-center justify-center">
+                          <img
+                            src={branding.logo_url}
+                            alt="Brand Logo Preview Light"
+                            className="h-8 max-w-[140px] object-contain"
+                            onError={e => {
+                              (e.target as any).style.display = 'none';
+                            }}
+                          />
+                        </div>
+                      </div>
+
                       <div className="text-left">
                         <div className="text-xs text-blue-400 font-bold group-hover:underline">
                           Replace Logo
                         </div>
-                        <div className="text-[11px] text-slate-500">Click to select new image</div>
+                        <div className="text-[11px] text-slate-500">Click to select new image file</div>
                       </div>
                     </div>
                   ) : (
                     <div>
                       <Upload size={20} className="text-slate-400 mx-auto mb-1" />
-                      <p className="text-xs text-slate-300 font-medium">Click to upload brand logo</p>
-                      <p className="text-[11px] text-slate-500">Max 2MB. SVG, PNG recommended</p>
+                      <p className="text-xs text-slate-300 font-medium">Click to upload brand logo or drag & drop</p>
+                      <p className="text-[11px] text-slate-500">PNG, SVG, WebP, or JPEG (Max 5MB)</p>
                     </div>
                   )}
+                </div>
+
+                {/* Quick 1-Click Preset Broker Logos */}
+                <div className="pt-1">
+                  <div className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold mb-1">
+                    Quick Preset Logos:
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {[
+                      {
+                        name: 'KwikTrade Pro',
+                        url: '/kwikTradeLogo.png'
+                      },
+                      {
+                        name: 'Vertex Trading',
+                        url: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=140&auto=format&fit=crop&q=80'
+                      },
+                      {
+                        name: 'Alpha Prime Capital',
+                        url: 'https://images.unsplash.com/photo-1642543492481-44e81e3914a7?w=140&auto=format&fit=crop&q=80'
+                      },
+                      {
+                        name: 'Apex Securities',
+                        url: 'https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?w=140&auto=format&fit=crop&q=80'
+                      }
+                    ].map(preset => (
+                      <button
+                        key={preset.name}
+                        type="button"
+                        onClick={() => {
+                          handleBrandingChange('logo_url', preset.url);
+                          onNotify?.(`Preset logo "${preset.name}" applied.`, 'success');
+                        }}
+                        className={`px-2.5 py-1 text-[11px] font-medium rounded-md border transition-colors cursor-pointer ${
+                          branding?.logo_url === preset.url
+                            ? 'bg-blue-600/20 text-blue-400 border-blue-500/40 font-bold'
+                            : 'bg-[#080e1c] text-slate-400 border-[#142038] hover:text-slate-200 hover:border-slate-600'
+                        }`}
+                      >
+                        {preset.name}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>

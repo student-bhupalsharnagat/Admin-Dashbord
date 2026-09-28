@@ -381,6 +381,82 @@ export const initialClientsData = [
   }
 ];
 
+// Normalization helpers to ensure both initial static mock data and backend API entities render seamlessly without crashes
+const normalizeMaster = (m: any) => ({
+  ...m,
+  id: String(m.id || `MST-${Math.random().toString().slice(2, 6)}`),
+  name: m.name || m.tenant_name || 'Master Admin',
+  company: m.company || m.tenant_name || m.name || 'Master Corp',
+  email: m.email || 'master@tradematrix.io',
+  brokers: typeof m.brokers === 'number' ? m.brokers : (m.brokers_count ?? 0),
+  clients: typeof m.clients === 'number' ? m.clients : (m.clients_count ?? 0),
+  turnover: m.turnover || '₹0',
+  commission: m.commission || m.commission_earned || '₹0',
+  status: (m.status || 'ACTIVE').toUpperCase(),
+  created: m.created || m.created_at || '2023-01-15',
+  region: m.region || 'North India',
+  phone: m.phone || '+91 98000 00000',
+  tenant_id: m.tenant_id,
+  tenant_name: m.tenant_name
+});
+
+const normalizeBroker = (b: any) => ({
+  ...b,
+  id: String(b.id || `BRK-${Math.random().toString().slice(2, 6)}`),
+  name: b.name || 'Broker Admin',
+  master: b.master || b.master_name || b.parent_master_name || 'Master Admin',
+  master_id: b.master_id,
+  company: b.company || b.tenant_name || b.name || 'Broker Services',
+  email: b.email || 'broker@tradematrix.io',
+  subBrokers: typeof b.subBrokers === 'number' ? b.subBrokers : (b.sub_brokers_count ?? 0),
+  clients: typeof b.clients === 'number' ? b.clients : (b.clients_count ?? 0),
+  turnover: b.turnover || '₹0',
+  commission: b.commission || b.commission_earned || '₹0',
+  status: (b.status || 'ACTIVE').toUpperCase(),
+  created: b.created || b.created_at || '2023-01-15',
+  phone: b.phone || '+91 98000 00000',
+  tenant_id: b.tenant_id,
+  tenant_name: b.tenant_name
+});
+
+const normalizeSubBroker = (sb: any) => ({
+  ...sb,
+  id: String(sb.id || `SBRK-${Math.random().toString().slice(2, 6)}`),
+  name: sb.name || 'Sub-Broker Admin',
+  parentBroker: sb.parentBroker || sb.broker_name || sb.parent_broker_name || 'Broker Admin',
+  broker_id: sb.broker_id,
+  email: sb.email || 'subbroker@tradematrix.io',
+  clients: typeof sb.clients === 'number' ? sb.clients : (sb.clients_count ?? 0),
+  turnover: sb.turnover || '₹0',
+  commission: sb.commission || sb.commission_earned || '₹0',
+  status: (sb.status || 'ACTIVE').toUpperCase(),
+  created: sb.created || sb.created_at || '2023-01-15',
+  phone: sb.phone || '+91 98000 00000',
+  tenant_id: sb.tenant_id,
+  tenant_name: sb.tenant_name
+});
+
+const normalizeClient = (c: any) => ({
+  ...c,
+  id: String(c.id || `CLI-${Math.random().toString().slice(2, 6)}`),
+  name: c.name || 'Client Trader',
+  email: c.email || 'trader@tradematrix.io',
+  phone: c.phone || '+91 98000 00000',
+  master: c.master || c.master_name || 'Master Admin',
+  broker: c.broker || c.broker_name || 'Broker Admin',
+  subBroker: c.subBroker || c.sub_broker_name || c.parent_sub_broker_name || 'Sub-Broker Admin',
+  account: (c.account || c.status || 'ACTIVE').toUpperCase(),
+  kyc: (c.kyc || c.kyc_status || 'PENDING').toUpperCase(),
+  balance: c.balance || (c.wallet_balance !== undefined ? `₹${Number(c.wallet_balance).toLocaleString('en-IN')}` : '₹0'),
+  equity: c.equity || (c.available_margin !== undefined ? `₹${Number(c.available_margin).toLocaleString('en-IN')}` : '₹0'),
+  margin: c.margin || '₹0',
+  pl: c.pl || (c.todays_pl !== undefined ? (c.todays_pl >= 0 ? `+₹${c.todays_pl}` : `-₹${Math.abs(c.todays_pl)}`) : '+₹0'),
+  trades: typeof c.trades === 'number' ? c.trades : (c.open_positions_count ?? 0),
+  joined: c.joined || c.created_at || '2023-01-15',
+  tenant_id: c.tenant_id,
+  tenant_name: c.tenant_name
+});
+
 export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
   level,
   masters: propMasters,
@@ -396,34 +472,34 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
   onOpenTradingPlatform
 }) => {
   // Local state for entities ensuring screenshot data is shown and editable
-  const [mastersList, setMastersList] = useState(initialMastersData);
-  const [brokersList, setBrokersList] = useState(initialBrokersData);
-  const [subBrokersList, setSubBrokersList] = useState(initialSubBrokersData);
-  const [clientsList, setClientsList] = useState(initialClientsData);
+  const [mastersList, setMastersList] = useState(() => (initialMastersData || []).map(normalizeMaster));
+  const [brokersList, setBrokersList] = useState(() => (initialBrokersData || []).map(normalizeBroker));
+  const [subBrokersList, setSubBrokersList] = useState(() => (initialSubBrokersData || []).map(normalizeSubBroker));
+  const [clientsList, setClientsList] = useState(() => (initialClientsData || []).map(normalizeClient));
   const [activeClientDetail, setActiveClientDetail] = useState<any | null>(null);
 
   // Synchronize state with real API data passed via props
   React.useEffect(() => {
     if (propMasters && propMasters.length > 0) {
-      setMastersList(propMasters as any);
+      setMastersList(propMasters.map(normalizeMaster));
     }
   }, [propMasters]);
 
   React.useEffect(() => {
     if (propBrokers && propBrokers.length > 0) {
-      setBrokersList(propBrokers as any);
+      setBrokersList(propBrokers.map(normalizeBroker));
     }
   }, [propBrokers]);
 
   React.useEffect(() => {
     if (propSubBrokers && propSubBrokers.length > 0) {
-      setSubBrokersList(propSubBrokers as any);
+      setSubBrokersList(propSubBrokers.map(normalizeSubBroker));
     }
   }, [propSubBrokers]);
 
   React.useEffect(() => {
     if (propClients && propClients.length > 0) {
-      setClientsList(propClients as any);
+      setClientsList(propClients.map(normalizeClient));
     }
   }, [propClients]);
 
@@ -568,62 +644,71 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
     );
   };
 
-  // Filtered lists
+  // Filtered lists with bulletproof optional chaining & fallback string conversions
   const filteredMasters = useMemo(() => {
     return mastersList.filter(item => {
+      const q = searchQuery.toLowerCase();
       const matchQuery =
         !searchQuery ||
-        item.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.company.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.email.toLowerCase().includes(searchQuery.toLowerCase());
+        (item.id || '').toLowerCase().includes(q) ||
+        (item.name || '').toLowerCase().includes(q) ||
+        (item.company || item.tenant_name || '').toLowerCase().includes(q) ||
+        (item.email || '').toLowerCase().includes(q);
+      const itemStatus = (item.status || 'ACTIVE').toUpperCase();
       const matchStatus =
-        statusFilter === 'ALL' || item.status.toUpperCase() === statusFilter.toUpperCase();
+        statusFilter === 'ALL' || itemStatus === statusFilter.toUpperCase();
       return matchQuery && matchStatus;
     });
   }, [mastersList, searchQuery, statusFilter]);
 
   const filteredBrokers = useMemo(() => {
     return brokersList.filter(item => {
+      const q = searchQuery.toLowerCase();
       const matchQuery =
         !searchQuery ||
-        item.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.master.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.email.toLowerCase().includes(searchQuery.toLowerCase());
+        (item.id || '').toLowerCase().includes(q) ||
+        (item.name || '').toLowerCase().includes(q) ||
+        (item.master || item.master_name || '').toLowerCase().includes(q) ||
+        (item.email || '').toLowerCase().includes(q);
+      const itemStatus = (item.status || 'ACTIVE').toUpperCase();
       const matchStatus =
-        statusFilter === 'ALL' || item.status.toUpperCase() === statusFilter.toUpperCase();
+        statusFilter === 'ALL' || itemStatus === statusFilter.toUpperCase();
       return matchQuery && matchStatus;
     });
   }, [brokersList, searchQuery, statusFilter]);
 
   const filteredSubBrokers = useMemo(() => {
     return subBrokersList.filter(item => {
+      const q = searchQuery.toLowerCase();
       const matchQuery =
         !searchQuery ||
-        item.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.parentBroker.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.email.toLowerCase().includes(searchQuery.toLowerCase());
+        (item.id || '').toLowerCase().includes(q) ||
+        (item.name || '').toLowerCase().includes(q) ||
+        (item.parentBroker || item.broker_name || '').toLowerCase().includes(q) ||
+        (item.email || '').toLowerCase().includes(q);
+      const itemStatus = (item.status || 'ACTIVE').toUpperCase();
       const matchStatus =
-        statusFilter === 'ALL' || item.status.toUpperCase() === statusFilter.toUpperCase();
+        statusFilter === 'ALL' || itemStatus === statusFilter.toUpperCase();
       return matchQuery && matchStatus;
     });
   }, [subBrokersList, searchQuery, statusFilter]);
 
   const filteredClients = useMemo(() => {
     return clientsList.filter(item => {
+      const q = searchQuery.toLowerCase();
       const matchQuery =
         !searchQuery ||
-        item.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.master.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.broker.toLowerCase().includes(searchQuery.toLowerCase());
+        (item.id || '').toLowerCase().includes(q) ||
+        (item.name || '').toLowerCase().includes(q) ||
+        (item.email || '').toLowerCase().includes(q) ||
+        (item.master || item.master_name || '').toLowerCase().includes(q) ||
+        (item.broker || item.broker_name || '').toLowerCase().includes(q);
+      const itemKyc = (item.kyc || item.kyc_status || 'PENDING').toUpperCase();
+      const itemAccount = (item.account || item.status || 'ACTIVE').toUpperCase();
       const matchKyc =
-        kycFilter === 'ALL' || item.kyc.toUpperCase() === kycFilter.toUpperCase();
+        kycFilter === 'ALL' || itemKyc === kycFilter.toUpperCase();
       const matchAccount =
-        accountFilter === 'ALL' || item.account.toUpperCase() === accountFilter.toUpperCase();
+        accountFilter === 'ALL' || itemAccount === accountFilter.toUpperCase();
       return matchQuery && matchKyc && matchAccount;
     });
   }, [clientsList, searchQuery, kycFilter, accountFilter]);
@@ -1100,7 +1185,7 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
                       {master.brokers}
                     </td>
                     <td className="py-3.5 px-4 text-slate-200 font-medium">
-                      {master.clients.toLocaleString()}
+                      {Number(master.clients || 0).toLocaleString()}
                     </td>
                     <td className="py-3.5 px-4 font-mono text-slate-200 font-medium">
                       {master.turnover}

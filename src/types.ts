@@ -43,6 +43,7 @@ export interface AuthUser {
   name: string;
   email: string;
   role: UserRole;
+  roleName?: string;
   tenant_id: string | null;
   tenant_name?: string;
   avatar?: string;
@@ -200,6 +201,9 @@ export interface KYCRecord {
   assigned_reviewer: string;
   submitted_date: string;
   id_number?: string;
+  pan?: string;
+  status?: string;
+  submitted_at?: string;
   notes?: string;
 }
 
@@ -356,6 +360,7 @@ export interface TenantDomain {
   domain: string;
   domain_type: 'CUSTOM' | 'SUBDOMAIN' | 'TRADING' | 'SUPPORT';
   verification_status: 'VERIFIED' | 'PENDING' | 'FAILED';
+  is_verified?: boolean;
   is_primary: boolean;
   ssl_status: 'ACTIVE' | 'PROVISIONING' | 'PENDING';
   created_at: string;
@@ -404,8 +409,10 @@ export interface BrandingAuditLog {
   old_value: string;
   new_value: string;
   timestamp: string;
+  created_at?: string;
   ip_address: string;
   reason?: string;
+  details?: any;
 }
 
 export interface SupportTicketMessage {

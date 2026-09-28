@@ -91,10 +91,12 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
   onReturnToAdmin,
   onNotify
 }) => {
-  // Theme state
+  // Theme state with localStorage persistence and proper light/dark initialization
   const [isDark, setIsDark] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
-      return document.documentElement.classList.contains('dark') || true;
+      const saved = localStorage.getItem('trading_theme');
+      if (saved) return saved === 'dark';
+      return document.documentElement.classList.contains('dark');
     }
     return true;
   });
@@ -293,12 +295,22 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
   const [ticketsModalOpen, setTicketsModalOpen] = useState(false);
   const [marketClosedModalOpen, setMarketClosedModalOpen] = useState(false);
 
-  // Sync dark class on document
+  // Sync dark and light classes and data-theme attribute on document root
   useEffect(() => {
     if (isDark) {
       document.documentElement.classList.add('dark');
+      document.documentElement.classList.remove('light');
+      document.documentElement.setAttribute('data-theme', 'dark');
+      try {
+        localStorage.setItem('trading_theme', 'dark');
+      } catch {}
     } else {
       document.documentElement.classList.remove('dark');
+      document.documentElement.classList.add('light');
+      document.documentElement.setAttribute('data-theme', 'light');
+      try {
+        localStorage.setItem('trading_theme', 'light');
+      } catch {}
     }
   }, [isDark]);
 
@@ -512,7 +524,7 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
   };
 
   return (
-    <div className={`min-h-screen ${isDark ? 'dark bg-[#060B14] text-slate-100' : 'bg-slate-100/70 text-slate-900'} font-sans transition-colors duration-150 flex flex-col`}>
+    <div className={`min-h-screen ${isDark ? 'dark bg-[#060B14] text-slate-100' : 'light bg-slate-100 text-slate-900'} font-sans transition-colors duration-150 flex flex-col`}>
       {/* 1. TOP BAR (Tenant Name, Code, Trade/Options Pills, Switch Tenant & Central Controls) */}
       <TradingTopBar
         tenantName={branding.brandName || branding.tenantName}
@@ -770,6 +782,10 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
         instrument={chartModalInstrument}
         onClose={() => setChartModalOpen(false)}
         onOpenOrder={handleOpenOrder}
+        onOpenOptionChain={inst => {
+          setOptionChainInstrument(inst);
+          setOptionChainModalOpen(true);
+        }}
       />
 
       {/* Option Chain Modal */}

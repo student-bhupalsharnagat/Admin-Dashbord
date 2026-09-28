@@ -28,6 +28,7 @@ import { RbacView } from './components/views/RbacView';
 import { useTheme } from './context/ThemeContext';
 import { canAccessTab } from './utils/rbac';
 import { ShieldAlert } from 'lucide-react';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 // Modals
 import { CreateMasterModal } from './components/modals/CreateMasterModal';
@@ -769,6 +770,7 @@ export default function App() {
 
         {/* Scrollable View Container */}
         <main className="flex-1 overflow-y-auto p-3 sm:p-5 md:p-6 lg:p-8 space-y-4 sm:space-y-6 max-w-[1920px] mx-auto w-full">
+          <ErrorBoundary onReset={loadHierarchyData}>
           {/* Tenant Detail Drill-down */}
           {selectedTenantForDetail ? (
             <TenantDetailView
@@ -902,7 +904,7 @@ export default function App() {
                   subBrokers={subBrokers}
                   clients={clients}
                   tenants={tenants}
-                  onNavigateTab={tab => setActiveTab(tab)}
+                  onNavigateTab={tab => setActiveTab(tab as NavigationTab)}
                   onCreateMaster={() => setShowCreateMasterModal(true)}
                   onCreateBroker={() => setShowCreateBrokerModal(true)}
                   onAddClient={() => setShowAddClientModal(true)}
@@ -984,6 +986,7 @@ export default function App() {
               )}
             </>
           )}
+          </ErrorBoundary>
         </main>
       </div>
 
