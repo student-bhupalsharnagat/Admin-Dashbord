@@ -16,6 +16,8 @@ import { OrdersView } from './views/OrdersView';
 import { PositionsView } from './views/PositionsView';
 import { CommissionView } from './views/CommissionView';
 import { RiskLimitsView } from './views/RiskLimitsView';
+
+
 import { ComplianceView } from './views/ComplianceView';
 import { ReportsView } from './views/ReportsView';
 import { NotificationsView } from './views/NotificationsView';
@@ -54,6 +56,13 @@ import {
   AuthUser,
   UserRole
 } from './types';
+
+const DEFAULT_INITIAL_TENANTS: Tenant[] = [
+  { id: 'TNT-001', name: 'Alpha Prime Capital', code: 'APC', domain: 'trade.alphaprime.com', status: 'ACTIVE', tier: 'ENTERPRISE', clients: 840, turnover: '₹48.2M', created: '2023-01-15' },
+  { id: 'TNT-002', name: 'Apex Securities Ltd', code: 'APEX', domain: 'trade.apexsecurities.in', status: 'ACTIVE', tier: 'PRO', clients: 412, turnover: '₹22.1M', created: '2023-02-01' },
+  { id: 'TNT-003', name: 'Zenith Markets', code: 'ZMK', domain: 'trade.zenithmarkets.in', status: 'ACTIVE', tier: 'GROWTH', clients: 195, turnover: '₹9.4M', created: '2023-03-10' },
+  { id: 'TNT-004', name: 'Quantum Alpha Capital', code: 'QAC', domain: 'trade.quantumfx.io', status: 'ACTIVE', tier: 'STARTER', clients: 65, turnover: '₹2.8M', created: '2023-04-18' }
+];
 
 export default function App() {
   const { isDark } = useTheme();
@@ -116,8 +125,8 @@ export default function App() {
     dailyPL: [
       { day: 'Sep 13', displayDay: '13 Sep', pl: 12.4, isProfit: true },
       { day: 'Sep 14', displayDay: '14 Sep', pl: -4.2, isProfit: false },
-      { day: 'Sep 15', displayDay: '15 Sep', pl: 18.6, isProfit: true },
-      { day: 'Sep 16', displayDay: '16 Sep', pl: 8.2, isProfit: true },
+      { day: 'Sep 15', displayDay: '15 Sep', pl: 8.6, isProfit: true },
+      { day: 'Sep 16', displayDay: '16 Sep', pl: 18.2, isProfit: true },
       { day: 'Sep 17', displayDay: '17 Sep', pl: -2.1, isProfit: false },
       { day: 'Sep 18', displayDay: '18 Sep', pl: 15.3, isProfit: true },
       { day: 'Sep 19', displayDay: '19 Sep', pl: 21.8, isProfit: true }
@@ -128,7 +137,7 @@ export default function App() {
   };
 
   const [dashboardData, setDashboardData] = useState<DashboardData>(DEFAULT_INITIAL_DASHBOARD);
-  const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [tenants, setTenants] = useState<Tenant[]>(DEFAULT_INITIAL_TENANTS);
   const [masters, setMasters] = useState<Master[]>([]);
   const [brokers, setBrokers] = useState<Broker[]>([]);
   const [subBrokers, setSubBrokers] = useState<SubBroker[]>([]);
@@ -146,16 +155,33 @@ export default function App() {
 
   // Authentication State (managed via secure HTTP-only cookie session)
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
-  const [authChecking, setAuthChecking] = useState(true);
+  const [authChecking, setAuthChecking] = useState(false);
 
-  // Check active session on initial load
+  // Check active session on initial load in background (non-blocking)
   useEffect(() => {
     let isMounted = true;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+    }, 1200);
+
     async function checkAuthSession() {
       try {
+        // Pre-fetch public active tenants
+        fetch('/api/public/tenants', { signal: controller.signal })
+          .then(res => res.ok ? res.json() : null)
+          .then(list => {
+            if (Array.isArray(list) && list.length > 0 && isMounted) {
+              setTenants(list);
+            }
+          })
+          .catch(() => {});
+
         const res = await fetch('/api/auth/me', {
-          credentials: 'include'
+          credentials: 'include',
+          signal: controller.signal
         });
+
         if (res.ok) {
           const data = await res.json();
           if (data.user && isMounted) {
@@ -182,20 +208,19 @@ export default function App() {
             loadDashboardData();
             loadHierarchyData();
           }
-        } else if (isMounted) {
-          setCurrentUser(null);
         }
       } catch (err) {
-        console.warn('Authentication session check error:', err);
-        if (isMounted) setCurrentUser(null);
+        // Quietly fallback to auth screen
       } finally {
-        if (isMounted) setAuthChecking(false);
+        clearTimeout(timeoutId);
       }
     }
 
     checkAuthSession();
     return () => {
       isMounted = false;
+      clearTimeout(timeoutId);
+      controller.abort();
     };
   }, []);
 
@@ -651,17 +676,69 @@ export default function App() {
     }
   };
 
-  // If authentication check is in progress, show clean loader
-  if (authChecking) {
-    return (
-      <div className="min-h-screen w-full bg-[#050811] flex items-center justify-center text-slate-400">
-        <div className="flex flex-col items-center gap-3">
-          <div className="w-8 h-8 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
-          <span className="text-xs font-mono">Authenticating session...</span>
-        </div>
-      </div>
-    );
-  }
+  // Helper to open Trading Platform with optional client context
+  const handleOpenTradingPlatform = useCallback((clientData?: any) => {
+    if (clientData) {
+      const normalizedClient = {
+        id: clientData.id || 'CLI-001',
+        userId: clientData.client_code || clientData.userId || clientData.id || 'CLI-001',
+        fullName: clientData.name || clientData.fullName || 'Client Trader',
+        name: clientData.name || clientData.fullName || 'Client Trader',
+        email: clientData.email || 'trader@tradematrix.io',
+        phone: clientData.phone || '+91 98000 00000',
+        balance: clientData.balance || '₹25,400',
+        pl: clientData.pl || clientData.netPl || '+₹0',
+        netPl: clientData.netPl || clientData.pl || '+₹0',
+        tenantId: clientData.tenantId || clientData.tenant_id || selectedTenantScope || 'TNT-001',
+        tenantName: clientData.tenantName || clientData.tenant_name || 'Alpha Prime Capital',
+        kyc: clientData.kyc || clientData.kyc_status || 'APPROVED',
+        status: clientData.account || clientData.status || 'ACTIVE'
+      };
+      setActiveTradingClient(normalizedClient);
+      const clientTenantId = normalizedClient.tenantId;
+      const matchedTenant = tenants.find(t => t.id === clientTenantId || t.name === normalizedClient.tenantName);
+      if (matchedTenant?.domain) {
+        setActiveTradingDomain(matchedTenant.domain);
+      }
+      if (clientTenantId && clientTenantId !== 'GLOBAL') {
+        setSelectedTenantScope(clientTenantId);
+      }
+    } else {
+      setActiveTradingClient(null);
+      const currentTenant = tenants.find(t => t.id === selectedTenantScope);
+      const domain = currentTenant?.domain || (selectedTenantScope === 'ten-02' ? 'trade.zenithmarkets.in' : selectedTenantScope === 'ten-03' ? 'trade.quantumfx.io' : 'trade.alphaprime.com');
+      setActiveTradingDomain(domain);
+    }
+    setAppMode('trading-platform');
+  }, [selectedTenantScope, tenants]);
+
+  // Check URL params on initial load for deep linking to trading platform
+  useEffect(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        const params = new URLSearchParams(window.location.search);
+        const modeParam = params.get('mode') || params.get('app_mode');
+        const clientId = params.get('client_id');
+        if (modeParam === 'trading' || modeParam === 'trading-platform') {
+          if (clientId) {
+            const clientName = params.get('name') || 'Client Trader';
+            const clientBalance = params.get('balance') || '₹25,400';
+            handleOpenTradingPlatform({
+              id: clientId,
+              name: clientName,
+              fullName: clientName,
+              balance: clientBalance,
+              tenantId: params.get('tenant_id') || undefined
+            });
+          } else {
+            handleOpenTradingPlatform();
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('URL param parse error:', e);
+    }
+  }, [handleOpenTradingPlatform]);
 
   // If no user is logged in, show the TradeMatrix Login & Sign Up screen
   if (!currentUser) {
@@ -696,34 +773,18 @@ export default function App() {
     );
   }
 
-  // Helper to open Trading Platform with optional client context
-  const handleOpenTradingPlatform = (clientData?: any) => {
-    if (clientData) {
-      setActiveTradingClient(clientData);
-      // If client belongs to a tenant or has tenantId
-      const clientTenantId = clientData.tenantId;
-      const matchedTenant = tenants.find(t => t.id === clientTenantId || t.name === clientData.tenantName);
-      if (matchedTenant?.domain) {
-        setActiveTradingDomain(matchedTenant.domain);
-      }
-    } else {
-      setActiveTradingClient(null);
-      const currentTenant = tenants.find(t => t.id === selectedTenantScope);
-      const domain = currentTenant?.domain || (selectedTenantScope === 'ten-02' ? 'trade.zenithmarkets.in' : selectedTenantScope === 'ten-03' ? 'trade.quantumfx.io' : 'trade.alphaprime.com');
-      setActiveTradingDomain(domain);
-    }
-    setAppMode('trading-platform');
-  };
-
   // If in Trading Platform Mode: render the dedicated Branded Tenant Trading Platform
   if (appMode === 'trading-platform') {
     return (
       <TradingPlatformView
         initialTenantDomain={activeTradingDomain}
-        initialTenantId={selectedTenantScope}
+        initialTenantId={selectedTenantScope || undefined}
         initialClient={activeTradingClient}
         isAdmin={currentUser?.role !== 'CLIENT'}
-        onReturnToAdmin={currentUser?.role === 'CLIENT' ? handleLogout : () => setAppMode('admin')}
+        onReturnToAdmin={currentUser?.role === 'CLIENT' ? handleLogout : () => {
+          setAppMode('admin');
+          setActiveTradingClient(null);
+        }}
         onNotify={showToast}
       />
     );
@@ -818,7 +879,7 @@ export default function App() {
                   volumeCommissionData={dashboardData?.volumeCommission || []}
                   clientGrowthData={dashboardData?.clientGrowth || []}
                   dailyPLData={dashboardData?.dailyPL || []}
-                  dailyPLBadge="+₹28.4L MTD"
+                  dailyPLBadge={dashboardData?.dailyPLBadge || ''}
                   recentTrades={recentTrades.length ? recentTrades : dashboardData?.recentTrades || []}
                   pendingKYC={pendingKYC.length ? pendingKYC : dashboardData?.pendingKYC || []}
                   onNavigateTab={tab => setActiveTab(tab)}
@@ -857,6 +918,7 @@ export default function App() {
                   onNotify={showToast}
                   onNavigateToClient={() => setActiveTab('clients')}
                   onNavigateToTrade={() => setActiveTab('trades')}
+                  onOpenTradingPlatform={handleOpenTradingPlatform}
                 />
               )}
 
@@ -910,6 +972,7 @@ export default function App() {
                   onAddClient={() => setShowAddClientModal(true)}
                   onToggleStatus={handleToggleEntityStatus}
                   onNotify={showToast}
+                  onOpenTradingPlatform={handleOpenTradingPlatform}
                 />
               )}
 

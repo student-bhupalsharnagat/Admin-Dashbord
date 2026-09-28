@@ -82,6 +82,9 @@ export class EventHandler {
     const signature = getHeader('x-signature-sha256') || getHeader('x-hmac-signature');
     const timestamp = getHeader('x-timestamp') || eventData.timestamp;
     const headerTenantId = getHeader('x-tenant-id');
+    if (!eventData.payload && (eventData as any).data) {
+      eventData.payload = (eventData as any).data;
+    }
 
     // 1. Cryptographic HMAC & Replay verification
     const sigCheck = tradingPlatformClient.verifyInboundSignature(signature, timestamp, method, path, rawBody);
@@ -274,13 +277,32 @@ export class EventHandler {
     if (!p) return;
 
     // Check if client exists in Central Admin
-    const clientCheck = await query('SELECT id, name FROM clients WHERE id = $1 AND tenant_id = $2', [p.clientId, event.tenantId]);
-    let clientId = p.clientId || clientCheck.rows[0]?.id;
+    const clientCheck = await query(
+      'SELECT id, name FROM clients WHERE (id = $1 OR client_code = $1) AND tenant_id = $2',
+      [p.clientId || p.clientCode, event.tenantId]
+    );
+    let clientId = clientCheck.rows[0]?.id;
+    let clientName = clientCheck.rows[0]?.name || p.clientName || 'Trading Client';
+
     if (!clientId) {
       const fallbackClient = await query('SELECT id, name FROM clients WHERE tenant_id = $1 LIMIT 1', [event.tenantId]);
-      clientId = fallbackClient.rows[0]?.id || 'CLI-001';
+      if (fallbackClient.rows.length > 0) {
+        clientId = fallbackClient.rows[0]?.id;
+        clientName = fallbackClient.rows[0]?.name;
+      } else {
+        const subBroker = await query('SELECT id, name FROM sub_brokers WHERE tenant_id = $1 LIMIT 1', [event.tenantId]);
+        const subBrokerId = subBroker.rows[0]?.id || 'SBRK-001';
+        const newClientId = p.clientId || `CLT-${Date.now()}`;
+        const newClientCode = p.clientCode || newClientId;
+        await query(
+          `INSERT INTO clients (id, tenant_id, sub_broker_id, client_code, name, email, phone, status, kyc_status)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           ON CONFLICT (id) DO NOTHING`,
+          [newClientId, event.tenantId, subBrokerId, newClientCode, clientName, `${newClientId.toLowerCase()}@client.com`, '+91 98765 43210', 'ACTIVE', 'VERIFIED']
+        );
+        clientId = newClientId;
+      }
     }
-    const clientName = clientCheck.rows[0]?.name || p.clientName || 'Demo Client';
 
     // Persist trade into Central Admin trades table for governance & auditing
     const tradeId = p.tradeId || `TRD-${Date.now()}`;
@@ -312,6 +334,66 @@ export class EventHandler {
         event.timestamp
       ]
     );
+
+    // Calculate and persist real commission according to tenant commission rules
+    try {
+      const ruleRes = await query(`
+        SELECT cr.*
+        FROM commission_rules cr
+        JOIN commission_plans cp ON cr.plan_id = cp.id
+        WHERE cr.tenant_id = $1
+        ORDER BY cp.is_default DESC, cr.created_at ASC
+        LIMIT 1
+      `, [event.tenantId]);
+
+      let commAmount = 0;
+      if (ruleRes.rows.length > 0) {
+        const rule = ruleRes.rows[0];
+        const rateVal = parseFloat(rule.rate_value || '0');
+        if (rule.rate_type === 'PERCENTAGE') {
+          commAmount = totalValue * (rateVal / 100);
+        } else if (rule.rate_type === 'FLAT' || rule.rate_type === 'FIXED') {
+          commAmount = rateVal;
+        } else {
+          commAmount = totalValue * (rateVal / 100);
+        }
+
+        if (rule.min_per_trade && commAmount < parseFloat(rule.min_per_trade)) {
+          commAmount = parseFloat(rule.min_per_trade);
+        }
+        if (rule.max_per_trade && commAmount > parseFloat(rule.max_per_trade)) {
+          commAmount = parseFloat(rule.max_per_trade);
+        }
+      } else {
+        // Standard baseline commission of 0.05% of trade value if no specific rule
+        commAmount = totalValue * 0.0005;
+      }
+
+      if (commAmount > 0) {
+        const ledgerId = `LDG-${Date.now().toString().slice(-6)}`;
+        await query(`
+          INSERT INTO ledger_entries (
+            id, tenant_id, client_id, client_code, client_name, entry_type,
+            debit, credit, balance_after, reference_id, description, is_finalized
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        `, [
+          ledgerId,
+          event.tenantId,
+          clientId,
+          p.clientCode || 'CLT001',
+          clientName,
+          'COMMISSION',
+          0.00,
+          commAmount,
+          0.00,
+          tradeId,
+          `Commission on trade ${tradeId} (${p.symbol || 'NIFTY50'})`,
+          true
+        ]);
+      }
+    } catch (commErr) {
+      console.warn('[EventHandler] Commission calculation/ledger error:', commErr);
+    }
 
     // Audit log
     await query(

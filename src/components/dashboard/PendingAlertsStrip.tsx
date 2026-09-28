@@ -13,10 +13,10 @@ interface PendingAlertsStripProps {
 }
 
 export const PendingAlertsStrip: React.FC<PendingAlertsStripProps> = ({
-  pendingKYC = 1,
-  pendingDeposits = 3,
-  pendingWithdrawals = 1,
-  openTickets = 2,
+  pendingKYC = 0,
+  pendingDeposits = 0,
+  pendingWithdrawals = 0,
+  openTickets = 0,
   onNavigateKYC,
   onNavigateDeposits,
   onNavigateWithdrawals,

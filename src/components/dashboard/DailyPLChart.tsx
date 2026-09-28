@@ -18,7 +18,7 @@ interface DailyPLChartProps {
 
 export const DailyPLChart: React.FC<DailyPLChartProps> = ({
   data,
-  mtdBadge = '+₹28.4L MTD'
+  mtdBadge = ''
 }) => {
   return (
     <div className="bg-[#0d1527] border border-[#17233f] rounded-xl p-5 flex flex-col shadow-sm">

@@ -240,20 +240,31 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
     loadTenantBranding(activeTenantDomain, activeTenantId);
   }, [activeTenantDomain, activeTenantId]);
 
+  // Helper to compute initials from client name
+  const getInitials = (name?: string) => {
+    if (!name) return 'TR';
+    const parts = name.trim().split(/\s+/);
+    if (parts.length >= 2) {
+      return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+    }
+    return name.slice(0, 2).toUpperCase();
+  };
+
   // Client Profile state
   const [client, setClient] = useState<ClientAccount>(() => {
     if (initialClient) {
+      const name = initialClient.fullName || initialClient.name || 'Demo Trader';
       return {
         id: initialClient.id || 'CLI-9021',
         userId: initialClient.userId || initialClient.client_code || initialClient.id || 'vtx123',
-        fullName: initialClient.fullName || initialClient.name || 'Demo Trader',
+        fullName: name,
         email: initialClient.email || 'trader@vertextrading.com',
         phone: initialClient.phone || '+91 98765 43210',
-        initials: initialClient.initials || 'DT',
-        kycStatus: 'Verified (MCX & NSE Active)',
+        initials: initialClient.initials || getInitials(name),
+        kycStatus: initialClient.kyc || initialClient.kycStatus || 'Verified (MCX & NSE Active)',
         role: 'CLIENT',
-        tenantId: initialClient.tenantId || 'TNT-001',
-        tenantName: initialClient.tenantName || 'VERTEX Trading',
+        tenantId: initialClient.tenantId || initialClient.tenant_id || 'TNT-001',
+        tenantName: initialClient.tenantName || initialClient.tenant_name || 'VERTEX Trading',
         segments: ['NSE Cash', 'NSE F&O', 'MCX Commodity', 'Crypto Derivatives'],
         bankDetails: {
           bankName: 'HDFC Bank Ltd',
@@ -275,7 +286,115 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
   const [benchmarks, setBenchmarks] = useState<BenchmarkQuote[]>(INITIAL_BENCHMARKS);
   const [orders, setOrders] = useState<ClientOrder[]>(INITIAL_ORDERS);
   const [positions, setPositions] = useState<ClientPosition[]>(INITIAL_POSITIONS);
-  const [wallet, setWallet] = useState<ClientWallet>(INITIAL_WALLET);
+  const [wallet, setWallet] = useState<ClientWallet>(() => {
+    if (initialClient) {
+      const rawBal = typeof initialClient.balance === 'number'
+        ? initialClient.balance
+        : parseFloat(String(initialClient.balance || '').replace(/[^0-9.-]/g, ''));
+      const rawPl = typeof initialClient.pl === 'number'
+        ? initialClient.pl
+        : parseFloat(String(initialClient.pl || initialClient.netPl || '').replace(/[^0-9.-]/g, ''));
+      return {
+        ...INITIAL_WALLET,
+        availableBalance: !isNaN(rawBal) && rawBal > 0 ? rawBal : INITIAL_WALLET.availableBalance,
+        todayPnL: !isNaN(rawPl) ? rawPl : INITIAL_WALLET.todayPnL,
+        totalPnL: !isNaN(rawPl) && rawPl !== 0 ? rawPl : INITIAL_WALLET.totalPnL
+      };
+    }
+    return INITIAL_WALLET;
+  });
+
+  // Re-sync client and wallet when initialClient prop updates
+  useEffect(() => {
+    if (initialClient) {
+      const name = initialClient.fullName || initialClient.name || 'Demo Trader';
+      const initials = initialClient.initials || getInitials(name);
+      setClient(prev => ({
+        ...prev,
+        id: initialClient.id || prev.id,
+        userId: initialClient.userId || initialClient.client_code || initialClient.id || prev.userId,
+        fullName: name,
+        email: initialClient.email || prev.email,
+        phone: initialClient.phone || prev.phone,
+        initials,
+        kycStatus: initialClient.kyc || initialClient.kycStatus || prev.kycStatus,
+        tenantId: initialClient.tenantId || initialClient.tenant_id || prev.tenantId,
+        tenantName: initialClient.tenantName || initialClient.tenant_name || prev.tenantName
+      }));
+
+      const rawBal = typeof initialClient.balance === 'number'
+        ? initialClient.balance
+        : parseFloat(String(initialClient.balance || '').replace(/[^0-9.-]/g, ''));
+      const rawPl = typeof initialClient.pl === 'number'
+        ? initialClient.pl
+        : parseFloat(String(initialClient.pl || initialClient.netPl || '').replace(/[^0-9.-]/g, ''));
+
+      if (!isNaN(rawBal) && rawBal > 0) {
+        setWallet(w => ({
+          ...w,
+          availableBalance: rawBal,
+          todayPnL: !isNaN(rawPl) ? rawPl : w.todayPnL
+        }));
+      }
+
+      // Fetch live orders and positions for this client if ID is present
+      const clientId = initialClient.id;
+      if (clientId) {
+        Promise.allSettled([
+          fetch(`/api/admin/clients/${clientId}/orders`),
+          fetch(`/api/admin/clients/${clientId}/positions`)
+        ]).then(([ordRes, posRes]) => {
+          if (ordRes.status === 'fulfilled' && ordRes.value.ok) {
+            ordRes.value.json().then(data => {
+              if (Array.isArray(data) && data.length > 0) {
+                setOrders(data.map((o: any) => ({
+                  id: o.id || o.order_id || `ORD-${Math.random().toString().slice(2, 6)}`,
+                  symbol: o.symbol || 'RELIANCE.EQ',
+                  category: o.category || 'EQUITY',
+                  type: (o.side || o.type || 'BUY').toUpperCase() as 'BUY' | 'SELL',
+                  orderType: (o.orderType || o.order_type || 'MARKET').toUpperCase() as any,
+                  product: (o.product || 'INTRADAY').toUpperCase() as any,
+                  lots: o.lots || 1,
+                  quantity: o.quantity || o.qty || 25,
+                  price: typeof o.price === 'number' ? o.price : parseFloat(String(o.price || '0').replace(/[^0-9.-]/g, '')) || 0,
+                  status: (o.status || 'EXECUTED').toUpperCase() as any,
+                  placedAt: o.placedAt || o.time || o.created_at || 'Just now',
+                  timestamp: o.timestamp || o.time || 'Just now'
+                })));
+              }
+            }).catch(() => {});
+          }
+          if (posRes.status === 'fulfilled' && posRes.value.ok) {
+            posRes.value.json().then(data => {
+              if (Array.isArray(data) && data.length > 0) {
+                setPositions(data.map((p: any) => {
+                  const numPnl = typeof p.pnl === 'number' ? p.pnl : parseFloat(String(p.pnl || '0').replace(/[^0-9.-]/g, '')) || 0;
+                  const numEntry = typeof p.avgPrice === 'number' ? p.avgPrice : parseFloat(String(p.avgPrice || p.entry_price || '0').replace(/[^0-9.-]/g, '')) || 0;
+                  const numLtp = typeof p.ltp === 'number' ? p.ltp : parseFloat(String(p.ltp || p.lastPrice || '0').replace(/[^0-9.-]/g, '')) || numEntry;
+                  return {
+                    id: p.id || `POS-${Math.random().toString().slice(2, 6)}`,
+                    symbol: p.symbol || 'RELIANCE.EQ',
+                    category: p.category || 'EQUITY',
+                    type: (p.side || p.type || 'BUY').toUpperCase() as 'BUY' | 'SELL',
+                    side: (p.side || p.type || 'BUY').toUpperCase() as 'BUY' | 'SELL',
+                    product: (p.product || 'INTRADAY').toUpperCase() as any,
+                    quantity: p.quantity || p.qty || 25,
+                    qty: p.quantity || p.qty || 25,
+                    lots: p.lots || 1,
+                    avgPrice: numEntry,
+                    lastPrice: numLtp,
+                    ltp: numLtp,
+                    pnl: numPnl,
+                    pnlPercent: numEntry > 0 ? (numPnl / (numEntry * (p.qty || 25))) * 100 : 0
+                  };
+                }));
+              }
+            }).catch(() => {});
+          }
+        });
+      }
+    }
+  }, [initialClient]);
 
   // Modals state
   const [orderModalOpen, setOrderModalOpen] = useState(false);

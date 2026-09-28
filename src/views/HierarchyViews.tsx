@@ -22,7 +22,8 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   TrendingUp,
-  AlertTriangle
+  AlertTriangle,
+  ExternalLink
 } from 'lucide-react';
 import { Master, Broker, SubBroker, Client, Tenant } from '../types';
 import { ClientDetailView } from '../components/clients/ClientDetailView';
@@ -1509,11 +1510,20 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
                       <div className="flex items-center justify-end gap-2 text-slate-400">
                         <button
                           onClick={() => handleQuickAction('view', client)}
-                          title="View Portfolio & Profile"
+                          title="View Portfolio & Profile Details"
                           className="hover:text-white transition-colors p-1 rounded hover:bg-slate-800/50 cursor-pointer"
                         >
                           <Eye size={13} />
                         </button>
+                        {onOpenTradingPlatform && (
+                          <button
+                            onClick={() => onOpenTradingPlatform(client)}
+                            title="Launch Trading Platform for this client"
+                            className="hover:text-blue-400 hover:bg-blue-500/10 text-blue-400/80 transition-colors p-1 rounded cursor-pointer"
+                          >
+                            <ExternalLink size={13} />
+                          </button>
+                        )}
                         <button
                           onClick={() => handleQuickAction('edit', client)}
                           title="Edit Client"

@@ -46,9 +46,9 @@ import {
   FundDepositItem,
   FundWithdrawalItem,
   LedgerRowItem
-} from '../../src/types';
+} from '../../src/types.ts';
 import { getPool, query, withTransaction } from '../db/connection.ts';
-import { DEFAULT_ROLE_PERMISSIONS } from '../../src/utils/rbac';
+import { DEFAULT_ROLE_PERMISSIONS } from '../../src/utils/rbac.ts';
 import { tenantConfigCache } from './TenantConfigCache.ts';
 import { tradingPlatformClient } from '../services/TradingPlatformClient.ts';
 
@@ -70,54 +70,110 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     const tenantFilter = tenantId ? 'WHERE tenant_id = $1' : '';
     const params = tenantId ? [tenantId] : [];
 
-    const [mastersRes, brokersRes, clientsRes, volumeRes, kycRes, ticketsRes] = await Promise.all([
-      this.executeQuery(`SELECT count(*) as total_masters FROM masters ${tenantFilter}`, params),
-      this.executeQuery(`SELECT count(*) as total_brokers FROM brokers ${tenantFilter}`, params),
-      this.executeQuery(`SELECT count(*) as total_clients FROM clients ${tenantFilter}`, params),
-      this.executeQuery(`SELECT COALESCE(SUM(total_value), 0) as total_volume, count(*) as total_trades FROM trades ${tenantFilter}`, params),
-      this.executeQuery(`SELECT count(*) as pending_kyc FROM kyc_records WHERE kyc_status = 'PENDING' ${tenantId ? 'AND tenant_id = $1' : ''}`, params),
-      this.executeQuery(`SELECT count(*) as open_tickets FROM support_tickets WHERE status = 'OPEN' ${tenantId ? 'AND tenant_id = $1' : ''}`, params)
+    // Query live authoritative data from PostgreSQL database & remote platform
+    const [
+      mastersRes,
+      brokersRes,
+      subBrokersRes,
+      clientsRes,
+      activeClientsRes,
+      todayVolumeRes,
+      totalVolumeRes,
+      tradesCountRes,
+      commissionRes,
+      realizedPlRes,
+      unrealizedPlRes,
+      marginRes,
+      openPositionsRes,
+      pendingOrdersRes,
+      pendingDepositsRes,
+      pendingWithdrawalsRes,
+      kycRes,
+      ticketsRes
+    ] = await Promise.all([
+      this.executeQuery(`SELECT count(*) as count FROM masters ${tenantFilter}`, params),
+      this.executeQuery(`SELECT count(*) as count FROM brokers ${tenantFilter}`, params),
+      this.executeQuery(`SELECT count(*) as count FROM sub_brokers ${tenantFilter}`, params),
+      this.executeQuery(`SELECT count(*) as count FROM clients ${tenantFilter}`, params),
+      this.executeQuery(`SELECT count(*) as count FROM clients WHERE status = 'ACTIVE' ${tenantId ? 'AND tenant_id = $1' : ''}`, params),
+      this.executeQuery(`SELECT COALESCE(SUM(total_value), 0) as volume FROM trades WHERE created_at::date = CURRENT_DATE ${tenantId ? 'AND tenant_id = $1' : ''}`, params),
+      this.executeQuery(`SELECT COALESCE(SUM(total_value), 0) as volume FROM trades ${tenantFilter}`, params),
+      this.executeQuery(`SELECT count(*) as count FROM trades ${tenantFilter}`, params),
+      this.executeQuery(`SELECT COALESCE(SUM(credit), 0) as total FROM ledger_entries WHERE entry_type = 'COMMISSION' ${tenantId ? 'AND tenant_id = $1' : ''}`, params),
+      this.executeQuery(`SELECT COALESCE(SUM(pnl), 0) as total FROM positions WHERE status = 'CLOSED' ${tenantId ? 'AND tenant_id = $1' : ''}`, params),
+      this.executeQuery(`SELECT COALESCE(SUM(pnl), 0) as total FROM positions WHERE status = 'OPEN' ${tenantId ? 'AND tenant_id = $1' : ''}`, params),
+      this.executeQuery(`SELECT COALESCE(SUM(balance), 0) as total_balance, COALESCE(SUM(equity), 0) as total_equity, COALESCE(SUM(margin_used), 0) as total_margin_used FROM clients ${tenantFilter}`, params),
+      this.executeQuery(`SELECT count(*) as count FROM positions WHERE status = 'OPEN' ${tenantId ? 'AND tenant_id = $1' : ''}`, params),
+      this.executeQuery(`SELECT count(*) as count FROM orders WHERE status = 'PENDING' ${tenantId ? 'AND tenant_id = $1' : ''}`, params),
+      this.executeQuery(`SELECT count(*) as count FROM fund_deposits WHERE status IN ('PENDING', 'PROCESSING') ${tenantId ? 'AND tenant_id = $1' : ''}`, params),
+      this.executeQuery(`SELECT count(*) as count FROM fund_withdrawals WHERE status IN ('PENDING', 'PROCESSING') ${tenantId ? 'AND tenant_id = $1' : ''}`, params),
+      this.executeQuery(`SELECT count(*) as count FROM kyc_records WHERE kyc_status = 'PENDING' ${tenantId ? 'AND tenant_id = $1' : ''}`, params),
+      this.executeQuery(`SELECT count(*) as count FROM support_tickets WHERE status = 'OPEN' ${tenantId ? 'AND tenant_id = $1' : ''}`, params)
     ]);
 
-    const totalMastersNum = parseInt(mastersRes.rows[0]?.total_masters || '5', 10);
-    const totalBrokersNum = parseInt(brokersRes.rows[0]?.total_brokers || '43', 10);
-    const totalClientsNum = parseInt(clientsRes.rows[0]?.total_clients || '1520', 10);
-    const totalVolumeNum = parseFloat(volumeRes.rows[0]?.total_volume || '101000000');
-    const pendingKycNum = parseInt(kycRes.rows[0]?.pending_kyc || '2', 10);
-    const openTicketsNum = parseInt(ticketsRes.rows[0]?.open_tickets || '4', 10);
+    const totalMastersNum = parseInt(mastersRes.rows[0]?.count || '0', 10);
+    const totalBrokersNum = parseInt(brokersRes.rows[0]?.count || '0', 10);
+    const totalSubBrokersNum = parseInt(subBrokersRes.rows[0]?.count || '0', 10);
+    const totalClientsNum = parseInt(clientsRes.rows[0]?.count || '0', 10);
+    const activeClientsNum = parseInt(activeClientsRes.rows[0]?.count || '0', 10);
+    const todayVolumeNum = parseFloat(todayVolumeRes.rows[0]?.volume || '0');
+    const totalVolumeNum = parseFloat(totalVolumeRes.rows[0]?.volume || '0');
+    const totalCommissionNum = parseFloat(commissionRes.rows[0]?.total || '0');
+    const realizedPlNum = parseFloat(realizedPlRes.rows[0]?.total || '0');
+    const unrealizedPlNum = parseFloat(unrealizedPlRes.rows[0]?.total || '0');
+    const totalPlNum = realizedPlNum + unrealizedPlNum;
 
-    const turnoverStr = totalVolumeNum >= 10000000 ? `₹${(totalVolumeNum / 10000000).toFixed(1)}Cr` : `₹${(totalVolumeNum / 100000).toFixed(1)}L`;
-    const commissionStr = `₹${((totalVolumeNum * 0.005) / 100000).toFixed(1)}L`;
+    const totalBalanceNum = parseFloat(marginRes.rows[0]?.total_balance || '0');
+    const totalEquityNum = parseFloat(marginRes.rows[0]?.total_equity || '0');
+    const totalMarginUsedNum = parseFloat(marginRes.rows[0]?.total_margin_used || '0');
+    const availableMarginNum = Math.max(0, totalEquityNum - totalMarginUsedNum);
+
+    const openPositionsNum = parseInt(openPositionsRes.rows[0]?.count || '0', 10);
+    const pendingOrdersNum = parseInt(pendingOrdersRes.rows[0]?.count || '0', 10);
+    const pendingDepositsNum = parseInt(pendingDepositsRes.rows[0]?.count || '0', 10);
+    const pendingWithdrawalsNum = parseInt(pendingWithdrawalsRes.rows[0]?.count || '0', 10);
+    const pendingKycNum = parseInt(kycRes.rows[0]?.count || '0', 10);
+    const openTicketsNum = parseInt(ticketsRes.rows[0]?.count || '0', 10);
+
+    const formatCurrency = (amount: number): string => {
+      if (amount === 0) return '₹0';
+      const abs = Math.abs(amount);
+      const sign = amount < 0 ? '-' : '';
+      if (abs >= 10000000) return `${sign}₹${(abs / 10000000).toFixed(2)}Cr`;
+      if (abs >= 100000) return `${sign}₹${(abs / 100000).toFixed(2)}L`;
+      if (abs >= 1000) return `${sign}₹${(abs / 1000).toFixed(1)}K`;
+      return `${sign}₹${abs.toFixed(2)}`;
+    };
 
     return {
       total_masters: {
         value: totalMastersNum,
-        badge: '+2 new',
+        badge: totalMastersNum > 0 ? `${totalMastersNum} registered` : 'None',
         subtitle: tenantId ? 'Across Tenant' : 'Across all regions'
       },
       total_brokers: {
         value: totalBrokersNum,
-        badge: '+5 new',
-        subtitle: `${totalBrokersNum} active`
+        badge: `${totalBrokersNum} active`,
+        subtitle: `${totalSubBrokersNum} sub-brokers`
       },
       total_clients: {
         value: totalClientsNum,
-        badge: '↑ 12.3%',
-        subtitle: `${totalClientsNum} KYC approved`
+        badge: `${activeClientsNum} active`,
+        subtitle: `${totalClientsNum - pendingKycNum} verified`
       },
       commission_earned: {
-        value: commissionStr,
-        badge: '↑ 8.4%',
-        subtitle: 'Today'
+        value: formatCurrency(totalCommissionNum),
+        badge: 'From ledger',
+        subtitle: 'Actual rules'
       },
       todays_turnover: {
-        value: turnoverStr,
-        badge: '↑ 17.4%',
+        value: formatCurrency(todayVolumeNum > 0 ? todayVolumeNum : totalVolumeNum),
+        badge: todayVolumeNum > 0 ? 'Today' : 'Total Executed',
         subtitle: 'Turnover'
       },
       total_pl: {
-        value: '₹2.84Cr',
-        badge: '↑ 6.2%',
+        value: formatCurrency(totalPlNum),
+        badge: totalPlNum >= 0 ? '+Net Profit' : '-Net Loss',
         subtitle: 'Unrealized + Realized'
       },
       pending_kyc: {
@@ -126,7 +182,62 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       },
       open_tickets: {
         value: openTicketsNum,
-        subtitle: '2 high priority'
+        subtitle: `${openTicketsNum} open tickets`
+      },
+      total_sub_brokers: {
+        value: totalSubBrokersNum,
+        badge: `${totalSubBrokersNum} mapped`,
+        subtitle: 'Sub-Brokers'
+      },
+      active_clients: {
+        value: activeClientsNum,
+        badge: `${activeClientsNum} active`,
+        subtitle: 'Active trading accounts'
+      },
+      pending_deposits: {
+        value: pendingDepositsNum,
+        badge: `${pendingDepositsNum} pending`,
+        subtitle: 'Requires approval'
+      },
+      pending_withdrawals: {
+        value: pendingWithdrawalsNum,
+        badge: `${pendingWithdrawalsNum} pending`,
+        subtitle: 'Requires processing'
+      },
+      open_positions: {
+        value: openPositionsNum,
+        badge: `${openPositionsNum} open`,
+        subtitle: 'Active positions'
+      },
+      pending_orders: {
+        value: pendingOrdersNum,
+        badge: `${pendingOrdersNum} pending`,
+        subtitle: 'Queued orders'
+      },
+      used_margin: {
+        value: formatCurrency(totalMarginUsedNum),
+        badge: 'Utilized',
+        subtitle: 'Across clients'
+      },
+      available_margin: {
+        value: formatCurrency(availableMarginNum),
+        badge: 'Available',
+        subtitle: 'Free margin'
+      },
+      equity: {
+        value: formatCurrency(totalEquityNum),
+        badge: 'Total Equity',
+        subtitle: 'All client accounts'
+      },
+      realized_pl: {
+        value: formatCurrency(realizedPlNum),
+        badge: realizedPlNum >= 0 ? '+Profit' : '-Loss',
+        subtitle: 'Realized P&L'
+      },
+      unrealized_pl: {
+        value: formatCurrency(unrealizedPlNum),
+        badge: unrealizedPlNum >= 0 ? '+Profit' : '-Loss',
+        subtitle: 'Unrealized P&L'
       }
     };
   }
@@ -153,37 +264,21 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
           d.dt::text AS date,
           TO_CHAR(d.dt, 'Mon FMDD') AS display_date,
           COALESCE(ROUND(SUM(t.total_value) / 10000000.0, 2), 0.00) AS volume,
-          COALESCE(ROUND(SUM(t.total_value * 0.0005) / 100000.0, 2), 0.00) AS commission
+          COALESCE(ROUND(SUM(
+            COALESCE((SELECT SUM(l.credit) FROM ledger_entries l WHERE l.created_at::date = d.dt AND l.entry_type = 'COMMISSION' ${tenantId ? 'AND l.tenant_id = $2' : ''}), 0)
+          ) / 100000.0, 2), 0.00) AS commission
         FROM dates d
         LEFT JOIN trades t ON t.created_at::date = d.dt ${tenantClause}
         GROUP BY d.dt
         ORDER BY d.dt ASC
       `, params);
 
-      const hasData = res.rows.some(r => parseFloat(r.volume) > 0);
-      if (hasData) {
-        return res.rows.map(r => ({
-          date: r.date,
-          displayDate: r.display_date,
-          volume: parseFloat(r.volume),
-          commission: parseFloat(r.commission)
-        }));
-      }
-
-      // If no trades exist yet in the window, generate smooth progression using tenant turnover
-      const mastersRes = await this.executeQuery(`SELECT count(*) as c FROM masters ${tenantId ? 'WHERE tenant_id = $1' : ''}`, tenantId ? [tenantId] : []);
-      const baseMult = Math.max(1, parseInt(mastersRes.rows[0]?.c || '1', 10));
-
-      return res.rows.map((r, idx) => {
-        const v = Number((4.5 + (idx * 0.4) * (baseMult * 0.3)).toFixed(1));
-        const c = Number((v * 0.048).toFixed(2));
-        return {
-          date: r.date,
-          displayDate: r.display_date,
-          volume: v,
-          commission: c
-        };
-      });
+      return res.rows.map(r => ({
+        date: r.date,
+        displayDate: r.display_date,
+        volume: parseFloat(r.volume || '0'),
+        commission: parseFloat(r.commission || '0')
+      }));
     } catch (err) {
       console.error('[PostgresTradingDataProvider] getVolumeCommissionChart error:', err);
       return [];
@@ -218,18 +313,9 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         ORDER BY m_date ASC
       `, params);
 
-      const clientCount = res.rows.reduce((acc, r) => acc + parseInt(r.clients, 10), 0);
-      if (clientCount > 0) {
-        return res.rows.map(r => ({
-          month: r.month,
-          clients: parseInt(r.clients, 10)
-        }));
-      }
-
-      const totalClients = (await this.getClients(tenantId)).length || 1520;
-      return res.rows.map((r, idx) => ({
+      return res.rows.map(r => ({
         month: r.month,
-        clients: Math.max(1, Math.round(totalClients * (0.5 + (idx * 0.1))))
+        clients: parseInt(r.clients || '0', 10)
       }));
     } catch (err) {
       console.error('[PostgresTradingDataProvider] getClientGrowthChart error:', err);
@@ -271,28 +357,8 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         ORDER BY d.dt ASC
       `, params);
 
-      const hasPlData = res.rows.some(r => parseFloat(r.pl) !== 0);
-      if (hasPlData) {
-        const data = res.rows.map(r => {
-          const val = parseFloat(r.pl);
-          return {
-            day: r.day,
-            displayDay: r.display_day,
-            pl: val,
-            isProfit: val >= 0
-          };
-        });
-        const netTotal = data.reduce((sum, item) => sum + item.pl, 0);
-        const mtdBadge = `${netTotal >= 0 ? '+' : '-'}₹${Math.abs(netTotal / 100).toFixed(1)}L`;
-        return { data, mtdBadge };
-      }
-
-      const clientsCount = (await this.getClients(tenantId)).length || 12;
-      const baseScale = Math.max(1, Math.round(clientsCount / 3));
-      const sampleVals = [120, 40, 150, 130, 140, -20, 85, 160, 200, -45, 145, 195, 180, 150];
-
-      const data = res.rows.map((r, idx) => {
-        const val = Math.round((sampleVals[idx % sampleVals.length] || 100) * (baseScale * 0.3));
+      const data = res.rows.map(r => {
+        const val = parseFloat(r.pl || '0');
         return {
           day: r.day,
           displayDay: r.display_day,
@@ -300,8 +366,9 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
           isProfit: val >= 0
         };
       });
-
-      return { data, mtdBadge: '+₹28.4L' };
+      const netTotal = data.reduce((sum, item) => sum + item.pl, 0);
+      const mtdBadge = `${netTotal >= 0 ? '+' : '-'}₹${Math.abs(netTotal / 100).toFixed(1)}L`;
+      return { data, mtdBadge };
     } catch (err) {
       console.error('[PostgresTradingDataProvider] getDailyPLTrend error:', err);
       return { data: [], mtdBadge: '₹0' };
@@ -365,49 +432,104 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
   // TENANTS MODULE
   // ----------------------------------------------------
   async getTenants(queryParam?: { search?: string; status?: string }): Promise<Tenant[]> {
-    let sql = 'SELECT * FROM tenants WHERE 1=1';
+    let sql = `
+      SELECT t.*,
+        (SELECT COUNT(*) FROM clients c WHERE c.tenant_id = t.id) AS real_client_count,
+        (SELECT COUNT(*) FROM clients c WHERE c.tenant_id = t.id AND c.status = 'ACTIVE') AS real_active_client_count,
+        (SELECT COALESCE(SUM(total_value), 0) FROM trades tr WHERE tr.tenant_id = t.id) AS real_volume_raw,
+        (SELECT COALESCE(SUM(pnl), 0) FROM positions pos WHERE pos.tenant_id = t.id) AS real_pl_raw,
+        (SELECT COALESCE(SUM(margin_used), 0) FROM clients c WHERE c.tenant_id = t.id) AS real_margin_raw,
+        (SELECT COALESCE(SUM(credit), 0) FROM ledger_entries le WHERE le.tenant_id = t.id AND le.entry_type = 'COMMISSION') AS real_commission_raw
+      FROM tenants t WHERE 1=1
+    `;
     const params: any[] = [];
 
     if (queryParam?.status && queryParam.status !== 'ALL') {
       params.push(queryParam.status);
-      sql += ` AND status = $${params.length}`;
+      sql += ` AND t.status = $${params.length}`;
     }
     if (queryParam?.search) {
       params.push(`%${queryParam.search}%`);
-      sql += ` AND (name ILIKE $${params.length} OR code ILIKE $${params.length} OR subdomain ILIKE $${params.length})`;
+      sql += ` AND (t.name ILIKE $${params.length} OR t.code ILIKE $${params.length} OR t.subdomain ILIKE $${params.length})`;
     }
 
-    sql += ' ORDER BY created_at ASC';
+    sql += ' ORDER BY t.created_at ASC';
     const res = await this.executeQuery(sql, params);
 
-    return res.rows.map(r => ({
-      id: r.id,
-      name: r.name,
-      code: r.code,
-      status: r.status,
-      plan: r.plan,
-      admin_name: r.owner_name || 'Admin',
-      admin_email: r.owner_email || 'admin@tenant.com',
-      admin_phone: '+91 98000 00000',
-      domain: r.custom_domain || `${r.subdomain || r.code.toLowerCase()}.tradepro.com`,
-      support_email: `support@${(r.code || 'tenant').toLowerCase()}.com`,
-      total_users: r.user_count || 120,
-      active_users: Math.round((r.user_count || 120) * 0.8),
-      trading_volume: r.monthly_volume || '₹3.4Cr',
-      trading_volume_raw: 34000000,
-      pl: '₹84.2L',
-      pl_raw: 8420000,
-      margin: '₹1.2Cr',
-      commission: r.monthly_revenue || '₹14.2L',
-      created_at: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : '2026-01-01',
-      notes: ''
-    }));
+    const formatCurrency = (amount: number): string => {
+      if (amount === 0) return '₹0';
+      const abs = Math.abs(amount);
+      const sign = amount < 0 ? '-' : '';
+      if (abs >= 10000000) return `${sign}₹${(abs / 10000000).toFixed(2)}Cr`;
+      if (abs >= 100000) return `${sign}₹${(abs / 100000).toFixed(2)}L`;
+      if (abs >= 1000) return `${sign}₹${(abs / 1000).toFixed(1)}K`;
+      return `${sign}₹${abs.toFixed(2)}`;
+    };
+
+    return res.rows.map(r => {
+      const volRaw = parseFloat(r.real_volume_raw || '0');
+      const plRaw = parseFloat(r.real_pl_raw || '0');
+      const marginRaw = parseFloat(r.real_margin_raw || '0');
+      const commRaw = parseFloat(r.real_commission_raw || '0');
+      const clientCount = parseInt(r.real_client_count || '0', 10);
+      const activeClientCount = parseInt(r.real_active_client_count || '0', 10);
+
+      return {
+        id: r.id,
+        name: r.name,
+        code: r.code,
+        status: r.status,
+        plan: r.plan,
+        admin_name: r.owner_name || 'Admin',
+        admin_email: r.owner_email || 'admin@tenant.com',
+        admin_phone: '+91 98000 00000',
+        domain: r.custom_domain || `${r.subdomain || r.code.toLowerCase()}.tradepro.com`,
+        support_email: `support@${(r.code || 'tenant').toLowerCase()}.com`,
+        total_users: clientCount,
+        active_users: activeClientCount,
+        trading_volume: formatCurrency(volRaw),
+        trading_volume_raw: volRaw,
+        pl: formatCurrency(plRaw),
+        pl_raw: plRaw,
+        margin: formatCurrency(marginRaw),
+        commission: formatCurrency(commRaw),
+        created_at: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : '2026-01-01',
+        notes: ''
+      };
+    });
   }
 
   async getTenantById(id: string): Promise<Tenant | null> {
-    const res = await this.executeQuery('SELECT * FROM tenants WHERE id = $1', [id]);
+    const res = await this.executeQuery(`
+      SELECT t.*,
+        (SELECT COUNT(*) FROM clients c WHERE c.tenant_id = t.id) AS real_client_count,
+        (SELECT COUNT(*) FROM clients c WHERE c.tenant_id = t.id AND c.status = 'ACTIVE') AS real_active_client_count,
+        (SELECT COALESCE(SUM(total_value), 0) FROM trades tr WHERE tr.tenant_id = t.id) AS real_volume_raw,
+        (SELECT COALESCE(SUM(pnl), 0) FROM positions pos WHERE pos.tenant_id = t.id) AS real_pl_raw,
+        (SELECT COALESCE(SUM(margin_used), 0) FROM clients c WHERE c.tenant_id = t.id) AS real_margin_raw,
+        (SELECT COALESCE(SUM(credit), 0) FROM ledger_entries le WHERE le.tenant_id = t.id AND le.entry_type = 'COMMISSION') AS real_commission_raw
+      FROM tenants t WHERE t.id = $1
+    `, [id]);
     if (res.rows.length === 0) return null;
     const r = res.rows[0];
+
+    const formatCurrency = (amount: number): string => {
+      if (amount === 0) return '₹0';
+      const abs = Math.abs(amount);
+      const sign = amount < 0 ? '-' : '';
+      if (abs >= 10000000) return `${sign}₹${(abs / 10000000).toFixed(2)}Cr`;
+      if (abs >= 100000) return `${sign}₹${(abs / 100000).toFixed(2)}L`;
+      if (abs >= 1000) return `${sign}₹${(abs / 1000).toFixed(1)}K`;
+      return `${sign}₹${abs.toFixed(2)}`;
+    };
+
+    const volRaw = parseFloat(r.real_volume_raw || '0');
+    const plRaw = parseFloat(r.real_pl_raw || '0');
+    const marginRaw = parseFloat(r.real_margin_raw || '0');
+    const commRaw = parseFloat(r.real_commission_raw || '0');
+    const clientCount = parseInt(r.real_client_count || '0', 10);
+    const activeClientCount = parseInt(r.real_active_client_count || '0', 10);
+
     return {
       id: r.id,
       name: r.name,
@@ -419,14 +541,14 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       admin_phone: '+91 98000 00000',
       domain: r.custom_domain || `${r.subdomain || r.code.toLowerCase()}.tradepro.com`,
       support_email: `support@${(r.code || 'tenant').toLowerCase()}.com`,
-      total_users: r.user_count || 120,
-      active_users: Math.round((r.user_count || 120) * 0.8),
-      trading_volume: r.monthly_volume || '₹3.4Cr',
-      trading_volume_raw: 34000000,
-      pl: '₹84.2L',
-      pl_raw: 8420000,
-      margin: '₹1.2Cr',
-      commission: r.monthly_revenue || '₹14.2L',
+      total_users: clientCount,
+      active_users: activeClientCount,
+      trading_volume: formatCurrency(volRaw),
+      trading_volume_raw: volRaw,
+      pl: formatCurrency(plRaw),
+      pl_raw: plRaw,
+      margin: formatCurrency(marginRaw),
+      commission: formatCurrency(commRaw),
       created_at: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : '2026-01-01',
       notes: ''
     };
@@ -931,6 +1053,9 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
 
     const clientCode = data.client_code || `CLT${id.replace(/[^0-9]/g, '').slice(-3) || '999'}`;
 
+    const initialBalance = data.wallet_balance !== undefined ? parseFloat(String(data.wallet_balance)) : 0.00;
+    const initialMargin = data.available_margin !== undefined ? parseFloat(String(data.available_margin)) : initialBalance;
+
     const res = await this.executeQuery(`
       INSERT INTO clients (
         id, tenant_id, sub_broker_id, sub_broker_name, client_code, name, email, phone,
@@ -948,8 +1073,8 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       data.phone || '+91 98333 00000',
       data.status || 'ACTIVE',
       data.kyc_status || 'APPROVED',
-      data.wallet_balance || 100000.00,
-      data.available_margin || 100000.00,
+      initialBalance,
+      initialMargin,
       0.00,
       0
     ]);
@@ -1094,7 +1219,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       if (!isNaN(num)) realizedPL += num;
     }
 
-    const tradingPlatformWebUrl = `https://ai.studio/apps/9cd34c34-cb38-4875-8889-4e68e6b8ed7e?client_id=${encodeURIComponent(cleanId)}&client_code=${encodeURIComponent(clientCode)}&name=${encodeURIComponent(clientName)}&balance=${rawBalance}`;
+    const tradingPlatformWebUrl = `/?mode=trading&client_id=${encodeURIComponent(cleanId)}&client_code=${encodeURIComponent(clientCode)}&name=${encodeURIComponent(clientName)}&balance=${rawBalance}`;
 
     return {
       client: {
@@ -1119,7 +1244,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         accountNumber: `TRD-${cleanId}`,
         dematNumber: `IN300128-${cleanId}`,
         tradingPlatformUrl: tradingPlatformWebUrl,
-        mainPlatformLink: 'https://ai.studio/apps/9cd34c34-cb38-4875-8889-4e68e6b8ed7e',
+        mainPlatformLink: `/?mode=trading&client_id=${encodeURIComponent(cleanId)}`,
         currency: 'INR',
         balance: `₹${rawBalance.toLocaleString('en-IN')}`,
         rawBalance,
@@ -1255,6 +1380,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
           const buyPriceNum = parseFloat(r.buy_price || r.avg_price || '0');
           const curPriceNum = parseFloat(r.current_price || '0');
           const qtyNum = parseInt(r.quantity || r.qty || '0', 10);
+          const marginVal = r.margin !== undefined && r.margin !== null ? parseFloat(String(r.margin)) : (r.margin_used !== undefined ? parseFloat(String(r.margin_used)) : (r.used_margin !== undefined ? parseFloat(String(r.used_margin)) : 0));
           return {
             id: r.id || `pos_${cleanId}_${r.symbol}`,
             symbol: r.symbol,
@@ -1267,7 +1393,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
             rawLtp: curPriceNum,
             pnl: `${pnlNum >= 0 ? '+' : ''}₹${pnlNum.toLocaleString('en-IN')}`,
             rawPnl: pnlNum,
-            margin: `₹${(buyPriceNum * qtyNum * 0.1).toFixed(1)}`,
+            margin: `₹${marginVal.toLocaleString('en-IN')}`,
             status: r.status || 'OPEN'
           };
         });
@@ -1286,6 +1412,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       const pnlNum = parseFloat(r.unrealized_pnl || r.pnl || '0');
       const buyPriceNum = parseFloat(r.buy_price || '0');
       const curPriceNum = parseFloat(r.current_price || '0');
+      const marginVal = r.margin !== undefined && r.margin !== null ? parseFloat(String(r.margin)) : (r.margin_used !== undefined ? parseFloat(String(r.margin_used)) : 0);
       return {
         id: r.id,
         symbol: r.symbol,
@@ -1298,7 +1425,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         rawLtp: curPriceNum,
         pnl: `${pnlNum >= 0 ? '+' : ''}₹${pnlNum.toLocaleString('en-IN')}`,
         rawPnl: pnlNum,
-        margin: `₹${(buyPriceNum * r.quantity * 0.1).toFixed(1)}`,
+        margin: `₹${marginVal.toLocaleString('en-IN')}`,
         status: r.status
       };
     });
@@ -1521,6 +1648,17 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
 
       if (wdr.status === 'COMPLETED') {
         return { success: true, message: 'Withdrawal already completed', withdrawal: wdr };
+      }
+
+      // Consistency check: Verify client exists and has sufficient balance
+      const clientCheck = await client.query('SELECT balance, equity FROM clients WHERE id = $1 FOR UPDATE', [wdr.client_id]);
+      if (clientCheck.rows.length === 0) {
+        throw new Error(`Client account ${wdr.client_id} not found for withdrawal`);
+      }
+      const currentBal = parseFloat(clientCheck.rows[0].balance || '0');
+      const wdrAmount = parseFloat(wdr.amount);
+      if (currentBal < wdrAmount) {
+        throw new Error(`Insufficient client balance for withdrawal. Current: ₹${currentBal.toLocaleString('en-IN')}, Requested: ₹${wdrAmount.toLocaleString('en-IN')}`);
       }
 
       await client.query(`
@@ -1769,7 +1907,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
           const buyPriceNum = parseFloat(r.buy_price || r.avg_price || '0');
           const curPriceNum = parseFloat(r.current_price || '0');
           const qtyNum = parseInt(r.quantity || r.qty || '0', 10);
-          const marginNum = (buyPriceNum * qtyNum * 0.1).toFixed(1);
+          const marginVal = r.margin !== undefined && r.margin !== null ? parseFloat(String(r.margin)) : (r.margin_used !== undefined ? parseFloat(String(r.margin_used)) : (r.used_margin !== undefined ? parseFloat(String(r.used_margin)) : 0));
 
           return {
             id: r.id,
@@ -1780,7 +1918,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
             currentPrice: curPriceNum.toLocaleString('en-IN'),
             unrealizedPL: `${pnlNum >= 0 ? '+' : ''}₹${pnlNum.toLocaleString('en-IN')}`,
             realizedPL: '+₹0',
-            margin: `₹${marginNum}`,
+            margin: `₹${marginVal.toLocaleString('en-IN')}`,
             unrealizedPLPositive: pnlNum >= 0,
             realizedPLPositive: true,
             status: r.status || 'OPEN'
@@ -1805,7 +1943,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       const buyPriceNum = parseFloat(r.buy_price || '0');
       const curPriceNum = parseFloat(r.current_price || '0');
       const qtyNum = parseInt(r.quantity || '0', 10);
-      const marginNum = (buyPriceNum * qtyNum * 0.1).toFixed(1);
+      const marginVal = r.margin !== undefined && r.margin !== null ? parseFloat(String(r.margin)) : (r.margin_used !== undefined ? parseFloat(String(r.margin_used)) : 0);
 
       return {
         id: r.id,
@@ -1816,7 +1954,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         currentPrice: curPriceNum.toLocaleString('en-IN'),
         unrealizedPL: `${pnlNum >= 0 ? '+' : ''}₹${pnlNum.toLocaleString('en-IN')}`,
         realizedPL: '+₹0',
-        margin: `₹${marginNum}`,
+        margin: `₹${marginVal.toLocaleString('en-IN')}`,
         unrealizedPLPositive: pnlNum >= 0,
         realizedPLPositive: true,
         status: r.status
@@ -3269,12 +3407,12 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         isSystemRole: true,
         userCount: 3,
         badgeColor: 'blue',
-        permissions: perms,
+        permissions: perms as any,
         createdAt: '2026-01-01',
         updatedAt: '2026-01-01'
       }));
     }
-    return res.rows.map(r => ({
+    return res.rows.map((r: any) => ({
       id: r.id,
       name: r.name,
       code: r.name,
@@ -3282,7 +3420,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       isSystemRole: r.is_system,
       userCount: 3,
       badgeColor: 'blue',
-      permissions: r.permissions || [],
+      permissions: (r.permissions || {}) as any,
       createdAt: r.created_at?.toISOString() || '2026-01-01',
       updatedAt: r.updated_at?.toISOString() || '2026-01-01'
     }));
@@ -3294,7 +3432,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       INSERT INTO roles (id, name, description, is_system, permissions)
       VALUES ($1, $2, $3, $4, $5)
       RETURNING *
-    `, [id, role.name || 'CUSTOM_ROLE', role.description || '', false, JSON.stringify(role.permissions || [])]);
+    `, [id, role.name || 'CUSTOM_ROLE', role.description || '', false, JSON.stringify(role.permissions || {})]);
     const r = res.rows[0];
     return {
       id: r.id,
@@ -3304,7 +3442,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       isSystemRole: r.is_system,
       userCount: 1,
       badgeColor: 'indigo',
-      permissions: r.permissions,
+      permissions: (r.permissions || {}) as any,
       createdAt: r.created_at?.toISOString() || new Date().toISOString(),
       updatedAt: r.updated_at?.toISOString() || new Date().toISOString()
     };

@@ -57,21 +57,25 @@ export interface Tenant {
   name: string;
   code: string;
   status: EntityStatus;
-  plan: PlanType;
-  admin_name: string;
-  admin_email: string;
-  admin_phone: string;
-  domain: string;
-  support_email: string;
-  total_users: number;
-  active_users: number;
-  trading_volume: string;
-  trading_volume_raw: number;
-  pl: string;
-  pl_raw: number;
-  margin: string;
-  commission: string;
-  created_at: string;
+  plan?: PlanType;
+  tier?: string;
+  clients?: number;
+  turnover?: string;
+  created?: string;
+  admin_name?: string;
+  admin_email?: string;
+  admin_phone?: string;
+  domain?: string;
+  support_email?: string;
+  total_users?: number;
+  active_users?: number;
+  trading_volume?: string;
+  trading_volume_raw?: number;
+  pl?: string;
+  pl_raw?: number;
+  margin?: string;
+  commission?: string;
+  created_at?: string;
   notes?: string;
 }
 
@@ -282,6 +286,66 @@ export interface DashboardKPIs {
     badge?: string;
     subtitle: string;
   };
+  total_sub_brokers?: {
+    value: number;
+    badge?: string;
+    subtitle?: string;
+  };
+  active_clients?: {
+    value: number;
+    badge?: string;
+    subtitle?: string;
+  };
+  pending_deposits?: {
+    value: number;
+    badge?: string;
+    subtitle?: string;
+  };
+  pending_withdrawals?: {
+    value: number;
+    badge?: string;
+    subtitle?: string;
+  };
+  open_positions?: {
+    value: number;
+    badge?: string;
+    subtitle?: string;
+  };
+  pending_orders?: {
+    value: number;
+    badge?: string;
+    subtitle?: string;
+  };
+  trading_volume?: {
+    value: string;
+    badge?: string;
+    subtitle?: string;
+  };
+  used_margin?: {
+    value: string;
+    badge?: string;
+    subtitle?: string;
+  };
+  available_margin?: {
+    value: string;
+    badge?: string;
+    subtitle?: string;
+  };
+  equity?: {
+    value: string;
+    badge?: string;
+    subtitle?: string;
+  };
+  realized_pl?: {
+    value: string;
+    badge?: string;
+    subtitle?: string;
+  };
+  unrealized_pl?: {
+    value: string;
+    badge?: string;
+    subtitle?: string;
+  };
 }
 
 export interface VolumeCommissionChartPoint {
@@ -468,6 +532,7 @@ export interface DashboardData {
   volumeCommission: VolumeCommissionChartPoint[];
   clientGrowth: ClientGrowthChartPoint[];
   dailyPL: DailyPLPoint[];
+  dailyPLBadge?: string;
   recentTrades: Trade[];
   pendingKYC: KYCRecord[];
   tenants: Tenant[];

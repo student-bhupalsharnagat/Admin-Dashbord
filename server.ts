@@ -1434,6 +1434,43 @@ async function startServer() {
     return await activeTradingDataProvider.resolveTenantByDomain(targetDomain || 'trade.alphaprime.com');
   };
 
+  // 0. GET /api/public/tenants - Public list of active tenants for authentication and tenant selector
+  app.get(['/api/public/tenants', '/api/tenants'], async (_req, res) => {
+    try {
+      const { rows } = await query(`
+        SELECT 
+          id, 
+          name, 
+          code, 
+          COALESCE(custom_domain, subdomain || '.tradepro.io', 'trade.alphaprime.com') as domain, 
+          status, 
+          plan as tier 
+        FROM tenants 
+        WHERE status = $1 
+        ORDER BY name ASC
+      `, ['ACTIVE']);
+      if (rows && rows.length > 0) {
+        return res.json(rows);
+      }
+      const memTenants = await activeTradingDataProvider.getTenants();
+      res.json(memTenants);
+    } catch (e) {
+      console.warn('[Public Tenants API] Database query fallback:', (e as any)?.message);
+      try {
+        const memTenants = await activeTradingDataProvider.getTenants();
+        if (memTenants && memTenants.length > 0) {
+          return res.json(memTenants);
+        }
+      } catch {}
+      res.json([
+        { id: 'TNT-001', name: 'Alpha Prime Capital', code: 'APC', domain: 'trade.alphaprime.com', status: 'ACTIVE', tier: 'ENTERPRISE' },
+        { id: 'TNT-002', name: 'Apex Securities Ltd', code: 'APEX', domain: 'trade.apexsecurities.in', status: 'ACTIVE', tier: 'PRO' },
+        { id: 'TNT-003', name: 'Zenith Markets', code: 'ZMK', domain: 'trade.zenithmarkets.in', status: 'ACTIVE', tier: 'GROWTH' },
+        { id: 'TNT-004', name: 'Quantum Alpha Capital', code: 'QAC', domain: 'trade.quantumfx.io', status: 'ACTIVE', tier: 'STARTER' }
+      ]);
+    }
+  });
+
   // 1. GET /api/tenant/branding - Public branding for resolved tenant
   app.get('/api/tenant/branding', async (req, res) => {
     try {

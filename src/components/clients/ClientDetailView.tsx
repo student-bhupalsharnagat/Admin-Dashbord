@@ -137,7 +137,7 @@ export const ClientDetailView: React.FC<ClientDetailViewProps> = ({
   const [tradingAccountData, setTradingAccountData] = useState<any>({
     accountNumber: `TRD-${client.id || 'CLT001'}`,
     dematNumber: `IN300128-${client.id || 'CLT001'}`,
-    tradingPlatformUrl: 'https://ai.studio/apps/9cd34c34-cb38-4875-8889-4e68e6b8ed7e',
+    tradingPlatformUrl: typeof window !== 'undefined' ? `${window.location.origin}/?mode=trading&client_id=${client.id || 'CLT001'}` : `/?mode=trading&client_id=${client.id || 'CLT001'}`,
     status: 'ACTIVE',
     s2sStatus: 'CONNECTED',
     availableMargin: '₹11,200',
@@ -307,7 +307,15 @@ export const ClientDetailView: React.FC<ClientDetailViewProps> = ({
 
   const avatarInitial = (clientData.name || 'A').charAt(0).toUpperCase();
 
-  const tradingPlatformDirectUrl = `https://ai.studio/apps/9cd34c34-cb38-4875-8889-4e68e6b8ed7e?client_id=${encodeURIComponent(clientData.id)}&name=${encodeURIComponent(clientData.name)}&balance=${encodeURIComponent(clientData.balance)}`;
+  const tradingPlatformDirectUrl = `/?mode=trading&client_id=${encodeURIComponent(clientData.id)}&name=${encodeURIComponent(clientData.name)}&balance=${encodeURIComponent(clientData.balance)}`;
+
+  const handleLaunchPlatform = () => {
+    if (onOpenTradingPlatform) {
+      onOpenTradingPlatform(clientData);
+    } else if (typeof window !== 'undefined') {
+      window.location.href = tradingPlatformDirectUrl;
+    }
+  };
 
   return (
     <div className="space-y-5 animate-in fade-in duration-150">
@@ -389,28 +397,15 @@ export const ClientDetailView: React.FC<ClientDetailViewProps> = ({
 
           {/* Action Buttons Top Right: Trading Platform, Terminal, Edit, Suspend */}
           <div className="flex items-center gap-2 self-end md:self-center flex-wrap">
-            {onOpenTradingPlatform ? (
-              <button
-                type="button"
-                onClick={() => onOpenTradingPlatform(clientData)}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-lg text-xs font-semibold shadow-sm transition-all cursor-pointer"
-                title="Open Trading Platform with this client account pre-loaded"
-              >
-                <ExternalLink size={13} />
-                <span>Open Trading Platform</span>
-              </button>
-            ) : (
-              <a
-                href={tradingPlatformDirectUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-lg text-xs font-semibold shadow-sm transition-all cursor-pointer"
-                title="Open Trading Platform for this client (ai.studio)"
-              >
-                <ExternalLink size={13} />
-                <span>Open Trading Platform</span>
-              </a>
-            )}
+            <button
+              type="button"
+              onClick={handleLaunchPlatform}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-lg text-xs font-semibold shadow-sm transition-all cursor-pointer"
+              title="Open Trading Platform with this client account pre-loaded"
+            >
+              <ExternalLink size={13} />
+              <span>Open Trading Platform</span>
+            </button>
 
             <button
               onClick={() => setActiveTab('Trading Platform')}
@@ -667,26 +662,15 @@ export const ClientDetailView: React.FC<ClientDetailViewProps> = ({
                 <span>{isSyncing ? 'Syncing...' : 'Ping S2S'}</span>
               </button>
 
-              {onOpenTradingPlatform ? (
-                <button
-                  type="button"
-                  onClick={() => onOpenTradingPlatform(clientData)}
-                  className="flex items-center gap-1.5 px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold shadow-md transition-all cursor-pointer"
-                >
-                  <ExternalLink size={13} />
-                  <span>Open Full Platform</span>
-                </button>
-              ) : (
-                <a
-                  href={tradingPlatformDirectUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold shadow-md transition-all cursor-pointer"
-                >
-                  <ExternalLink size={13} />
-                  <span>Open Full Platform</span>
-                </a>
-              )}
+              <button
+                type="button"
+                onClick={handleLaunchPlatform}
+                className="flex items-center gap-1.5 px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold shadow-md transition-all cursor-pointer"
+                title="Open Trading Platform with client pre-loaded"
+              >
+                <ExternalLink size={13} />
+                <span>Open Full Platform</span>
+              </button>
             </div>
           </div>
 
@@ -946,29 +930,18 @@ export const ClientDetailView: React.FC<ClientDetailViewProps> = ({
                 <div className="flex items-center gap-1.5 truncate">
                   <span className="text-[11px] font-mono text-slate-500">Trading Gateway:</span>
                   <span className="font-mono text-blue-300 text-[11px] truncate">
-                    https://ai.studio/apps/9cd34c34-cb38-4875-8889-4e68e6b8ed7e
+                    {typeof window !== 'undefined' ? `${window.location.origin}/?mode=trading&client_id=${clientData.id}` : `/?mode=trading&client_id=${clientData.id}`}
                   </span>
                 </div>
-                {onOpenTradingPlatform ? (
-                  <button
-                    type="button"
-                    onClick={() => onOpenTradingPlatform(clientData)}
-                    className="text-blue-400 hover:text-blue-300 flex items-center gap-1 font-semibold text-xs whitespace-nowrap cursor-pointer hover:underline"
-                  >
-                    <span>Launch Gateway</span>
-                    <ArrowUpRight size={13} />
-                  </button>
-                ) : (
-                  <a
-                    href={tradingPlatformDirectUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-blue-400 hover:text-blue-300 flex items-center gap-1 font-semibold text-xs whitespace-nowrap cursor-pointer hover:underline"
-                  >
-                    <span>Launch Gateway</span>
-                    <ArrowUpRight size={13} />
-                  </a>
-                )}
+                <button
+                  type="button"
+                  onClick={handleLaunchPlatform}
+                  className="text-blue-400 hover:text-blue-300 flex items-center gap-1 font-semibold text-xs whitespace-nowrap cursor-pointer hover:underline"
+                  title="Launch Trading Platform in gateway mode"
+                >
+                  <span>Launch Gateway</span>
+                  <ArrowUpRight size={13} />
+                </button>
               </div>
             </div>
           </div>

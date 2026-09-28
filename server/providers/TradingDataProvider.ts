@@ -41,8 +41,8 @@ import {
   FundDepositItem,
   FundWithdrawalItem,
   LedgerRowItem
-} from '../../src/types';
-import { DEFAULT_ROLE_PERMISSIONS } from '../../src/utils/rbac';
+} from '../../src/types.ts';
+import { DEFAULT_ROLE_PERMISSIONS } from '../../src/utils/rbac.ts';
 import { tradingPlatformClient } from '../services/TradingPlatformClient.ts';
 import { tenantConfigCache } from './TenantConfigCache.ts';
 import { query } from '../db/connection.ts';
@@ -1211,102 +1211,69 @@ export class MockTradingDataProvider implements ITradingDataProvider {
       };
     }
 
-    // Exact matching global Super Admin dashboard figures:
+    const mastersCount = this.masters.length;
+    const brokersCount = this.brokers.length;
+    const clientsCount = this.clients.length;
+    const activeClientsCount = this.clients.filter(c => c.status === 'ACTIVE').length;
+    const verifiedClientsCount = this.clients.filter(c => c.kyc_status === 'APPROVED').length;
+    const pendingKycCount = this.kycRecords.filter(k => k.kyc_status === 'PENDING').length;
+    const openTicketsCount = this.supportTickets.filter(t => t.status === 'OPEN').length;
+
     return {
       total_masters: {
-        value: 5,
-        badge: '+2 new',
+        value: mastersCount,
+        badge: `${mastersCount} registered`,
         subtitle: 'Across all regions'
       },
       total_brokers: {
-        value: 43,
-        badge: '+5 new',
-        subtitle: '38 active'
+        value: brokersCount,
+        badge: `${brokersCount} active`,
+        subtitle: 'Active brokers'
       },
       total_clients: {
-        value: 1520,
-        badge: '↑ 12.3%',
-        subtitle: '1,360 KYC approved'
+        value: clientsCount,
+        badge: `${activeClientsCount} active`,
+        subtitle: `${verifiedClientsCount} KYC approved`
       },
       commission_earned: {
-        value: '₹50.5L',
-        badge: '↑ 8.4%',
+        value: '₹0',
+        badge: 'From ledger',
         subtitle: 'Today'
       },
       todays_turnover: {
-        value: '₹10.1Cr',
-        badge: '↑ 17.4%',
-        subtitle: '↑ from ₹8.8Cr yesterday'
+        value: '₹0',
+        badge: 'Turnover',
+        subtitle: 'Today'
       },
       total_pl: {
-        value: '₹2.84Cr',
-        badge: '↑ 6.2%',
+        value: '₹0',
+        badge: 'Net P&L',
         subtitle: 'Unrealized + Realized'
       },
       pending_kyc: {
-        value: 2,
+        value: pendingKycCount,
         subtitle: 'Requires review'
       },
       open_tickets: {
-        value: 4,
-        subtitle: '2 high priority'
+        value: openTicketsCount,
+        subtitle: `${openTicketsCount} open tickets`
       }
     };
   }
 
-  // Exact matching smooth curves for Trading Volume & Commission:
+  // Matching smooth curves for Trading Volume & Commission:
   async getVolumeCommissionChart(tenantId?: string, timeRange?: string): Promise<VolumeCommissionChartPoint[]> {
-    return [
-      { date: '2024-04-01', displayDate: 'Apr 1', volume: 4.8, commission: 0.22 },
-      { date: '2024-04-02', displayDate: 'Apr 2', volume: 4.4, commission: 0.20 },
-      { date: '2024-04-03', displayDate: 'Apr 3', volume: 4.6, commission: 0.24 },
-      { date: '2024-04-04', displayDate: 'Apr 4', volume: 5.7, commission: 0.29 },
-      { date: '2024-04-05', displayDate: 'Apr 5', volume: 6.9, commission: 0.35 },
-      { date: '2024-04-06', displayDate: 'Apr 6', volume: 5.3, commission: 0.26 },
-      { date: '2024-04-07', displayDate: 'Apr 7', volume: 4.9, commission: 0.22 },
-      { date: '2024-04-08', displayDate: 'Apr 8', volume: 5.8, commission: 0.30 },
-      { date: '2024-04-09', displayDate: 'Apr 9', volume: 6.8, commission: 0.34 },
-      { date: '2024-04-10', displayDate: 'Apr 10', volume: 6.2, commission: 0.31 },
-      { date: '2024-04-11', displayDate: 'Apr 11', volume: 7.1, commission: 0.38 },
-      { date: '2024-04-12', displayDate: 'Apr 12', volume: 8.2, commission: 0.44 },
-      { date: '2024-04-13', displayDate: 'Apr 13', volume: 8.5, commission: 0.46 },
-      { date: '2024-04-14', displayDate: 'Apr 14', volume: 8.1, commission: 0.43 },
-      { date: '2024-04-15', displayDate: 'Apr 15', volume: 9.8, commission: 0.51 }
-    ];
+    return [];
   }
 
-  // Exact matching client growth bars Nov -> Apr:
+  // Matching client growth bars:
   async getClientGrowthChart(tenantId?: string): Promise<ClientGrowthChartPoint[]> {
-    return [
-      { month: 'Nov', clients: 820 },
-      { month: 'Dec', clients: 1010 },
-      { month: 'Jan', clients: 1180 },
-      { month: 'Feb', clients: 1290 },
-      { month: 'Mar', clients: 1420 },
-      { month: 'Apr', clients: 1520 }
-    ];
+    return [];
   }
 
-  // Exact matching Daily P&L Trend (April 2024) with cyan wave and +₹28.4L MTD badge:
+  // Daily P&L Trend:
   async getDailyPLTrend(tenantId?: string, month?: string): Promise<{ data: DailyPLPoint[]; mtdBadge: string }> {
-    const points: DailyPLPoint[] = [
-      { day: 'Apr 1', displayDay: 'Apr 1', pl: 120, isProfit: true },
-      { day: 'Apr 2', displayDay: 'Apr 2', pl: 40, isProfit: true },
-      { day: 'Apr 3', displayDay: 'Apr 3', pl: 150, isProfit: true },
-      { day: 'Apr 4', displayDay: 'Apr 4', pl: 130, isProfit: true },
-      { day: 'Apr 5', displayDay: 'Apr 5', pl: 140, isProfit: true },
-      { day: 'Apr 6', displayDay: 'Apr 6', pl: -20, isProfit: false },
-      { day: 'Apr 7', displayDay: 'Apr 7', pl: 85, isProfit: true },
-      { day: 'Apr 8', displayDay: 'Apr 8', pl: 160, isProfit: true },
-      { day: 'Apr 9', displayDay: 'Apr 9', pl: 200, isProfit: true },
-      { day: 'Apr 10', displayDay: 'Apr 10', pl: -45, isProfit: false },
-      { day: 'Apr 11', displayDay: 'Apr 11', pl: 145, isProfit: true },
-      { day: 'Apr 12', displayDay: 'Apr 12', pl: 195, isProfit: true },
-      { day: 'Apr 13', displayDay: 'Apr 13', pl: 180, isProfit: true },
-      { day: 'Apr 14', displayDay: 'Apr 14', pl: 150, isProfit: true },
-      { day: 'Apr 15', displayDay: 'Apr 15', pl: 205, isProfit: true }
-    ];
-    return { data: points, mtdBadge: '+₹28.4L MTD' };
+    return { data: [], mtdBadge: '₹0 MTD' };
   }
 
   async getRecentTrades(tenantId?: string, limit: number = 6): Promise<Trade[]> {
@@ -1623,8 +1590,8 @@ export class MockTradingDataProvider implements ITradingDataProvider {
       tradingAccount: {
         accountNumber: `TRD-${client.id}`,
         dematNumber: `IN300128-${client.id}`,
-        tradingPlatformUrl: `https://ai.studio/apps/9cd34c34-cb38-4875-8889-4e68e6b8ed7e?client_id=${encodeURIComponent(client.id)}&name=${encodeURIComponent(client.name)}&balance=${balance}`,
-        mainPlatformLink: 'https://ai.studio/apps/9cd34c34-cb38-4875-8889-4e68e6b8ed7e',
+        tradingPlatformUrl: `/?mode=trading&client_id=${encodeURIComponent(client.id)}&name=${encodeURIComponent(client.name)}&balance=${balance}`,
+        mainPlatformLink: `/?mode=trading&client_id=${encodeURIComponent(client.id)}`,
         currency: 'INR',
         balance: `₹${balance.toLocaleString('en-IN')}`,
         rawBalance: balance,

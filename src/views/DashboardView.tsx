@@ -47,14 +47,14 @@ export interface DashboardViewProps {
 }
 
 const DEFAULT_FALLBACK_KPIS: DashboardKPIs = {
-  total_masters: { value: 5, badge: '+2 new', subtitle: 'Across all regions' },
-  total_brokers: { value: 43, badge: '+5 new', subtitle: '38 active' },
-  total_clients: { value: 3073, badge: '↑ 12.3%', subtitle: '1,360 KYC approved' },
-  commission_earned: { value: '862K', badge: '↑ 11.4%', subtitle: 'Today' },
-  todays_turnover: { value: '48.2M', badge: '↑ 9.8%', subtitle: 'Today' },
-  total_pl: { value: '8.44M', badge: '↑ 22.1%', subtitle: 'Unrealized + Realized' },
-  pending_kyc: { value: 2, subtitle: 'Requires review' },
-  open_tickets: { value: 4, subtitle: '2 high priority' }
+  total_masters: { value: 0, badge: '0 registered', subtitle: 'Across all regions' },
+  total_brokers: { value: 0, badge: '0 active', subtitle: '0 sub-brokers' },
+  total_clients: { value: 0, badge: '0 active', subtitle: '0 KYC approved' },
+  commission_earned: { value: '₹0', badge: 'From ledger', subtitle: 'Today' },
+  todays_turnover: { value: '₹0', badge: 'Turnover', subtitle: 'Today' },
+  total_pl: { value: '₹0', badge: 'Net P&L', subtitle: 'Unrealized + Realized' },
+  pending_kyc: { value: 0, subtitle: 'Requires review' },
+  open_tickets: { value: 0, subtitle: '0 open tickets' }
 };
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
@@ -181,8 +181,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 sm:gap-4">
         <KPICard
           title="TOTAL MASTERS"
-          value={activeKpis.total_masters?.value ?? 5}
-          subtitle="+2 this month"
+          value={activeKpis.total_masters?.value ?? 0}
+          subtitle={activeKpis.total_masters?.subtitle || 'Across all regions'}
           icon={Crown}
           iconColor="text-blue-400"
           iconBg="bg-blue-950/60"
@@ -191,8 +191,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         <KPICard
           title="TOTAL BROKERS"
-          value={activeKpis.total_brokers?.value ?? 43}
-          subtitle="+8 this month"
+          value={activeKpis.total_brokers?.value ?? 0}
+          subtitle={activeKpis.total_brokers?.subtitle || 'Active brokers'}
           icon={Building2}
           iconColor="text-purple-400"
           iconBg="bg-purple-950/60"
@@ -201,8 +201,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         <KPICard
           title="SUB-BROKERS"
-          value={127}
-          subtitle="+21 this month"
+          value={activeKpis.total_sub_brokers?.value ?? 0}
+          subtitle={activeKpis.total_sub_brokers?.subtitle || 'Sub-Brokers'}
           icon={Network}
           iconColor="text-cyan-400"
           iconBg="bg-cyan-950/60"
@@ -211,8 +211,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         <KPICard
           title="TOTAL CLIENTS"
-          value={typeof activeKpis.total_clients?.value === 'number' ? activeKpis.total_clients.value.toLocaleString() : (activeKpis.total_clients?.value ?? '3,073')}
-          subtitle="+104 this month"
+          value={typeof activeKpis.total_clients?.value === 'number' ? activeKpis.total_clients.value.toLocaleString() : (activeKpis.total_clients?.value ?? '0')}
+          subtitle={activeKpis.total_clients?.subtitle || 'Registered accounts'}
           icon={Users}
           iconColor="text-emerald-400"
           iconBg="bg-emerald-950/60"
@@ -224,8 +224,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 sm:gap-4">
         <KPICard
           title="TRADING VOLUME"
-          value={`${currencySymbol}172.6M`}
-          subtitle="+14.2% vs last month"
+          value={activeKpis.trading_volume?.value || activeKpis.todays_turnover?.value || '₹0'}
+          subtitle={activeKpis.todays_turnover?.subtitle || 'Turnover'}
           icon={TrendingUp}
           iconColor="text-amber-400"
           iconBg="bg-amber-950/60"
@@ -234,8 +234,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         <KPICard
           title="TOTAL TURNOVER"
-          value={activeKpis.todays_turnover?.value ? `${activeKpis.todays_turnover.value}` : `${currencySymbol}48.2M`}
-          subtitle="+9.8% vs last month"
+          value={activeKpis.todays_turnover?.value ? `${activeKpis.todays_turnover.value}` : '₹0'}
+          subtitle={activeKpis.todays_turnover?.badge || 'Total Executed'}
           icon={BarChart3}
           iconColor="text-blue-400"
           iconBg="bg-blue-950/60"
@@ -244,8 +244,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         <KPICard
           title="NET P&L"
-          value={activeKpis.total_pl?.value ? `${activeKpis.total_pl.value}` : `${currencySymbol}8.44M`}
-          subtitle="+22.1% vs last month"
+          value={activeKpis.total_pl?.value ? `${activeKpis.total_pl.value}` : '₹0'}
+          subtitle={activeKpis.total_pl?.subtitle || 'Unrealized + Realized'}
           icon={DollarSign}
           iconColor="text-emerald-400"
           iconBg="bg-emerald-950/60"
@@ -254,8 +254,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         <KPICard
           title="COMMISSION EARNED"
-          value={activeKpis.commission_earned?.value ? `${activeKpis.commission_earned.value}` : `${currencySymbol}862K`}
-          subtitle="+11.4% vs last month"
+          value={activeKpis.commission_earned?.value ? `${activeKpis.commission_earned.value}` : '₹0'}
+          subtitle={activeKpis.commission_earned?.subtitle || 'Actual rules'}
           icon={Coins}
           iconColor="text-purple-400"
           iconBg="bg-purple-950/60"
@@ -265,10 +265,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
       {/* Row 3: Pending Status Strip */}
       <PendingAlertsStrip
-        pendingKYC={activeKpis.pending_kyc?.value ?? 1}
-        pendingDeposits={3}
-        pendingWithdrawals={1}
-        openTickets={activeKpis.open_tickets?.value ?? 2}
+        pendingKYC={activeKpis.pending_kyc?.value ?? 0}
+        pendingDeposits={activeKpis.pending_deposits?.value ?? 0}
+        pendingWithdrawals={activeKpis.pending_withdrawals?.value ?? 0}
+        openTickets={activeKpis.open_tickets?.value ?? 0}
         onNavigateKYC={() => onNavigateTab('kyc')}
         onNavigateDeposits={() => {
           if (onNavigateFunds) {
@@ -290,7 +290,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       {/* Row 4: Trading Volume & Revenue + Asset Allocation Donut Chart */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2">
-          <TradingVolumeRevenueChart />
+          <TradingVolumeRevenueChart data={volumeCommissionData} />
         </div>
         <div className="lg:col-span-1">
           <AssetAllocationDonutChart />
