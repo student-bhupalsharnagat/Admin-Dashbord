@@ -4,7 +4,9 @@ import { FileText, Wallet, CreditCard, BarChart3, ArrowUpRight } from 'lucide-re
 interface PendingAlertsStripProps {
   pendingKYC?: number;
   pendingDeposits?: number;
+  pendingDepositsAmount?: string;
   pendingWithdrawals?: number;
+  pendingWithdrawalsAmount?: string;
   openTickets?: number;
   onNavigateKYC?: () => void;
   onNavigateDeposits?: () => void;
@@ -15,7 +17,9 @@ interface PendingAlertsStripProps {
 export const PendingAlertsStrip: React.FC<PendingAlertsStripProps> = ({
   pendingKYC = 0,
   pendingDeposits = 0,
+  pendingDepositsAmount,
   pendingWithdrawals = 0,
+  pendingWithdrawalsAmount,
   openTickets = 0,
   onNavigateKYC,
   onNavigateDeposits,
@@ -27,6 +31,7 @@ export const PendingAlertsStrip: React.FC<PendingAlertsStripProps> = ({
       id: 'kyc',
       label: 'Pending KYC',
       value: pendingKYC,
+      amount: undefined as string | undefined,
       icon: FileText,
       borderColor: 'border-[#422e11]',
       hoverBorder: 'hover:border-[#784d12]',
@@ -39,6 +44,7 @@ export const PendingAlertsStrip: React.FC<PendingAlertsStripProps> = ({
       id: 'deposits',
       label: 'Pending Deposits',
       value: pendingDeposits,
+      amount: pendingDepositsAmount,
       icon: Wallet,
       borderColor: 'border-[#152a4e]',
       hoverBorder: 'hover:border-[#254b8c]',
@@ -51,6 +57,7 @@ export const PendingAlertsStrip: React.FC<PendingAlertsStripProps> = ({
       id: 'withdrawals',
       label: 'Pending Withdrawals',
       value: pendingWithdrawals,
+      amount: pendingWithdrawalsAmount,
       icon: CreditCard,
       borderColor: 'border-[#3e1f0e]',
       hoverBorder: 'hover:border-[#6e3518]',
@@ -63,6 +70,7 @@ export const PendingAlertsStrip: React.FC<PendingAlertsStripProps> = ({
       id: 'tickets',
       label: 'Open Support Tickets',
       value: openTickets,
+      amount: undefined as string | undefined,
       icon: BarChart3,
       borderColor: 'border-[#3f131a]',
       hoverBorder: 'hover:border-[#6e1e2c]',
@@ -103,9 +111,16 @@ export const PendingAlertsStrip: React.FC<PendingAlertsStripProps> = ({
               </div>
             </div>
 
-            {/* Bottom row: Large colored number */}
-            <div className={`text-2xl font-bold font-mono tracking-tight ${item.textColor}`}>
-              {item.value}
+            {/* Bottom row: Large colored number + optional amount */}
+            <div className="flex items-baseline justify-between gap-1">
+              <div className={`text-2xl font-bold font-mono tracking-tight ${item.textColor}`}>
+                {item.value}
+              </div>
+              {item.amount && (
+                <div className="text-[11px] font-mono font-medium text-slate-400">
+                  {item.amount}
+                </div>
+              )}
             </div>
           </div>
         );

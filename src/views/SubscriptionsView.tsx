@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Check,
   X,
@@ -92,45 +92,6 @@ interface ActiveSubscription {
   status: 'ACTIVE' | 'PENDING_RENEWAL' | 'TRIAL';
 }
 
-const INITIAL_SUBSCRIPTIONS: ActiveSubscription[] = [
-  {
-    id: 'SUB-001',
-    tenantName: 'TradeMatrix Primary',
-    plan: 'PROFESSIONAL',
-    monthlyFee: '₹799/mo',
-    renewalDate: '2026-10-01',
-    brokersUsed: 14,
-    brokersLimit: 25,
-    clientsUsed: 420,
-    clientsLimit: 1000,
-    status: 'ACTIVE'
-  },
-  {
-    id: 'SUB-002',
-    tenantName: 'Alpha Prime Capital',
-    plan: 'ENTERPRISE',
-    monthlyFee: '₹2,499/mo',
-    renewalDate: '2026-11-15',
-    brokersUsed: 38,
-    brokersLimit: 'Unlimited',
-    clientsUsed: 2150,
-    clientsLimit: 'Unlimited',
-    status: 'ACTIVE'
-  },
-  {
-    id: 'SUB-003',
-    tenantName: 'Zenith Broking',
-    plan: 'BASIC',
-    monthlyFee: '₹299/mo',
-    renewalDate: '2026-09-28',
-    brokersUsed: 4,
-    brokersLimit: 5,
-    clientsUsed: 188,
-    clientsLimit: 200,
-    status: 'PENDING_RENEWAL'
-  }
-];
-
 interface SubscriptionsViewProps {
   onNotify?: (msg: string, type?: 'info' | 'success' | 'warning') => void;
 }
@@ -140,6 +101,46 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({ onNotify }
   const [currentPlan, setCurrentPlan] = useState<string>('PROFESSIONAL');
   const [selectedPlanForModal, setSelectedPlanForModal] = useState<PlanItem | null>(null);
   const [billingCycle, setBillingCycle] = useState<'monthly' | 'annual'>('monthly');
+  const [subscriptionsList, setSubscriptionsList] = useState<ActiveSubscription[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+
+  useEffect(() => {
+    let isMounted = true;
+    const fetchSubscriptions = async () => {
+      setIsLoading(true);
+      try {
+        const token = localStorage.getItem('auth_token') || sessionStorage.getItem('auth_token');
+        const res = await fetch('/api/admin/subscriptions', {
+          credentials: 'include',
+          headers: token ? { Authorization: `Bearer ${token}` } : {}
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data) && isMounted) {
+            const mapped: ActiveSubscription[] = data.map((s: any) => ({
+              id: s.id || s.subscription_id || `SUB-${Math.floor(100 + Math.random() * 900)}`,
+              tenantName: s.tenantName || s.tenant_name || 'Tenant',
+              plan: s.plan || s.plan_name || 'PROFESSIONAL',
+              monthlyFee: s.monthlyFee || (s.monthly_base_fee ? `₹${s.monthly_base_fee}/mo` : '₹799/mo'),
+              renewalDate: s.renewalDate || s.renewal_date || '2026-12-31',
+              brokersUsed: s.brokersUsed ?? s.current_users ?? 0,
+              brokersLimit: s.brokersLimit ?? s.user_limit ?? 25,
+              clientsUsed: s.clientsUsed ?? s.current_users ?? 0,
+              clientsLimit: s.clientsLimit ?? s.user_limit ?? 1000,
+              status: s.status || 'ACTIVE'
+            }));
+            setSubscriptionsList(mapped);
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to fetch subscriptions:', err);
+      } finally {
+        if (isMounted) setIsLoading(false);
+      }
+    };
+    fetchSubscriptions();
+    return () => { isMounted = false; };
+  }, []);
 
   const handleConfirmPlan = () => {
     if (!selectedPlanForModal) return;
@@ -286,7 +287,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({ onNotify }
               </tr>
             </thead>
             <tbody className="divide-y divide-[#142038] text-xs">
-              {INITIAL_SUBSCRIPTIONS.map(sub => (
+              {subscriptionsList.map(sub => (
                 <tr key={sub.id} className="hover:bg-[#0e1935] transition-colors">
                   <td className="py-3 px-4 font-bold text-white flex items-center gap-2">
                     <Building size={14} className="text-blue-400 shrink-0" />
@@ -330,6 +331,13 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({ onNotify }
                   </td>
                 </tr>
               ))}
+              {subscriptionsList.length === 0 && (
+                <tr>
+                  <td colSpan={8} className="py-12 text-center text-slate-400 text-xs">
+                    No active tenant subscriptions found in PostgreSQL database.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

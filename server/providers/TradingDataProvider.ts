@@ -105,15 +105,18 @@ export interface ITradingDataProvider {
   getAllTrades(tenantId?: string): Promise<Trade[]>;
   getPositions(tenantId?: string): Promise<any[]>;
   squareOffPosition(id: string, actor: string): Promise<any>;
+  emergencyMarginSquareOff?(actor?: string, reason?: string, tenantId?: string): Promise<any>;
   getCommissionPlans(tenantId?: string): Promise<any[]>;
   getCommissionRules(tenantId?: string, planId?: string): Promise<any[]>;
+  getCommissionTransactions?(tenantId?: string): Promise<any[]>;
+  createCommissionTransaction?(data: any): Promise<any>;
   getRiskProfiles(tenantId?: string): Promise<any[]>;
   getRiskEvents(tenantId?: string): Promise<any[]>;
   getNotifications(tenantId?: string): Promise<any[]>;
   markNotificationRead(id: string): Promise<any>;
   
   // Tools & Administration
-  getSubscriptions(): Promise<SubscriptionPlan[]>;
+  getSubscriptions(tenantId?: string): Promise<any[]>;
   getWhiteLabelConfigs(): Promise<WhiteLabelConfig[]>;
   getWhiteLabelConfig(tenantId: string): Promise<WhiteLabelConfig | null>;
   updateWhiteLabelConfig(tenantId: string, data: Partial<WhiteLabelConfig>, actor?: string): Promise<WhiteLabelConfig>;
@@ -1230,10 +1233,20 @@ export class MockTradingDataProvider implements ITradingDataProvider {
         badge: `${brokersCount} active`,
         subtitle: 'Active brokers'
       },
+      total_sub_brokers: {
+        value: 2,
+        badge: '2 mapped',
+        subtitle: 'Sub-Brokers'
+      },
       total_clients: {
         value: clientsCount,
         badge: `${activeClientsCount} active`,
         subtitle: `${verifiedClientsCount} KYC approved`
+      },
+      active_clients: {
+        value: activeClientsCount,
+        badge: `${activeClientsCount} active`,
+        subtitle: 'Active trading accounts'
       },
       commission_earned: {
         value: '₹0',
@@ -1242,13 +1255,77 @@ export class MockTradingDataProvider implements ITradingDataProvider {
       },
       todays_turnover: {
         value: '₹0',
-        badge: 'Turnover',
-        subtitle: 'Today'
+        badge: 'Today',
+        subtitle: 'Today\'s Turnover'
+      },
+      total_turnover: {
+        value: '₹0',
+        badge: 'Total Executed',
+        subtitle: 'All-Time Turnover'
+      },
+      trading_volume: {
+        value: '₹0',
+        badge: 'Today',
+        subtitle: 'Volume'
       },
       total_pl: {
         value: '₹0',
         badge: 'Net P&L',
         subtitle: 'Unrealized + Realized'
+      },
+      net_pl: {
+        value: '₹0',
+        badge: 'Net P&L',
+        subtitle: 'Unrealized + Realized'
+      },
+      realized_pl: {
+        value: '₹0',
+        badge: 'Realized',
+        subtitle: 'Realized P&L'
+      },
+      unrealized_pl: {
+        value: '₹0',
+        badge: 'Unrealized',
+        subtitle: 'Unrealized P&L'
+      },
+      pending_deposits: {
+        value: 0,
+        amount: 0,
+        formatted_amount: '₹0',
+        badge: '0 pending',
+        subtitle: 'Requires approval'
+      },
+      pending_withdrawals: {
+        value: 0,
+        amount: 0,
+        formatted_amount: '₹0',
+        badge: '0 pending',
+        subtitle: 'Requires processing'
+      },
+      open_positions: {
+        value: 0,
+        badge: '0 open',
+        subtitle: 'Active positions'
+      },
+      pending_orders: {
+        value: 0,
+        badge: '0 pending',
+        subtitle: 'Queued orders'
+      },
+      used_margin: {
+        value: '₹0',
+        badge: 'Utilized',
+        subtitle: 'Across clients'
+      },
+      available_margin: {
+        value: '₹0',
+        badge: 'Available',
+        subtitle: 'Free margin'
+      },
+      equity: {
+        value: '₹0',
+        badge: 'Total Equity',
+        subtitle: 'All client accounts'
       },
       pending_kyc: {
         value: pendingKycCount,
@@ -1743,6 +1820,17 @@ export class MockTradingDataProvider implements ITradingDataProvider {
   }
 
   async updateWhiteLabelConfig(tenantId: string, data: Partial<WhiteLabelConfig>, actor: string = 'Admin'): Promise<WhiteLabelConfig> {
+    const rawBrandName = data.brand_name !== undefined ? data.brand_name : (data as any).brandName;
+    if (rawBrandName !== undefined) {
+      const trimmed = typeof rawBrandName === 'string' ? rawBrandName.trim() : '';
+      if (!trimmed) {
+        throw new Error('Brand name cannot be empty');
+      }
+      if (trimmed.length > 100) {
+        throw new Error('Brand name cannot exceed 100 characters');
+      }
+    }
+
     // Validate colors if provided
     const hexOrRgbRegex = /^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{4}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$|^rgba?\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*(,\s*(0|1|0?\.\d+)\s*)?\)$/i;
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -4434,6 +4522,10 @@ export class MockTradingDataProvider implements ITradingDataProvider {
     return [
       { id: 'rule-1', plan_id: 'plan-1', asset_class: 'FX', instrument_type: 'CURRENCY', rate_type: 'PER_LOT', rate_value: '2.50' }
     ];
+  }
+
+  async getCommissionTransactions(_tenantId?: string): Promise<any[]> {
+    return [];
   }
 
   async getRiskProfiles(_tenantId?: string): Promise<any[]> {

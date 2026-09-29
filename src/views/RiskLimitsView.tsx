@@ -102,8 +102,8 @@ interface RiskLimitsViewProps {
 }
 
 export const RiskLimitsView: React.FC<RiskLimitsViewProps> = ({ onNotify }) => {
-  const [profiles, setProfiles] = useState<RiskProfileItem[]>(initialRiskProfiles);
-  const [events, setEvents] = useState<RiskEventItem[]>(initialRiskEvents);
+  const [profiles, setProfiles] = useState<RiskProfileItem[]>([]);
+  const [events, setEvents] = useState<RiskEventItem[]>([]);
 
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingProfile, setEditingProfile] = useState<RiskProfileItem | null>(null);
@@ -118,6 +118,56 @@ export const RiskLimitsView: React.FC<RiskLimitsViewProps> = ({ onNotify }) => {
   const notify = (msg: string, type: 'info' | 'success' | 'warning' = 'info') => {
     if (onNotify) onNotify(msg, type);
   };
+
+  React.useEffect(() => {
+    let isMounted = true;
+    const fetchRiskData = async () => {
+      try {
+        const [profilesRes, eventsRes] = await Promise.all([
+          fetch('/api/admin/risk/profiles', { credentials: 'include' }),
+          fetch('/api/admin/risk/events', { credentials: 'include' })
+        ]);
+
+        if (profilesRes.ok) {
+          const profilesData = await profilesRes.json();
+          if (isMounted && Array.isArray(profilesData)) {
+            const mappedProfiles: RiskProfileItem[] = profilesData.map((p: any) => ({
+              profileId: p.id,
+              name: p.name,
+              maxOrderQty: p.max_order_qty ? String(p.max_order_qty) : (p.max_leverage ? `${p.max_leverage}x` : '100,000'),
+              maxExposure: p.max_order_value ? `₹${parseFloat(p.max_order_value).toLocaleString('en-IN')}` : (p.max_exposure || '₹500,000'),
+              dailyLossLimit: p.daily_loss_limit ? `₹${parseFloat(p.daily_loss_limit).toLocaleString('en-IN')}` : '₹10,000',
+              marginReq: p.margin_call_threshold ? `${p.margin_call_threshold}%` : '2%',
+              status: p.status === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE',
+              description: p.description || `${p.name} risk governance tier`
+            }));
+            setProfiles(mappedProfiles);
+          }
+        }
+
+        if (eventsRes.ok) {
+          const eventsData = await eventsRes.json();
+          if (isMounted && Array.isArray(eventsData)) {
+            const mappedEvents: RiskEventItem[] = eventsData.map((ev: any, idx: number) => ({
+              eventId: ev.id || `RE00${idx + 1}`,
+              client: ev.client_name || ev.client_code || 'Client Trader',
+              symbol: ev.symbol || (ev.details && ev.details.symbol) || 'NIFTY50',
+              event: (ev.details && ev.details.message) || ev.event_type || 'Risk Threshold Alert',
+              severity: (ev.severity === 'HIGH' || ev.severity === 'CRITICAL') ? 'HIGH' : (ev.severity === 'LOW' ? 'LOW' : 'MEDIUM'),
+              date: ev.timestamp ? new Date(ev.timestamp).toISOString().replace('T', ' ').slice(0, 16) : '2026-03-29 10:00',
+              status: (ev.status === 'RESOLVED' || (ev.details && ev.details.resolved)) ? 'RESOLVED' : 'ACTIVE'
+            }));
+            setEvents(mappedEvents);
+          }
+        }
+      } catch (err) {
+        console.warn('Risk API fetch error:', err);
+      }
+    };
+
+    fetchRiskData();
+    return () => { isMounted = false; };
+  }, []);
 
   const handleCreateProfile = (e: React.FormEvent) => {
     e.preventDefault();
@@ -210,6 +260,11 @@ export const RiskLimitsView: React.FC<RiskLimitsViewProps> = ({ onNotify }) => {
     );
   };
 
+  const activeAlertsCount = events.filter(e => e.status === 'ACTIVE').length;
+  const blockedOrdersCount = events.filter(e => (e.event || '').toLowerCase().includes('block') || (e.event || '').toLowerCase().includes('insufficient') || (e.event || '').toLowerCase().includes('reject')).length;
+  const highExposureCount = events.filter(e => e.severity === 'HIGH').length;
+  const marginAlertsCount = events.filter(e => (e.event || '').toLowerCase().includes('margin') || (e.event || '').toLowerCase().includes('loss')).length;
+
   return (
     <div className="space-y-6">
       {/* Breadcrumb matching Screenshot 8 */}
@@ -238,7 +293,7 @@ export const RiskLimitsView: React.FC<RiskLimitsViewProps> = ({ onNotify }) => {
         <div className="bg-[#091122] border border-[#131e36] rounded-xl p-5 flex items-center justify-between">
           <div>
             <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">RISK ALERTS</p>
-            <p className="text-2xl font-bold text-white mt-1">2</p>
+            <p className="text-2xl font-bold text-white mt-1">{activeAlertsCount}</p>
           </div>
           <div className="w-10 h-10 rounded-lg bg-[#310e18] border border-[#7f1d1d] flex items-center justify-center text-[#f87171]">
             <AlertTriangle size={18} />
@@ -249,7 +304,7 @@ export const RiskLimitsView: React.FC<RiskLimitsViewProps> = ({ onNotify }) => {
         <div className="bg-[#091122] border border-[#131e36] rounded-xl p-5 flex items-center justify-between">
           <div>
             <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">BLOCKED ORDERS</p>
-            <p className="text-2xl font-bold text-white mt-1">1</p>
+            <p className="text-2xl font-bold text-white mt-1">{blockedOrdersCount}</p>
           </div>
           <div className="w-10 h-10 rounded-lg bg-[#291e0a] border border-[#78350f] flex items-center justify-center text-[#fbbf24]">
             <Shield size={18} />
@@ -260,7 +315,7 @@ export const RiskLimitsView: React.FC<RiskLimitsViewProps> = ({ onNotify }) => {
         <div className="bg-[#091122] border border-[#131e36] rounded-xl p-5 flex items-center justify-between">
           <div>
             <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">HIGH EXPOSURE</p>
-            <p className="text-2xl font-bold text-white mt-1">3</p>
+            <p className="text-2xl font-bold text-white mt-1">{highExposureCount}</p>
           </div>
           <div className="w-10 h-10 rounded-lg bg-[#2a170a] border border-[#9a3412] flex items-center justify-center text-[#f97316]">
             <TrendingDown size={18} />
@@ -271,7 +326,7 @@ export const RiskLimitsView: React.FC<RiskLimitsViewProps> = ({ onNotify }) => {
         <div className="bg-[#091122] border border-[#131e36] rounded-xl p-5 flex items-center justify-between">
           <div>
             <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">MARGIN ALERTS</p>
-            <p className="text-2xl font-bold text-white mt-1">2</p>
+            <p className="text-2xl font-bold text-white mt-1">{marginAlertsCount}</p>
           </div>
           <div className="w-10 h-10 rounded-lg bg-[#291e0a] border border-[#78350f] flex items-center justify-center text-[#fbbf24]">
             <AlertCircle size={18} />
@@ -319,6 +374,13 @@ export const RiskLimitsView: React.FC<RiskLimitsViewProps> = ({ onNotify }) => {
                     </td>
                   </tr>
                 ))}
+                {profiles.length === 0 && (
+                  <tr>
+                    <td colSpan={8} className="py-8 text-center text-slate-500">
+                      No risk profiles configured. Click &quot;Create Risk Profile&quot; to configure one.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -359,6 +421,13 @@ export const RiskLimitsView: React.FC<RiskLimitsViewProps> = ({ onNotify }) => {
                     <td className="py-3.5 px-4">{renderStatusBadge(ev.status)}</td>
                   </tr>
                 ))}
+                {events.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="py-8 text-center text-slate-500">
+                      No risk threshold events or margin breaches recorded.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>

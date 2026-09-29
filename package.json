@@ -11,6 +11,10 @@
     "db:migrate": "tsx server/db/migrate.ts",
     "db:seed": "tsx server/db/seed.ts",
     "clean": "rm -rf dist server.js",
+    "test:live": "tsx scripts/test-live-integration.ts",
+    "test:phase5": "tsx scripts/test-phase-5j-b.ts",
+    "test:e2e": "tsx scripts/test-e2e-live-trading.ts",
+    "test:live-fixes": "tsx scripts/test-admin-live-data-fixes.ts",
     "lint": "tsc --noEmit"
   },
   "dependencies": {

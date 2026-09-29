@@ -42,6 +42,7 @@ export interface HierarchyViewsProps {
   onToggleStatus?: (type: string, id: string, current: string) => Promise<void>;
   onNotify?: (message: string, type?: 'info' | 'success' | 'warning') => void;
   onOpenTradingPlatform?: (clientData?: any) => void;
+  onRefresh?: () => Promise<void> | void;
 }
 
 // Initial screenshot dataset for Masters
@@ -470,36 +471,37 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
   onAddClient,
   onToggleStatus,
   onNotify,
-  onOpenTradingPlatform
+  onOpenTradingPlatform,
+  onRefresh
 }) => {
-  // Local state for entities ensuring screenshot data is shown and editable
-  const [mastersList, setMastersList] = useState(() => (initialMastersData || []).map(normalizeMaster));
-  const [brokersList, setBrokersList] = useState(() => (initialBrokersData || []).map(normalizeBroker));
-  const [subBrokersList, setSubBrokersList] = useState(() => (initialSubBrokersData || []).map(normalizeSubBroker));
-  const [clientsList, setClientsList] = useState(() => (initialClientsData || []).map(normalizeClient));
+  // Local state for entities ensuring live PostgreSQL data and empty states are synchronized
+  const [mastersList, setMastersList] = useState(() => (propMasters || []).map(normalizeMaster));
+  const [brokersList, setBrokersList] = useState(() => (propBrokers || []).map(normalizeBroker));
+  const [subBrokersList, setSubBrokersList] = useState(() => (propSubBrokers || []).map(normalizeSubBroker));
+  const [clientsList, setClientsList] = useState(() => (propClients || []).map(normalizeClient));
   const [activeClientDetail, setActiveClientDetail] = useState<any | null>(null);
 
   // Synchronize state with real API data passed via props
   React.useEffect(() => {
-    if (propMasters && propMasters.length > 0) {
+    if (propMasters !== undefined) {
       setMastersList(propMasters.map(normalizeMaster));
     }
   }, [propMasters]);
 
   React.useEffect(() => {
-    if (propBrokers && propBrokers.length > 0) {
+    if (propBrokers !== undefined) {
       setBrokersList(propBrokers.map(normalizeBroker));
     }
   }, [propBrokers]);
 
   React.useEffect(() => {
-    if (propSubBrokers && propSubBrokers.length > 0) {
+    if (propSubBrokers !== undefined) {
       setSubBrokersList(propSubBrokers.map(normalizeSubBroker));
     }
   }, [propSubBrokers]);
 
   React.useEffect(() => {
-    if (propClients && propClients.length > 0) {
+    if (propClients !== undefined) {
       setClientsList(propClients.map(normalizeClient));
     }
   }, [propClients]);
@@ -2200,7 +2202,7 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
             </div>
 
             <div>
-              <label className="block text-slate-400 text-[11px] mb-1 font-medium">Adjustment Amount ($)</label>
+              <label className="block text-slate-400 text-[11px] mb-1 font-medium">Adjustment Amount (₹)</label>
               <input
                 type="number"
                 placeholder="1000"
@@ -2213,15 +2215,44 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
-                onClick={() => {
-                  const currentNum = parseFloat(selectedEntity.balance.replace(/[^0-9.-]+/g, '')) || 0;
-                  const addNum = parseFloat(formData.amount) || 0;
-                  const newBal = `$${(currentNum + addNum).toLocaleString()}`;
-                  setClientsList(prev =>
-                    prev.map(c => (c.id === selectedEntity.id ? { ...c, balance: newBal } : c))
-                  );
-                  notify(`Deposited $${addNum.toLocaleString()} to ${selectedEntity.name}`, 'success');
-                  setModalType(null);
+                onClick={async () => {
+                  const addNum = parseFloat(formData.amount) || 1000;
+                  if (addNum <= 0) {
+                    notify('Please enter a valid positive deposit amount', 'warning');
+                    return;
+                  }
+                  try {
+                    const token = localStorage.getItem('auth_token') || sessionStorage.getItem('auth_token');
+                    const res = await fetch('/api/admin/compliance/deposits', {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        ...(token ? { Authorization: `Bearer ${token}` } : {})
+                      },
+                      credentials: 'include',
+                      body: JSON.stringify({
+                        client_id: selectedEntity.id,
+                        client_code: selectedEntity.client_code || selectedEntity.code || selectedEntity.id,
+                        client_name: selectedEntity.name,
+                        amount: addNum,
+                        currency: 'INR',
+                        payment_method: 'Admin Manual Deposit',
+                        status: 'PENDING',
+                        tenant_id: selectedEntity.tenant_id
+                      })
+                    });
+
+                    if (!res.ok) {
+                      const errData = await res.json().catch(() => ({}));
+                      throw new Error(errData.error || `HTTP error ${res.status}`);
+                    }
+
+                    notify(`Created PENDING deposit request of ₹${addNum.toLocaleString('en-IN')} for ${selectedEntity.name}`, 'success');
+                    setModalType(null);
+                    if (onRefresh) await onRefresh();
+                  } catch (err: any) {
+                    notify(`Failed to create deposit request: ${err.message}`, 'warning');
+                  }
                 }}
                 className="py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold cursor-pointer"
               >
@@ -2229,15 +2260,44 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  const currentNum = parseFloat(selectedEntity.balance.replace(/[^0-9.-]+/g, '')) || 0;
-                  const subNum = parseFloat(formData.amount) || 0;
-                  const newBal = `$${Math.max(0, currentNum - subNum).toLocaleString()}`;
-                  setClientsList(prev =>
-                    prev.map(c => (c.id === selectedEntity.id ? { ...c, balance: newBal } : c))
-                  );
-                  notify(`Withdrew $${subNum.toLocaleString()} from ${selectedEntity.name}`, 'info');
-                  setModalType(null);
+                onClick={async () => {
+                  const subNum = parseFloat(formData.amount) || 1000;
+                  if (subNum <= 0) {
+                    notify('Please enter a valid positive withdrawal amount', 'warning');
+                    return;
+                  }
+                  try {
+                    const token = localStorage.getItem('auth_token') || sessionStorage.getItem('auth_token');
+                    const res = await fetch('/api/admin/compliance/withdrawals', {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        ...(token ? { Authorization: `Bearer ${token}` } : {})
+                      },
+                      credentials: 'include',
+                      body: JSON.stringify({
+                        client_id: selectedEntity.id,
+                        client_code: selectedEntity.client_code || selectedEntity.code || selectedEntity.id,
+                        client_name: selectedEntity.name,
+                        amount: subNum,
+                        currency: 'INR',
+                        bank_name: 'Primary Bank',
+                        status: 'PENDING',
+                        tenant_id: selectedEntity.tenant_id
+                      })
+                    });
+
+                    if (!res.ok) {
+                      const errData = await res.json().catch(() => ({}));
+                      throw new Error(errData.error || `HTTP error ${res.status}`);
+                    }
+
+                    notify(`Created PENDING withdrawal request of ₹${subNum.toLocaleString('en-IN')} for ${selectedEntity.name}`, 'info');
+                    setModalType(null);
+                    if (onRefresh) await onRefresh();
+                  } catch (err: any) {
+                    notify(`Failed to create withdrawal request: ${err.message}`, 'warning');
+                  }
                 }}
                 className="py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-semibold cursor-pointer"
               >
@@ -2287,16 +2347,42 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
             <div className="pt-2 flex justify-between items-center">
               <span className="text-slate-400">Current Status: {renderKycBadge(selectedEntity.kyc)}</span>
               <button
-                onClick={() => {
-                  setClientsList(prev =>
-                    prev.map(c =>
-                      c.id === selectedEntity.id
-                        ? { ...c, kyc: c.kyc === 'APPROVED' ? 'PENDING' : 'APPROVED' }
-                        : c
-                    )
-                  );
-                  notify(`Updated KYC status for ${selectedEntity.name}`, 'success');
-                  setModalType(null);
+                onClick={async () => {
+                  const targetStatus = selectedEntity.kyc === 'APPROVED' ? 'PENDING' : 'APPROVED';
+                  try {
+                    const token = localStorage.getItem('auth_token') || sessionStorage.getItem('auth_token');
+                    const res = await fetch(`/api/admin/kyc/${selectedEntity.id}`, {
+                      method: 'PATCH',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        ...(token ? { Authorization: `Bearer ${token}` } : {})
+                      },
+                      credentials: 'include',
+                      body: JSON.stringify({
+                        status: targetStatus,
+                        notes: `Toggled to ${targetStatus} via Admin Hierarchy`
+                      })
+                    });
+
+                    if (!res.ok) {
+                      const errData = await res.json().catch(() => ({}));
+                      throw new Error(errData.error || `HTTP error ${res.status}`);
+                    }
+
+                    setClientsList(prev =>
+                      prev.map(c =>
+                        c.id === selectedEntity.id
+                          ? { ...c, kyc: targetStatus }
+                          : c
+                      )
+                    );
+                    setSelectedEntity((prev: any) => (prev ? { ...prev, kyc: targetStatus } : null));
+                    notify(`Updated KYC status for ${selectedEntity.name} to ${targetStatus}`, 'success');
+                    setModalType(null);
+                    if (onRefresh) await onRefresh();
+                  } catch (err: any) {
+                    notify(`Failed to update KYC status: ${err.message}`, 'warning');
+                  }
                 }}
                 className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-lg cursor-pointer"
               >

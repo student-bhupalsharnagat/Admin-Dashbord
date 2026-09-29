@@ -57,12 +57,7 @@ import {
   UserRole
 } from './types';
 
-const DEFAULT_INITIAL_TENANTS: Tenant[] = [
-  { id: 'TNT-001', name: 'Alpha Prime Capital', code: 'APC', domain: 'trade.alphaprime.com', status: 'ACTIVE', tier: 'ENTERPRISE', clients: 840, turnover: '₹48.2M', created: '2023-01-15' },
-  { id: 'TNT-002', name: 'Apex Securities Ltd', code: 'APEX', domain: 'trade.apexsecurities.in', status: 'ACTIVE', tier: 'PRO', clients: 412, turnover: '₹22.1M', created: '2023-02-01' },
-  { id: 'TNT-003', name: 'Zenith Markets', code: 'ZMK', domain: 'trade.zenithmarkets.in', status: 'ACTIVE', tier: 'GROWTH', clients: 195, turnover: '₹9.4M', created: '2023-03-10' },
-  { id: 'TNT-004', name: 'Quantum Alpha Capital', code: 'QAC', domain: 'trade.quantumfx.io', status: 'ACTIVE', tier: 'STARTER', clients: 65, turnover: '₹2.8M', created: '2023-04-18' }
-];
+const DEFAULT_INITIAL_TENANTS: Tenant[] = [];
 
 export default function App() {
   const { isDark } = useTheme();
@@ -94,49 +89,29 @@ export default function App() {
     setActiveTab('funds');
   };
 
-  // Dashboard Data State
-  const DEFAULT_INITIAL_DASHBOARD: DashboardData = {
+  // Dashboard Data State - Clean empty initial state without fake numbers
+  const EMPTY_INITIAL_DASHBOARD: DashboardData = {
     kpis: {
-      total_masters: { value: 5, badge: '+2 new', subtitle: 'Across all regions' },
-      total_brokers: { value: 43, badge: '+5 new', subtitle: '38 active' },
-      total_clients: { value: 3073, badge: '↑ 12.3%', subtitle: '1,360 KYC approved' },
-      commission_earned: { value: '₹862K', badge: '↑ 11.4%', subtitle: 'Today' },
-      todays_turnover: { value: '₹48.2M', badge: '↑ 9.8%', subtitle: 'Today' },
-      total_pl: { value: '₹8.44M', badge: '↑ 22.1%', subtitle: 'Unrealized + Realized' },
-      pending_kyc: { value: 2, subtitle: 'Requires review' },
-      open_tickets: { value: 4, subtitle: '2 high priority' }
+      total_masters: { value: 0, subtitle: 'Across all regions' },
+      total_brokers: { value: 0, subtitle: '0 active' },
+      total_clients: { value: 0, subtitle: '0 registered' },
+      commission_earned: { value: '₹0', subtitle: 'Today' },
+      todays_turnover: { value: '₹0', subtitle: 'Today' },
+      total_turnover: { value: '₹0', subtitle: 'Total volume' },
+      total_pl: { value: '₹0', subtitle: 'Net P&L' },
+      pending_kyc: { value: 0, subtitle: 'Requires review' },
+      open_tickets: { value: 0, subtitle: '0 open tickets' }
     },
-    volumeCommission: [
-      { date: '2026-01-01', displayDate: 'Jan', volume: 25, commission: 135 },
-      { date: '2026-02-01', displayDate: 'Feb', volume: 25, commission: 142 },
-      { date: '2026-03-01', displayDate: 'Mar', volume: 28, commission: 155 },
-      { date: '2026-04-01', displayDate: 'Apr', volume: 26, commission: 145 },
-      { date: '2026-05-01', displayDate: 'May', volume: 45, commission: 200 },
-      { date: '2026-06-01', displayDate: 'Jun', volume: 55, commission: 215 }
-    ],
-    clientGrowth: [
-      { month: 'Apr', clients: 2400 },
-      { month: 'May', clients: 2600 },
-      { month: 'Jun', clients: 2750 },
-      { month: 'Jul', clients: 2900 },
-      { month: 'Aug', clients: 2980 },
-      { month: 'Sep', clients: 3073 }
-    ],
-    dailyPL: [
-      { day: 'Sep 13', displayDay: '13 Sep', pl: 12.4, isProfit: true },
-      { day: 'Sep 14', displayDay: '14 Sep', pl: -4.2, isProfit: false },
-      { day: 'Sep 15', displayDay: '15 Sep', pl: 8.6, isProfit: true },
-      { day: 'Sep 16', displayDay: '16 Sep', pl: 18.2, isProfit: true },
-      { day: 'Sep 17', displayDay: '17 Sep', pl: -2.1, isProfit: false },
-      { day: 'Sep 18', displayDay: '18 Sep', pl: 15.3, isProfit: true },
-      { day: 'Sep 19', displayDay: '19 Sep', pl: 21.8, isProfit: true }
-    ],
+    volumeCommission: [],
+    clientGrowth: [],
+    dailyPL: [],
     recentTrades: [],
     pendingKYC: [],
     tenants: []
   };
 
-  const [dashboardData, setDashboardData] = useState<DashboardData>(DEFAULT_INITIAL_DASHBOARD);
+  const [dashboardData, setDashboardData] = useState<DashboardData>(EMPTY_INITIAL_DASHBOARD);
+  const [dashboardError, setDashboardError] = useState<string | null>(null);
   const [tenants, setTenants] = useState<Tenant[]>(DEFAULT_INITIAL_TENANTS);
   const [masters, setMasters] = useState<Master[]>([]);
   const [brokers, setBrokers] = useState<Broker[]>([]);
@@ -309,23 +284,29 @@ export default function App() {
       const res = await fetch(url, { credentials: 'include' });
       if (res.ok) {
         const data: any = await res.json();
-        setDashboardData(prev => ({
-          kpis: data.kpis || prev.kpis,
-          volumeCommission: data.volumeCommission || data.charts?.volumeCommission || prev.volumeCommission,
-          clientGrowth: data.clientGrowth || data.charts?.clientGrowth || prev.clientGrowth,
+        setDashboardError(null);
+        setDashboardData({
+          kpis: data.kpis || null,
+          volumeCommission: data.volumeCommission || data.charts?.volumeCommission || [],
+          clientGrowth: data.clientGrowth || data.charts?.clientGrowth || [],
           dailyPL: Array.isArray(data.dailyPL)
             ? data.dailyPL
-            : (data.charts?.dailyPL?.data || prev.dailyPL),
-          recentTrades: data.recentTrades || prev.recentTrades,
-          pendingKYC: data.pendingKYC || prev.pendingKYC,
-          tenants: data.tenants || prev.tenants
-        }));
-        if (data.tenants && data.tenants.length) setTenants(data.tenants);
-        if (data.recentTrades && data.recentTrades.length) setRecentTrades(data.recentTrades);
-        if (data.pendingKYC && data.pendingKYC.length) setPendingKYC(data.pendingKYC);
+            : (data.charts?.dailyPL?.data || []),
+          recentTrades: data.recentTrades || [],
+          pendingKYC: data.pendingKYC || [],
+          tenants: data.tenants || []
+        });
+        if (data.tenants && Array.isArray(data.tenants)) setTenants(data.tenants);
+        if (data.recentTrades && Array.isArray(data.recentTrades)) setRecentTrades(data.recentTrades);
+        if (data.pendingKYC && Array.isArray(data.pendingKYC)) setPendingKYC(data.pendingKYC);
+      } else {
+        setDashboardError('Failed to fetch dashboard live telemetry from PostgreSQL');
+        setDashboardData(prev => ({ ...prev, kpis: null }));
       }
-    } catch (err) {
-      console.warn('Backend API fetch error, using resilient state:', err);
+    } catch (err: any) {
+      console.warn('Dashboard API fetch error:', err);
+      setDashboardError(err.message || 'Dashboard live telemetry unavailable');
+      setDashboardData(prev => ({ ...prev, kpis: null }));
     }
   }, [selectedTenantScope]);
 
@@ -356,7 +337,7 @@ export default function App() {
       if (tRes.ok) setTrades(await tRes.json());
       if (tnRes.ok) {
         const tnList = await tnRes.json();
-        if (Array.isArray(tnList) && tnList.length > 0) setTenants(tnList);
+        if (Array.isArray(tnList)) setTenants(tnList);
       }
     } catch (err: any) {
       console.warn('Hierarchy API sync warning:', err);
@@ -804,8 +785,8 @@ export default function App() {
         onCloseMobile={() => setMobileSidebarOpen(false)}
         currentUser={currentUser}
         badgeCounts={{
-          kycPending: dashboardData?.kpis.pending_kyc.value || 2,
-          openTickets: dashboardData?.kpis.open_tickets.value || 4
+          kycPending: Number(dashboardData?.kpis?.pending_kyc?.value) || 0,
+          openTickets: Number(dashboardData?.kpis?.open_tickets?.value) || 0
         }}
       />
 
@@ -875,7 +856,9 @@ export default function App() {
               {/* Dashboard View */}
               {activeTab === 'dashboard' && (
                 <DashboardView
-                  kpis={dashboardData?.kpis || null}
+                  kpis={dashboardData?.kpis}
+                  hasError={!!dashboardError}
+                  errorMessage={dashboardError || undefined}
                   volumeCommissionData={dashboardData?.volumeCommission || []}
                   clientGrowthData={dashboardData?.clientGrowth || []}
                   dailyPLData={dashboardData?.dailyPL || []}
@@ -973,6 +956,10 @@ export default function App() {
                   onToggleStatus={handleToggleEntityStatus}
                   onNotify={showToast}
                   onOpenTradingPlatform={handleOpenTradingPlatform}
+                  onRefresh={async () => {
+                    await loadHierarchyData();
+                    await loadDashboardData();
+                  }}
                 />
               )}
 

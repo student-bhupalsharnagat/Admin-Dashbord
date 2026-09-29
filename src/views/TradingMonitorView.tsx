@@ -18,13 +18,15 @@ interface TradingMonitorViewProps {
   trades: Trade[];
   tenants: Tenant[];
   onNotify?: (msg: string, type?: 'info' | 'success' | 'warning') => void;
+  onRefresh?: () => Promise<void> | void;
 }
 
 export const TradingMonitorView: React.FC<TradingMonitorViewProps> = ({
   section,
   trades,
   tenants,
-  onNotify
+  onNotify,
+  onRefresh
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [sideFilter, setSideFilter] = useState<'ALL' | 'BUY' | 'SELL'>('ALL');
@@ -67,13 +69,38 @@ export const TradingMonitorView: React.FC<TradingMonitorViewProps> = ({
 
         {section === 'risk' && (
           <button
-            onClick={() => {
-              setEmergencyActive(true);
-              if (onNotify) {
-                onNotify('Emergency Square-Off safeguards engaged for high-risk accounts', 'warning');
+            onClick={async () => {
+              try {
+                const token = localStorage.getItem('auth_token') || sessionStorage.getItem('auth_token');
+                const res = await fetch('/api/admin/risk/emergency-square-off', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    ...(token ? { Authorization: `Bearer ${token}` } : {})
+                  },
+                  credentials: 'include',
+                  body: JSON.stringify({
+                    reason: 'Emergency Margin Square-off triggered from Trading Monitor'
+                  })
+                });
+
+                if (!res.ok) {
+                  const errData = await res.json().catch(() => ({}));
+                  throw new Error(errData.error || `HTTP error ${res.status}`);
+                }
+
+                setEmergencyActive(true);
+                if (onNotify) {
+                  onNotify('Emergency Margin Square-Off executed: Open positions squared off via Trading Platform engine', 'warning');
+                }
+                if (onRefresh) await onRefresh();
+              } catch (err: any) {
+                if (onNotify) {
+                  onNotify(`Failed to execute Emergency Margin Square-Off: ${err.message}`, 'warning');
+                }
               }
             }}
-            className="flex items-center gap-1.5 px-3.5 py-2 bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 font-semibold text-xs border border-rose-500/40 rounded-lg shadow-sm transition-colors"
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 font-semibold text-xs border border-rose-500/40 rounded-lg shadow-sm transition-colors cursor-pointer"
           >
             <AlertTriangle size={14} className="text-rose-400" />
             {emergencyActive ? 'Safeguards Active' : 'Emergency Margin Square-off'}

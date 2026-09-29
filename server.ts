@@ -1115,7 +1115,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/admin/kyc/:id', authenticate, requirePermission('kyc.review'), async (req, res) => {
+  app.patch(['/api/admin/kyc/:id', '/api/admin/clients/:id/kyc', '/api/clients/:id/kyc'], authenticate, requirePermission('kyc.review'), async (req, res) => {
     try {
       const { status, notes } = req.body;
       const user = req.user!;
@@ -1182,7 +1182,7 @@ async function startServer() {
     }
   });
 
-  app.post(['/api/admin/compliance/deposits', '/api/compliance/deposits'], authenticate, requirePermission('funds.deposit'), async (req, res) => {
+  app.post(['/api/admin/compliance/deposits', '/api/compliance/deposits', '/api/admin/funds/deposits', '/api/funds/deposits'], authenticate, requirePermission('funds.deposit'), async (req, res) => {
     try {
       const tenantScope = resolveStrictTenantScope(req);
       const data = { ...req.body, tenant_id: tenantScope || req.body.tenant_id };
@@ -1194,7 +1194,7 @@ async function startServer() {
   });
 
   // Funds Withdrawals
-  app.get(['/api/admin/compliance/withdrawals', '/api/compliance/withdrawals'], authenticate, requirePermission('funds.view'), async (req, res) => {
+  app.get(['/api/admin/compliance/withdrawals', '/api/compliance/withdrawals', '/api/admin/funds/withdrawals', '/api/funds/withdrawals'], authenticate, requirePermission('funds.view'), async (req, res) => {
     try {
       const tenantScope = resolveStrictTenantScope(req);
       const status = req.query.status as string;
@@ -1241,7 +1241,7 @@ async function startServer() {
     }
   });
 
-  app.post(['/api/admin/compliance/withdrawals', '/api/compliance/withdrawals'], authenticate, requirePermission('funds.withdraw'), async (req, res) => {
+  app.post(['/api/admin/compliance/withdrawals', '/api/compliance/withdrawals', '/api/admin/funds/withdrawals', '/api/funds/withdrawals'], authenticate, requirePermission('funds.withdraw'), async (req, res) => {
     try {
       const tenantScope = resolveStrictTenantScope(req);
       const data = { ...req.body, tenant_id: tenantScope || req.body.tenant_id };
@@ -1307,6 +1307,26 @@ async function startServer() {
     }
   });
 
+  app.post(['/api/admin/risk/emergency-square-off', '/api/admin/emergency/margin-square-off', '/api/admin/emergency/square-off', '/api/risk/emergency-square-off'], authenticate, requirePermission('risk.manage'), async (req, res) => {
+    try {
+      const tenantScope = resolveStrictTenantScope(req);
+      const actor = req.user?.name || req.user?.email || 'Risk Manager';
+      const reason = req.body?.reason || 'Emergency Margin Square-off';
+      const result = await activeTradingDataProvider.emergencyMarginSquareOff?.(actor, reason, tenantScope || undefined);
+      await writeSecurityAuditLog({
+        tenantId: tenantScope || req.user?.tenant_id,
+        userName: actor,
+        action: 'EMERGENCY_MARGIN_SQUARE_OFF',
+        module: 'RISK',
+        details: `Emergency margin square-off triggered by ${actor}. Result: ${JSON.stringify(result)}`,
+        ipAddress: req.ip
+      });
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get('/api/admin/commercial/commission-plans', authenticate, requirePermission('commission.view'), async (req, res) => {
     try {
       const tenantScope = resolveStrictTenantScope(req);
@@ -1323,6 +1343,46 @@ async function startServer() {
       const planId = req.query.planId as string;
       const rules = await activeTradingDataProvider.getCommissionRules(tenantScope, planId);
       res.json(rules);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/admin/commercial/commission-transactions', authenticate, requirePermission('commission.view'), async (req, res) => {
+    try {
+      const tenantScope = resolveStrictTenantScope(req);
+      const transactions = activeTradingDataProvider.getCommissionTransactions
+        ? await activeTradingDataProvider.getCommissionTransactions(tenantScope)
+        : [];
+      res.json(transactions);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/admin/commission/transactions', authenticate, requirePermission('commission.view'), async (req, res) => {
+    try {
+      const tenantScope = resolveStrictTenantScope(req);
+      const transactions = activeTradingDataProvider.getCommissionTransactions
+        ? await activeTradingDataProvider.getCommissionTransactions(tenantScope)
+        : [];
+      res.json(transactions);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/admin/commercial/commission-transactions', authenticate, requirePermission('commission.manage'), async (req, res) => {
+    try {
+      const tenantScope = resolveStrictTenantScope(req);
+      if (!activeTradingDataProvider.createCommissionTransaction) {
+        return res.status(400).json({ error: 'Commission transaction creation not supported' });
+      }
+      const transaction = await activeTradingDataProvider.createCommissionTransaction({
+        ...req.body,
+        tenant_id: tenantScope || req.body.tenant_id
+      });
+      res.status(201).json(transaction);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -1397,7 +1457,8 @@ async function startServer() {
   // ----------------------------------------------------
   app.get('/api/admin/subscriptions', authenticate, requirePermission('subscriptions.view'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER']), async (req, res) => {
     try {
-      const subscriptions = await activeTradingDataProvider.getSubscriptions();
+      const tenantScope = resolveStrictTenantScope(req);
+      const subscriptions = await activeTradingDataProvider.getSubscriptions(tenantScope || undefined);
       res.json(subscriptions);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1704,7 +1765,7 @@ async function startServer() {
       const updated = await activeTradingDataProvider.updateWhiteLabelConfig(req.params.tenantId, req.body, user?.name || 'Admin');
       res.json(updated);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(400).json({ error: err.message });
     }
   });
 

@@ -105,8 +105,8 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       this.executeQuery(`SELECT COALESCE(SUM(balance), 0) as total_balance, COALESCE(SUM(equity), 0) as total_equity, COALESCE(SUM(margin_used), 0) as total_margin_used FROM clients ${tenantFilter}`, params),
       this.executeQuery(`SELECT count(*) as count FROM positions WHERE status = 'OPEN' ${tenantId ? 'AND tenant_id = $1' : ''}`, params),
       this.executeQuery(`SELECT count(*) as count FROM orders WHERE status = 'PENDING' ${tenantId ? 'AND tenant_id = $1' : ''}`, params),
-      this.executeQuery(`SELECT count(*) as count FROM fund_deposits WHERE status IN ('PENDING', 'PROCESSING') ${tenantId ? 'AND tenant_id = $1' : ''}`, params),
-      this.executeQuery(`SELECT count(*) as count FROM fund_withdrawals WHERE status IN ('PENDING', 'PROCESSING') ${tenantId ? 'AND tenant_id = $1' : ''}`, params),
+      this.executeQuery(`SELECT count(*) as count, COALESCE(SUM(amount), 0) as total_amount FROM fund_deposits WHERE status IN ('PENDING', 'PROCESSING') ${tenantId ? 'AND tenant_id = $1' : ''}`, params),
+      this.executeQuery(`SELECT count(*) as count, COALESCE(SUM(amount), 0) as total_amount FROM fund_withdrawals WHERE status IN ('PENDING', 'PROCESSING') ${tenantId ? 'AND tenant_id = $1' : ''}`, params),
       this.executeQuery(`SELECT count(*) as count FROM kyc_records WHERE kyc_status = 'PENDING' ${tenantId ? 'AND tenant_id = $1' : ''}`, params),
       this.executeQuery(`SELECT count(*) as count FROM support_tickets WHERE status = 'OPEN' ${tenantId ? 'AND tenant_id = $1' : ''}`, params)
     ]);
@@ -130,8 +130,10 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
 
     const openPositionsNum = parseInt(openPositionsRes.rows[0]?.count || '0', 10);
     const pendingOrdersNum = parseInt(pendingOrdersRes.rows[0]?.count || '0', 10);
-    const pendingDepositsNum = parseInt(pendingDepositsRes.rows[0]?.count || '0', 10);
-    const pendingWithdrawalsNum = parseInt(pendingWithdrawalsRes.rows[0]?.count || '0', 10);
+    const pendingDepositsCount = parseInt(pendingDepositsRes.rows[0]?.count || '0', 10);
+    const pendingDepositsAmount = parseFloat(pendingDepositsRes.rows[0]?.total_amount || '0');
+    const pendingWithdrawalsCount = parseInt(pendingWithdrawalsRes.rows[0]?.count || '0', 10);
+    const pendingWithdrawalsAmount = parseFloat(pendingWithdrawalsRes.rows[0]?.total_amount || '0');
     const pendingKycNum = parseInt(kycRes.rows[0]?.count || '0', 10);
     const openTicketsNum = parseInt(ticketsRes.rows[0]?.count || '0', 10);
 
@@ -156,23 +158,54 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         badge: `${totalBrokersNum} active`,
         subtitle: `${totalSubBrokersNum} sub-brokers`
       },
+      total_sub_brokers: {
+        value: totalSubBrokersNum,
+        badge: `${totalSubBrokersNum} mapped`,
+        subtitle: 'Sub-Brokers'
+      },
       total_clients: {
         value: totalClientsNum,
         badge: `${activeClientsNum} active`,
         subtitle: `${totalClientsNum - pendingKycNum} verified`
       },
+      active_clients: {
+        value: activeClientsNum,
+        badge: `${activeClientsNum} active`,
+        subtitle: 'Active trading accounts'
+      },
+      todays_turnover: {
+        value: formatCurrency(todayVolumeNum),
+        raw: todayVolumeNum,
+        badge: 'Today',
+        subtitle: 'Today\'s Turnover'
+      },
+      total_turnover: {
+        value: formatCurrency(totalVolumeNum),
+        raw: totalVolumeNum,
+        badge: 'Total Executed',
+        subtitle: 'All-Time Turnover'
+      },
+      trading_volume: {
+        value: formatCurrency(todayVolumeNum),
+        raw: todayVolumeNum,
+        badge: 'Today',
+        subtitle: 'Volume'
+      },
       commission_earned: {
         value: formatCurrency(totalCommissionNum),
+        raw: totalCommissionNum,
         badge: 'From ledger',
         subtitle: 'Actual rules'
       },
-      todays_turnover: {
-        value: formatCurrency(todayVolumeNum > 0 ? todayVolumeNum : totalVolumeNum),
-        badge: todayVolumeNum > 0 ? 'Today' : 'Total Executed',
-        subtitle: 'Turnover'
-      },
       total_pl: {
         value: formatCurrency(totalPlNum),
+        raw: totalPlNum,
+        badge: totalPlNum >= 0 ? '+Net Profit' : '-Net Loss',
+        subtitle: 'Unrealized + Realized'
+      },
+      net_pl: {
+        value: formatCurrency(totalPlNum),
+        raw: totalPlNum,
         badge: totalPlNum >= 0 ? '+Net Profit' : '-Net Loss',
         subtitle: 'Unrealized + Realized'
       },
@@ -184,25 +217,19 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         value: openTicketsNum,
         subtitle: `${openTicketsNum} open tickets`
       },
-      total_sub_brokers: {
-        value: totalSubBrokersNum,
-        badge: `${totalSubBrokersNum} mapped`,
-        subtitle: 'Sub-Brokers'
-      },
-      active_clients: {
-        value: activeClientsNum,
-        badge: `${activeClientsNum} active`,
-        subtitle: 'Active trading accounts'
-      },
       pending_deposits: {
-        value: pendingDepositsNum,
-        badge: `${pendingDepositsNum} pending`,
-        subtitle: 'Requires approval'
+        value: pendingDepositsCount,
+        amount: pendingDepositsAmount,
+        formatted_amount: formatCurrency(pendingDepositsAmount),
+        badge: `${pendingDepositsCount} pending`,
+        subtitle: pendingDepositsAmount > 0 ? `Total: ${formatCurrency(pendingDepositsAmount)}` : 'Requires approval'
       },
       pending_withdrawals: {
-        value: pendingWithdrawalsNum,
-        badge: `${pendingWithdrawalsNum} pending`,
-        subtitle: 'Requires processing'
+        value: pendingWithdrawalsCount,
+        amount: pendingWithdrawalsAmount,
+        formatted_amount: formatCurrency(pendingWithdrawalsAmount),
+        badge: `${pendingWithdrawalsCount} pending`,
+        subtitle: pendingWithdrawalsAmount > 0 ? `Total: ${formatCurrency(pendingWithdrawalsAmount)}` : 'Requires processing'
       },
       open_positions: {
         value: openPositionsNum,
@@ -216,26 +243,31 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       },
       used_margin: {
         value: formatCurrency(totalMarginUsedNum),
+        raw: totalMarginUsedNum,
         badge: 'Utilized',
         subtitle: 'Across clients'
       },
       available_margin: {
         value: formatCurrency(availableMarginNum),
+        raw: availableMarginNum,
         badge: 'Available',
         subtitle: 'Free margin'
       },
       equity: {
         value: formatCurrency(totalEquityNum),
+        raw: totalEquityNum,
         badge: 'Total Equity',
         subtitle: 'All client accounts'
       },
       realized_pl: {
         value: formatCurrency(realizedPlNum),
+        raw: realizedPlNum,
         badge: realizedPlNum >= 0 ? '+Profit' : '-Loss',
         subtitle: 'Realized P&L'
       },
       unrealized_pl: {
         value: formatCurrency(unrealizedPlNum),
+        raw: unrealizedPlNum,
         badge: unrealizedPlNum >= 0 ? '+Profit' : '-Loss',
         subtitle: 'Unrealized P&L'
       }
@@ -1467,22 +1499,49 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
   }
 
   async updateKYCStatus(id: string, status: KYCRecord['kyc_status'], notes?: string): Promise<KYCRecord | null> {
-    const res = await this.executeQuery(`
+    const kycMappedStatus = status === 'APPROVED' ? 'APPROVED' : (status === 'REJECTED' ? 'REJECTED' : 'PENDING');
+    const clientMappedStatus = status === 'APPROVED' ? 'VERIFIED' : (status === 'REJECTED' ? 'REJECTED' : 'PENDING');
+
+    // 1. Try updating existing KYC record by id or client_id
+    let res = await this.executeQuery(`
       UPDATE kyc_records
       SET kyc_status = $1, notes = COALESCE($2, notes), reviewed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-      WHERE id = $3
+      WHERE id = $3 OR client_id = $3
       RETURNING *
-    `, [status, notes || null, id]);
+    `, [kycMappedStatus, notes || null, id]);
+
+    // 2. Also update clients table
+    await this.executeQuery(`
+      UPDATE clients
+      SET kyc_status = $1, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $2 OR id = (SELECT client_id FROM kyc_records WHERE id = $2 LIMIT 1)
+    `, [clientMappedStatus, id]);
+
+    // 3. If no kyc_records row existed yet, create one from client info
+    if (res.rows.length === 0) {
+      const clientRes = await this.executeQuery('SELECT * FROM clients WHERE id = $1', [id]);
+      if (clientRes.rows.length > 0) {
+        const client = clientRes.rows[0];
+        const newKycId = `KYC-${Date.now().toString().slice(-4)}`;
+        const insertRes = await this.executeQuery(`
+          INSERT INTO kyc_records (
+            id, tenant_id, client_id, client_code, client_name, email, pan_number, aadhaar_number, kyc_status,
+            document_type, reviewed_by, reviewed_at, notes
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP, $12)
+          RETURNING *
+        `, [
+          newKycId, client.tenant_id, client.id, client.client_code || 'CLT001', client.name,
+          client.email || 'client@example.com', 'ABCDE1234F', '123456789012', kycMappedStatus,
+          'PAN_AADHAAR', 'Compliance Officer', notes || 'Updated via Admin Hierarchy'
+        ]);
+        if (insertRes.rows.length > 0) {
+          res = insertRes;
+        }
+      }
+    }
 
     if (res.rows.length === 0) return null;
     const r = res.rows[0];
-
-    // If approved, update client kyc_status to VERIFIED
-    if (status === 'APPROVED') {
-      await this.executeQuery('UPDATE clients SET kyc_status = $1 WHERE id = $2', ['VERIFIED', r.client_id]);
-    } else if (status === 'REJECTED') {
-      await this.executeQuery('UPDATE clients SET kyc_status = $1 WHERE id = $2', ['REJECTED', r.client_id]);
-    }
 
     return {
       id: r.id,
@@ -1515,6 +1574,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
 
     const res = await this.executeQuery(sql, params);
     return res.rows.map(r => ({
+      id: r.id,
       txnId: r.id,
       client: r.client_name,
       amount: `₹${parseFloat(r.amount).toLocaleString('en-IN')}`,
@@ -1797,29 +1857,6 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
   // TRADING: ORDERS & TRADES
   // ----------------------------------------------------
   async getOrders(tenantId?: string): Promise<Order[]> {
-    // Attempt to retrieve live open/pending orders from Trading Platform S2S
-    try {
-      const liveRes = await tradingPlatformClient.getLiveOrders(tenantId);
-      const ordersList = Array.isArray(liveRes.data) ? liveRes.data : (Array.isArray(liveRes.data?.orders) ? liveRes.data.orders : (Array.isArray(liveRes.data?.data) ? liveRes.data.data : null));
-      if (liveRes.success && ordersList && ordersList.length > 0) {
-        return ordersList.map((r: any) => ({
-          id: r.id || r.order_id,
-          order_id: r.order_id || r.id,
-          client_name: r.client_name || 'Client',
-          tenant_name: r.tenant_name || 'Alpha Prime Capital',
-          symbol: r.symbol,
-          type: (r.order_type === 'MARKET' || r.type === 'MARKET') ? 'MARKET' : (r.type === 'STOP_LOSS' ? 'STOP_LOSS' : 'LIMIT'),
-          side: r.side,
-          quantity: r.quantity,
-          price: parseFloat(r.price),
-          status: r.status,
-          created_at: r.created_at ? new Date(r.created_at).toISOString().replace('T', ' ').slice(0, 19) : new Date().toISOString().replace('T', ' ').slice(0, 19)
-        }));
-      }
-    } catch {
-      // Graceful fallback to local PostgreSQL source of truth
-    }
-
     const tenantFilter = tenantId ? 'WHERE tenant_id = $1' : '';
     const params = tenantId ? [tenantId] : [];
 
@@ -1828,7 +1865,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       params
     );
 
-    return res.rows.map(r => ({
+    const dbOrders: Order[] = res.rows.map(r => ({
       id: r.id,
       order_id: r.id,
       client_name: r.client_name,
@@ -1836,40 +1873,46 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       symbol: r.symbol,
       type: (r.order_type === 'MARKET' ? 'MARKET' : (r.order_type === 'STOP_LOSS' ? 'STOP_LOSS' : 'LIMIT')) as any,
       side: r.side,
-      quantity: r.quantity,
+      quantity: parseFloat(r.quantity),
       price: parseFloat(r.price),
       status: r.status,
       created_at: r.created_at ? new Date(r.created_at).toISOString().replace('T', ' ').slice(0, 19) : '2026-03-29 10:00:00'
     }));
+
+    // Attempt to retrieve and merge any additional live open/pending orders from Trading Platform S2S
+    try {
+      const liveRes = await tradingPlatformClient.getLiveOrders(tenantId);
+      const ordersList = Array.isArray(liveRes.data) ? liveRes.data : (Array.isArray(liveRes.data?.orders) ? liveRes.data.orders : (Array.isArray(liveRes.data?.data) ? liveRes.data.data : null));
+      if (liveRes.success && ordersList && ordersList.length > 0) {
+        const seenIds = new Set(dbOrders.map(o => o.order_id || o.id));
+        for (const r of ordersList) {
+          const ordId = r.id || r.order_id;
+          if (!seenIds.has(ordId)) {
+            seenIds.add(ordId);
+            dbOrders.push({
+              id: ordId,
+              order_id: ordId,
+              client_name: r.client_name || 'Client',
+              tenant_name: r.tenant_name || 'Alpha Prime Capital',
+              symbol: r.symbol,
+              type: (r.order_type === 'MARKET' || r.type === 'MARKET') ? 'MARKET' : (r.type === 'STOP_LOSS' ? 'STOP_LOSS' : 'LIMIT'),
+              side: r.side,
+              quantity: r.quantity,
+              price: parseFloat(r.price),
+              status: r.status,
+              created_at: r.created_at ? new Date(r.created_at).toISOString().replace('T', ' ').slice(0, 19) : new Date().toISOString().replace('T', ' ').slice(0, 19)
+            });
+          }
+        }
+      }
+    } catch {
+      // Degraded / graceful fallback to local PostgreSQL source of truth
+    }
+
+    return dbOrders;
   }
 
   async getAllTrades(tenantId?: string): Promise<Trade[]> {
-    // Attempt live execution stream from Trading Platform S2S
-    try {
-      const liveRes = await tradingPlatformClient.getLiveTrades(tenantId);
-      const tradesList = Array.isArray(liveRes.data) ? liveRes.data : (Array.isArray(liveRes.data?.trades) ? liveRes.data.trades : (Array.isArray(liveRes.data?.data) ? liveRes.data.data : null));
-      if (liveRes.success && tradesList && tradesList.length > 0) {
-        return tradesList.map((r: any) => ({
-          id: r.id || r.trade_id,
-          trade_id: r.trade_id || r.id,
-          client_id: r.client_id || 'CLT-001',
-          client_name: r.client_name || 'Client',
-          tenant_id: r.tenant_id || tenantId,
-          tenant_name: r.tenant_name || 'Alpha Prime Capital',
-          symbol: r.symbol,
-          side: r.side,
-          quantity: r.quantity,
-          price: parseFloat(r.price),
-          total_value: parseFloat(r.total_value || (parseFloat(r.price) * r.quantity).toString()),
-          pl: r.pl || 0,
-          status: (r.status === 'CANCELLED' ? 'CANCELLED' : (r.status === 'SETTLED' ? 'SETTLED' : 'EXECUTED')) as any,
-          timestamp: r.created_at ? new Date(r.created_at).toISOString().replace('T', ' ').slice(0, 19) : new Date().toISOString().replace('T', ' ').slice(0, 19)
-        }));
-      }
-    } catch {
-      // Graceful fallback to PostgreSQL database
-    }
-
     const tenantFilter = tenantId ? 'WHERE tenant_id = $1' : '';
     const params = tenantId ? [tenantId] : [];
 
@@ -1878,7 +1921,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       params
     );
 
-    return res.rows.map(r => ({
+    const dbTrades: Trade[] = res.rows.map(r => ({
       id: r.id,
       trade_id: r.trade_id || r.id,
       client_id: r.client_id,
@@ -1887,48 +1930,51 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       tenant_name: 'Alpha Prime Capital',
       symbol: r.symbol,
       side: r.side,
-      quantity: r.quantity,
+      quantity: parseFloat(r.quantity),
       price: parseFloat(r.price),
-      total_value: parseFloat(r.total_value || (parseFloat(r.price) * r.quantity).toString()),
+      total_value: parseFloat(r.total_value || (parseFloat(r.price) * parseFloat(r.quantity)).toString()),
       pl: 0,
       status: (r.status === 'CANCELLED' ? 'CANCELLED' : (r.status === 'SETTLED' ? 'SETTLED' : 'EXECUTED')) as any,
       timestamp: r.created_at ? new Date(r.created_at).toISOString().replace('T', ' ').slice(0, 19) : '2026-03-29 10:00:00'
     }));
+
+    // Attempt live execution stream from Trading Platform S2S and merge
+    try {
+      const liveRes = await tradingPlatformClient.getLiveTrades(tenantId);
+      const tradesList = Array.isArray(liveRes.data) ? liveRes.data : (Array.isArray(liveRes.data?.trades) ? liveRes.data.trades : (Array.isArray(liveRes.data?.data) ? liveRes.data.data : null));
+      if (liveRes.success && tradesList && tradesList.length > 0) {
+        const seenIds = new Set(dbTrades.map(t => t.trade_id || t.id));
+        for (const r of tradesList) {
+          const trdId = r.id || r.trade_id;
+          if (!seenIds.has(trdId)) {
+            seenIds.add(trdId);
+            dbTrades.push({
+              id: trdId,
+              trade_id: trdId,
+              client_id: r.client_id || 'CLT-001',
+              client_name: r.client_name || 'Client',
+              tenant_id: r.tenant_id || tenantId,
+              tenant_name: r.tenant_name || 'Alpha Prime Capital',
+              symbol: r.symbol,
+              side: r.side,
+              quantity: r.quantity,
+              price: parseFloat(r.price),
+              total_value: parseFloat(r.total_value || (parseFloat(r.price) * r.quantity).toString()),
+              pl: r.pl || 0,
+              status: (r.status === 'CANCELLED' ? 'CANCELLED' : (r.status === 'SETTLED' ? 'SETTLED' : 'EXECUTED')) as any,
+              timestamp: r.created_at ? new Date(r.created_at).toISOString().replace('T', ' ').slice(0, 19) : new Date().toISOString().replace('T', ' ').slice(0, 19)
+            });
+          }
+        }
+      }
+    } catch {
+      // Graceful fallback to PostgreSQL database
+    }
+
+    return dbTrades;
   }
 
   async getPositions(tenantId?: string): Promise<any[]> {
-    // Attempt live position exposure query from Trading Platform
-    try {
-      const liveRes = await tradingPlatformClient.getLivePositions(tenantId);
-      const positionsList = Array.isArray(liveRes.data) ? liveRes.data : (Array.isArray(liveRes.data?.positions) ? liveRes.data.positions : (Array.isArray(liveRes.data?.data) ? liveRes.data.data : null));
-      if (liveRes.success && positionsList && positionsList.length > 0) {
-        return positionsList.map((r: any) => {
-          const pnlNum = parseFloat(r.pnl || r.unrealized_pnl || '0');
-          const buyPriceNum = parseFloat(r.buy_price || r.avg_price || '0');
-          const curPriceNum = parseFloat(r.current_price || '0');
-          const qtyNum = parseInt(r.quantity || r.qty || '0', 10);
-          const marginVal = r.margin !== undefined && r.margin !== null ? parseFloat(String(r.margin)) : (r.margin_used !== undefined ? parseFloat(String(r.margin_used)) : (r.used_margin !== undefined ? parseFloat(String(r.used_margin)) : 0));
-
-          return {
-            id: r.id,
-            client: r.client_name || r.client || 'Client',
-            symbol: r.symbol,
-            qty: qtyNum.toLocaleString('en-IN'),
-            avgPrice: buyPriceNum.toLocaleString('en-IN'),
-            currentPrice: curPriceNum.toLocaleString('en-IN'),
-            unrealizedPL: `${pnlNum >= 0 ? '+' : ''}₹${pnlNum.toLocaleString('en-IN')}`,
-            realizedPL: '+₹0',
-            margin: `₹${marginVal.toLocaleString('en-IN')}`,
-            unrealizedPLPositive: pnlNum >= 0,
-            realizedPLPositive: true,
-            status: r.status || 'OPEN'
-          };
-        });
-      }
-    } catch {
-      // Degraded / graceful fallback to local DB records
-    }
-
     let sql = 'SELECT * FROM positions WHERE 1=1';
     const params: any[] = [];
     if (tenantId) {
@@ -1938,16 +1984,16 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     sql += ' ORDER BY created_at DESC';
 
     const res = await this.executeQuery(sql, params);
-    return res.rows.map(r => {
+    const dbPositions: any[] = res.rows.map(r => {
       const pnlNum = parseFloat(r.pnl || '0');
       const buyPriceNum = parseFloat(r.buy_price || '0');
       const curPriceNum = parseFloat(r.current_price || '0');
-      const qtyNum = parseInt(r.quantity || '0', 10);
+      const qtyNum = parseFloat(r.quantity || '0');
       const marginVal = r.margin !== undefined && r.margin !== null ? parseFloat(String(r.margin)) : (r.margin_used !== undefined ? parseFloat(String(r.margin_used)) : 0);
 
       return {
         id: r.id,
-        client: r.client_name,
+        client: r.client_name || 'Client',
         symbol: r.symbol,
         qty: qtyNum.toLocaleString('en-IN'),
         avgPrice: buyPriceNum.toLocaleString('en-IN'),
@@ -1957,9 +2003,47 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         margin: `₹${marginVal.toLocaleString('en-IN')}`,
         unrealizedPLPositive: pnlNum >= 0,
         realizedPLPositive: true,
-        status: r.status
+        status: r.status || 'OPEN'
       };
     });
+
+    // Attempt live position exposure query from Trading Platform and merge
+    try {
+      const liveRes = await tradingPlatformClient.getLivePositions(tenantId);
+      const positionsList = Array.isArray(liveRes.data) ? liveRes.data : (Array.isArray(liveRes.data?.positions) ? liveRes.data.positions : (Array.isArray(liveRes.data?.data) ? liveRes.data.data : null));
+      if (liveRes.success && positionsList && positionsList.length > 0) {
+        const seenIds = new Set(dbPositions.map(p => p.id));
+        for (const r of positionsList) {
+          if (!seenIds.has(r.id)) {
+            seenIds.add(r.id);
+            const pnlNum = parseFloat(r.pnl || r.unrealized_pnl || '0');
+            const buyPriceNum = parseFloat(r.buy_price || r.avg_price || '0');
+            const curPriceNum = parseFloat(r.current_price || '0');
+            const qtyNum = parseFloat(r.quantity || r.qty || '0');
+            const marginVal = r.margin !== undefined && r.margin !== null ? parseFloat(String(r.margin)) : (r.margin_used !== undefined ? parseFloat(String(r.margin_used)) : (r.used_margin !== undefined ? parseFloat(String(r.used_margin)) : 0));
+
+            dbPositions.push({
+              id: r.id,
+              client: r.client_name || r.client || 'Client',
+              symbol: r.symbol,
+              qty: qtyNum.toLocaleString('en-IN'),
+              avgPrice: buyPriceNum.toLocaleString('en-IN'),
+              currentPrice: curPriceNum.toLocaleString('en-IN'),
+              unrealizedPL: `${pnlNum >= 0 ? '+' : ''}₹${pnlNum.toLocaleString('en-IN')}`,
+              realizedPL: '+₹0',
+              margin: `₹${marginVal.toLocaleString('en-IN')}`,
+              unrealizedPLPositive: pnlNum >= 0,
+              realizedPLPositive: true,
+              status: r.status || 'OPEN'
+            });
+          }
+        }
+      }
+    } catch {
+      // Degraded / graceful fallback to local DB records
+    }
+
+    return dbPositions;
   }
 
   async squareOffPosition(id: string, actor: string = 'Risk Manager'): Promise<any> {
@@ -1997,6 +2081,52 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     };
   }
 
+  async emergencyMarginSquareOff(actor: string = 'Risk Manager', reason: string = 'Emergency Margin Square-off', tenantId?: string): Promise<{ squaredOffCount: number; message: string; remoteAcknowledged?: boolean }> {
+    // 1. Fetch all open positions (optionally scoped by tenantId)
+    let sql = `SELECT * FROM positions WHERE status != 'CLOSED' AND quantity > 0`;
+    const params: any[] = [];
+    if (tenantId) {
+      params.push(tenantId);
+      sql += ` AND tenant_id = $${params.length}`;
+    }
+    const openPositions = await this.executeQuery(sql, params);
+
+    let remoteAck = true;
+    for (const pos of openPositions.rows) {
+      const s2sRes = await tradingPlatformClient.sendEmergencySquareOff({
+        positionId: pos.id,
+        actor,
+        reason,
+        tenantId: pos.tenant_id
+      });
+      if (!s2sRes.success) remoteAck = false;
+    }
+
+    let updateSql = `UPDATE positions SET quantity = 0, pnl = 0, status = 'CLOSED', updated_at = CURRENT_TIMESTAMP WHERE status != 'CLOSED' AND quantity > 0`;
+    const updateParams: any[] = [];
+    if (tenantId) {
+      updateParams.push(tenantId);
+      updateSql += ` AND tenant_id = $${updateParams.length}`;
+    }
+    const updatedRes = await this.executeQuery(updateSql, updateParams);
+    const count = updatedRes.rowCount || openPositions.rows.length;
+
+    await this.executeQuery(`
+      INSERT INTO audit_logs (id, tenant_id, user_name, action, module, details, ip_address)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `, [
+      `LOG-${Date.now()}`, tenantId || 'TNT-001', actor, 'EMERGENCY_MARGIN_SQUARE_OFF', 'RISK',
+      `Emergency Margin Square-off triggered by ${actor}. Squared off ${count} positions. Reason: ${reason}`,
+      '127.0.0.1'
+    ]);
+
+    return {
+      squaredOffCount: count,
+      message: `Emergency Margin Square-off executed. ${count} open positions squared off.`,
+      remoteAcknowledged: remoteAck
+    };
+  }
+
   async getCommissionPlans(tenantId?: string): Promise<any[]> {
     let sql = 'SELECT * FROM commission_plans WHERE 1=1';
     const params: any[] = [];
@@ -2023,6 +2153,48 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     sql += ' ORDER BY created_at ASC';
     const res = await this.executeQuery(sql, params);
     return res.rows;
+  }
+
+  async getCommissionTransactions(tenantId?: string): Promise<any[]> {
+    let sql = 'SELECT * FROM commission_transactions WHERE 1=1';
+    const params: any[] = [];
+    if (tenantId) {
+      params.push(tenantId);
+      sql += ` AND tenant_id = $${params.length}`;
+    }
+    sql += ' ORDER BY disbursed_at DESC, created_at DESC';
+    const res = await this.executeQuery(sql, params);
+    return res.rows.map(r => ({
+      id: r.id,
+      beneficiary: r.beneficiary,
+      role: r.role,
+      amount: `₹${parseFloat(r.amount).toLocaleString('en-IN')}`,
+      rawAmount: parseFloat(r.amount),
+      period: r.period,
+      status: r.status,
+      date: r.disbursed_at ? new Date(r.disbursed_at).toISOString().split('T')[0] : '2026-03-29'
+    }));
+  }
+
+  async createCommissionTransaction(data: any): Promise<any> {
+    const id = data.id || `COM-${Date.now().toString().slice(-4)}`;
+    const res = await this.executeQuery(`
+      INSERT INTO commission_transactions (
+        id, tenant_id, beneficiary, role, amount, currency, period, status, disbursed_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      RETURNING *
+    `, [
+      id,
+      data.tenant_id || data.tenantId || 'TNT-001',
+      data.beneficiary || 'Beneficiary Partner',
+      data.role || 'Broker',
+      parseFloat(String(data.amount || 0)),
+      data.currency || 'INR',
+      data.period || new Date().toLocaleString('en-US', { month: 'short', year: 'numeric' }),
+      data.status || 'PAID',
+      data.disbursed_at || data.date || new Date().toISOString()
+    ]);
+    return res.rows[0];
   }
 
   async getRiskProfiles(tenantId?: string): Promise<any[]> {
@@ -2526,35 +2698,61 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     return (await this.getSupportTickets()).find(t => t.id === ticketId) || null;
   }
 
-  async getSubscriptions(): Promise<SubscriptionPlan[]> {
-    return [
-      {
-        id: 'sub-001',
-        tenant_id: 'TNT-001',
-        tenant_name: 'Alpha Prime Capital',
-        plan_name: 'Enterprise Tier',
-        pricing_model: 'HYBRID',
-        monthly_base_fee: 150000,
-        volume_rate_bps: 0.5,
-        user_limit: 5000,
-        current_users: 820,
-        renewal_date: '2024-11-14',
-        status: 'ACTIVE'
-      },
-      {
-        id: 'sub-002',
-        tenant_id: 'TNT-002',
-        tenant_name: 'Apex Securities Ltd',
-        plan_name: 'Professional Tier',
-        pricing_model: 'VOLUME_TIERED',
-        monthly_base_fee: 75000,
-        volume_rate_bps: 0.8,
-        user_limit: 2000,
-        current_users: 480,
-        renewal_date: '2025-01-10',
-        status: 'ACTIVE'
-      }
-    ];
+  async getSubscriptions(tenantId?: string): Promise<any[]> {
+    let sql = 'SELECT * FROM subscriptions WHERE 1=1';
+    const params: any[] = [];
+    if (tenantId) {
+      params.push(tenantId);
+      sql += ` AND tenant_id = $${params.length}`;
+    }
+    sql += ' ORDER BY created_at DESC';
+    const res = await this.executeQuery(sql, params);
+    return res.rows.map(r => ({
+      id: r.id,
+      tenant_id: r.tenant_id,
+      tenantId: r.tenant_id,
+      tenantName: r.tenant_name,
+      tenant_name: r.tenant_name,
+      plan: r.plan,
+      plan_name: r.plan,
+      monthlyFee: r.monthly_fee,
+      renewalDate: r.renewal_date,
+      brokersUsed: r.brokers_used,
+      brokersLimit: r.brokers_limit,
+      clientsUsed: r.clients_used,
+      clientsLimit: r.clients_limit,
+      status: r.status,
+      monthly_base_fee: 799,
+      current_users: r.clients_used,
+      user_limit: 1000,
+      pricing_model: 'HYBRID',
+      volume_rate_bps: 0.5,
+      renewal_date: r.renewal_date
+    }));
+  }
+
+  async createSubscription(data: any): Promise<any> {
+    const id = data.id || `SUB-${Date.now().toString().slice(-4)}`;
+    const res = await this.executeQuery(`
+      INSERT INTO subscriptions (
+        id, tenant_id, tenant_name, plan, monthly_fee, renewal_date,
+        brokers_used, brokers_limit, clients_used, clients_limit, status
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      RETURNING *
+    `, [
+      id,
+      data.tenant_id || data.tenantId || 'TNT-001',
+      data.tenant_name || data.tenantName || 'Tenant',
+      data.plan || data.plan_name || 'PROFESSIONAL',
+      data.monthly_fee || data.monthlyFee || '₹799/mo',
+      data.renewal_date || data.renewalDate || '2026-12-31',
+      data.brokers_used ?? data.brokersUsed ?? 5,
+      data.brokers_limit ?? data.brokersLimit ?? '25',
+      data.clients_used ?? data.clientsUsed ?? 100,
+      data.clients_limit ?? data.clientsLimit ?? '1000',
+      data.status || 'ACTIVE'
+    ]);
+    return res.rows[0];
   }
 
   async getWhiteLabelConfigs(): Promise<WhiteLabelConfig[]> {
@@ -2625,6 +2823,17 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
   }
 
   async updateWhiteLabelConfig(tenantId: string, data: Partial<WhiteLabelConfig>, actor?: string): Promise<WhiteLabelConfig> {
+    const rawBrandName = data.brand_name !== undefined ? data.brand_name : (data as any).brandName;
+    if (rawBrandName !== undefined) {
+      const trimmed = typeof rawBrandName === 'string' ? rawBrandName.trim() : '';
+      if (!trimmed) {
+        throw new Error('Brand name cannot be empty');
+      }
+      if (trimmed.length > 100) {
+        throw new Error('Brand name cannot exceed 100 characters');
+      }
+    }
+
     const existing = await this.getWhiteLabelConfig(tenantId);
     const existingVersion = existing?.version || 1;
     const updatedDraft = { ...(existing || {}), ...data, version: existingVersion };
