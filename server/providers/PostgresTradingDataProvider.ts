@@ -7,6 +7,10 @@ import {
 import {
   DashboardKPIs,
   VolumeCommissionChartPoint,
+  ClientRegistrationPoint,
+  AssetAllocationSlice,
+  RecentRegistration,
+  DailyPLTrend,
   Trade,
   KYCRecord,
   Tenant,
@@ -63,12 +67,39 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     return query<T>(text, params, this.pool);
   }
 
+  private resolveRangeDays(timeRange?: string): number {
+    const key = (timeRange || '30d').toLowerCase();
+    if (key === 'today') return 0;
+    if (key === '7d') return 6;
+    if (key === '30d') return 29;
+    if (key === 'ytd') {
+      const now = new Date();
+      const start = Date.UTC(now.getUTCFullYear(), 0, 1);
+      return Math.max(0, Math.floor((Date.now() - start) / 86400000));
+    }
+    if (key === 'all') return 364;
+    const numeric = parseInt(key, 10);
+    if (!Number.isNaN(numeric) && numeric > 0) return Math.min(numeric, 366) - 1;
+    return 29;
+  }
+
+  private rangeLabel(timeRange?: string): string {
+    const key = (timeRange || '30d').toLowerCase();
+    if (key === 'today') return 'Today';
+    if (key === '7d') return 'Last 7 days';
+    if (key === '30d') return 'Last 30 days';
+    if (key === 'ytd') return 'Year to date';
+    if (key === 'all') return 'Last 12 months';
+    return 'Selected range';
+  }
+
   // ----------------------------------------------------
   // DASHBOARD & ANALYTICS
   // ----------------------------------------------------
-  async getDashboardKPIs(tenantId?: string): Promise<DashboardKPIs> {
+  async getDashboardKPIs(tenantId?: string, timeRange: string = '30d'): Promise<DashboardKPIs> {
     const tenantFilter = tenantId ? 'WHERE tenant_id = $1' : '';
     const params = tenantId ? [tenantId] : [];
+    const rangeDays = this.resolveRangeDays(timeRange);
 
     // Query live authoritative data from PostgreSQL database & remote platform
     const [
@@ -89,7 +120,8 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       pendingDepositsRes,
       pendingWithdrawalsRes,
       kycRes,
-      ticketsRes
+      ticketsRes,
+      periodVolumeRes
     ] = await Promise.all([
       this.executeQuery(`SELECT count(*) as count FROM masters ${tenantFilter}`, params),
       this.executeQuery(`SELECT count(*) as count FROM brokers ${tenantFilter}`, params),
@@ -108,7 +140,14 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       this.executeQuery(`SELECT count(*) as count, COALESCE(SUM(amount), 0) as total_amount FROM fund_deposits WHERE status IN ('PENDING', 'PROCESSING') ${tenantId ? 'AND tenant_id = $1' : ''}`, params),
       this.executeQuery(`SELECT count(*) as count, COALESCE(SUM(amount), 0) as total_amount FROM fund_withdrawals WHERE status IN ('PENDING', 'PROCESSING') ${tenantId ? 'AND tenant_id = $1' : ''}`, params),
       this.executeQuery(`SELECT count(*) as count FROM kyc_records WHERE kyc_status = 'PENDING' ${tenantId ? 'AND tenant_id = $1' : ''}`, params),
-      this.executeQuery(`SELECT count(*) as count FROM support_tickets WHERE status = 'OPEN' ${tenantId ? 'AND tenant_id = $1' : ''}`, params)
+      this.executeQuery(`SELECT count(*) as count FROM support_tickets WHERE status = 'OPEN' ${tenantId ? 'AND tenant_id = $1' : ''}`, params),
+      this.executeQuery(
+        `SELECT COALESCE(SUM(total_value), 0) as volume
+         FROM trades
+         WHERE created_at >= (CURRENT_DATE - ($1 || ' days')::interval)
+           AND ($2::varchar IS NULL OR tenant_id = $2)`,
+        [rangeDays, tenantId || null]
+      )
     ]);
 
     const totalMastersNum = parseInt(mastersRes.rows[0]?.count || '0', 10);
@@ -136,6 +175,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     const pendingWithdrawalsAmount = parseFloat(pendingWithdrawalsRes.rows[0]?.total_amount || '0');
     const pendingKycNum = parseInt(kycRes.rows[0]?.count || '0', 10);
     const openTicketsNum = parseInt(ticketsRes.rows[0]?.count || '0', 10);
+    const periodVolumeNum = parseFloat(periodVolumeRes.rows[0]?.volume || '0');
 
     const formatCurrency = (amount: number): string => {
       if (amount === 0) return '₹0';
@@ -178,6 +218,12 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         raw: todayVolumeNum,
         badge: 'Today',
         subtitle: 'Today\'s Turnover'
+      },
+      period_turnover: {
+        value: formatCurrency(periodVolumeNum),
+        raw: periodVolumeNum,
+        badge: this.rangeLabel(timeRange),
+        subtitle: this.rangeLabel(timeRange)
       },
       total_turnover: {
         value: formatCurrency(totalVolumeNum),
@@ -274,37 +320,114 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     };
   }
 
-  async getVolumeCommissionChart(tenantId?: string, timeRange: string = '7d'): Promise<VolumeCommissionChartPoint[]> {
-    const days = timeRange === '30d' ? 30 : (timeRange === '7d' ? 7 : 14);
-    const params: any[] = [days - 1];
-    let tenantClause = '';
-    if (tenantId) {
-      params.push(tenantId);
-      tenantClause = `AND t.tenant_id = $${params.length}`;
-    }
+  async getVolumeCommissionChart(tenantId?: string, timeRange: string = '30d'): Promise<VolumeCommissionChartPoint[]> {
+    const days = this.resolveRangeDays(timeRange);
+    const params: any[] = days === 0 ? [tenantId || null] : [days, tenantId || null];
 
     try {
-      const res = await this.executeQuery(`
-        WITH dates AS (
-          SELECT generate_series(
-            CURRENT_DATE - ($1 || ' days')::interval,
-            CURRENT_DATE,
-            INTERVAL '1 day'
-          )::date AS dt
-        )
-        SELECT 
-          d.dt::text AS date,
-          TO_CHAR(d.dt, 'Mon FMDD') AS display_date,
-          COALESCE(ROUND(SUM(t.total_value) / 10000000.0, 2), 0.00) AS volume,
-          COALESCE(ROUND(SUM(
-            COALESCE((SELECT SUM(l.credit) FROM ledger_entries l WHERE l.created_at::date = d.dt AND l.entry_type = 'COMMISSION' ${tenantId ? 'AND l.tenant_id = $2' : ''}), 0)
-          ) / 100000.0, 2), 0.00) AS commission
-        FROM dates d
-        LEFT JOIN trades t ON t.created_at::date = d.dt ${tenantClause}
-        GROUP BY d.dt
-        ORDER BY d.dt ASC
-      `, params);
+      const sql = days === 0
+        ? `
+          WITH buckets AS (
+            SELECT generate_series(
+              date_trunc('hour', NOW()) - INTERVAL '23 hours',
+              date_trunc('hour', NOW()),
+              INTERVAL '1 hour'
+            ) AS bucket
+          ),
+          trade_vol AS (
+            SELECT date_trunc('hour', created_at) AS bucket, SUM(total_value) AS volume
+            FROM trades
+            WHERE created_at >= date_trunc('hour', NOW()) - INTERVAL '23 hours'
+              AND ($1::varchar IS NULL OR tenant_id = $1)
+            GROUP BY 1
+          ),
+          comm AS (
+            SELECT date_trunc('hour', created_at) AS bucket, SUM(credit) AS commission
+            FROM ledger_entries
+            WHERE entry_type = 'COMMISSION'
+              AND created_at >= date_trunc('hour', NOW()) - INTERVAL '23 hours'
+              AND ($1::varchar IS NULL OR tenant_id = $1)
+            GROUP BY 1
+          )
+          SELECT
+            b.bucket::text AS date,
+            TO_CHAR(b.bucket, 'HH24:00') AS display_date,
+            COALESCE(ROUND(tv.volume / 10000000.0, 4), 0) AS volume,
+            COALESCE(ROUND(c.commission / 100000.0, 4), 0) AS commission
+          FROM buckets b
+          LEFT JOIN trade_vol tv ON tv.bucket = b.bucket
+          LEFT JOIN comm c ON c.bucket = b.bucket
+          ORDER BY b.bucket ASC
+        `
+        : days > 31
+        ? `
+          WITH buckets AS (
+            SELECT generate_series(
+              date_trunc('month', CURRENT_DATE - ($1 || ' days')::interval),
+              date_trunc('month', CURRENT_DATE),
+              INTERVAL '1 month'
+            ) AS bucket
+          ),
+          trade_vol AS (
+            SELECT date_trunc('month', created_at) AS bucket, SUM(total_value) AS volume
+            FROM trades
+            WHERE created_at >= (CURRENT_DATE - ($1 || ' days')::interval)
+              AND ($2::varchar IS NULL OR tenant_id = $2)
+            GROUP BY 1
+          ),
+          comm AS (
+            SELECT date_trunc('month', created_at) AS bucket, SUM(credit) AS commission
+            FROM ledger_entries
+            WHERE entry_type = 'COMMISSION'
+              AND created_at >= (CURRENT_DATE - ($1 || ' days')::interval)
+              AND ($2::varchar IS NULL OR tenant_id = $2)
+            GROUP BY 1
+          )
+          SELECT
+            b.bucket::date::text AS date,
+            TO_CHAR(b.bucket, 'Mon YY') AS display_date,
+            COALESCE(ROUND(tv.volume / 10000000.0, 4), 0) AS volume,
+            COALESCE(ROUND(c.commission / 100000.0, 4), 0) AS commission
+          FROM buckets b
+          LEFT JOIN trade_vol tv ON tv.bucket = b.bucket
+          LEFT JOIN comm c ON c.bucket = b.bucket
+          ORDER BY b.bucket ASC
+        `
+        : `
+          WITH buckets AS (
+            SELECT generate_series(
+              CURRENT_DATE - ($1 || ' days')::interval,
+              CURRENT_DATE,
+              INTERVAL '1 day'
+            )::date AS bucket
+          ),
+          trade_vol AS (
+            SELECT created_at::date AS bucket, SUM(total_value) AS volume
+            FROM trades
+            WHERE created_at >= (CURRENT_DATE - ($1 || ' days')::interval)
+              AND ($2::varchar IS NULL OR tenant_id = $2)
+            GROUP BY 1
+          ),
+          comm AS (
+            SELECT created_at::date AS bucket, SUM(credit) AS commission
+            FROM ledger_entries
+            WHERE entry_type = 'COMMISSION'
+              AND created_at >= (CURRENT_DATE - ($1 || ' days')::interval)
+              AND ($2::varchar IS NULL OR tenant_id = $2)
+            GROUP BY 1
+          )
+          SELECT
+            b.bucket::text AS date,
+            TO_CHAR(b.bucket, 'Mon FMDD') AS display_date,
+            COALESCE(ROUND(tv.volume / 10000000.0, 4), 0) AS volume,
+            COALESCE(ROUND(c.commission / 100000.0, 4), 0) AS commission
+          FROM buckets b
+          LEFT JOIN trade_vol tv ON tv.bucket = b.bucket
+          LEFT JOIN comm c ON c.bucket = b.bucket
+          ORDER BY b.bucket ASC
+        `;
 
+      const res = await this.executeQuery(sql, params);
       return res.rows.map(r => ({
         date: r.date,
         displayDate: r.display_date,
@@ -313,6 +436,127 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       }));
     } catch (err) {
       console.error('[PostgresTradingDataProvider] getVolumeCommissionChart error:', err);
+      return [];
+    }
+  }
+
+  async getNewClientRegistrations(tenantId?: string, timeRange: string = '30d'): Promise<ClientRegistrationPoint[]> {
+    const days = this.resolveRangeDays(timeRange);
+    const params: any[] = days === 0 ? [tenantId || null] : [days, tenantId || null];
+
+    try {
+      const sql = days === 0
+        ? `
+          WITH buckets AS (
+            SELECT generate_series(
+              date_trunc('hour', NOW()) - INTERVAL '23 hours',
+              date_trunc('hour', NOW()),
+              INTERVAL '1 hour'
+            ) AS bucket
+          )
+          SELECT
+            TO_CHAR(b.bucket, 'HH24:00') AS month,
+            COUNT(c.id)::int AS count
+          FROM buckets b
+          LEFT JOIN clients c
+            ON c.created_at >= b.bucket
+           AND c.created_at < b.bucket + INTERVAL '1 hour'
+           AND ($1::varchar IS NULL OR c.tenant_id = $1)
+          GROUP BY b.bucket
+          ORDER BY b.bucket ASC
+        `
+        : days > 31
+        ? `
+          WITH buckets AS (
+            SELECT generate_series(
+              date_trunc('month', CURRENT_DATE - ($1 || ' days')::interval),
+              date_trunc('month', CURRENT_DATE),
+              INTERVAL '1 month'
+            ) AS bucket
+          )
+          SELECT
+            TO_CHAR(b.bucket, 'Mon YY') AS month,
+            COUNT(c.id)::int AS count
+          FROM buckets b
+          LEFT JOIN clients c
+            ON c.created_at >= b.bucket
+           AND c.created_at < b.bucket + INTERVAL '1 month'
+           AND ($2::varchar IS NULL OR c.tenant_id = $2)
+          GROUP BY b.bucket
+          ORDER BY b.bucket ASC
+        `
+        : `
+          WITH buckets AS (
+            SELECT generate_series(
+              CURRENT_DATE - ($1 || ' days')::interval,
+              CURRENT_DATE,
+              INTERVAL '1 day'
+            )::date AS bucket
+          )
+          SELECT
+            TO_CHAR(b.bucket, 'Mon FMDD') AS month,
+            COUNT(c.id)::int AS count
+          FROM buckets b
+          LEFT JOIN clients c
+            ON c.created_at::date = b.bucket
+           AND ($2::varchar IS NULL OR c.tenant_id = $2)
+          GROUP BY b.bucket
+          ORDER BY b.bucket ASC
+        `;
+
+      const res = await this.executeQuery(sql, params);
+      return res.rows.map(r => ({
+        month: r.month,
+        count: parseInt(r.count || '0', 10)
+      }));
+    } catch (err) {
+      console.error('[PostgresTradingDataProvider] getNewClientRegistrations error:', err);
+      return [];
+    }
+  }
+
+  async getAssetAllocation(tenantId?: string, timeRange: string = '30d'): Promise<AssetAllocationSlice[]> {
+    const days = this.resolveRangeDays(timeRange);
+    const colors: Record<string, string> = {
+      Forex: '#3b82f6',
+      Equities: '#10b981',
+      Crypto: '#8b5cf6',
+      Indices: '#f59e0b',
+      Commodities: '#f43f5e'
+    };
+
+    try {
+      const res = await this.executeQuery(`
+        SELECT
+          CASE
+            WHEN symbol ~* '(BTC|ETH|SOL|XRP|DOGE|CRYPTO)' THEN 'Crypto'
+            WHEN symbol LIKE '%/%' OR symbol ~* '(USD|EUR|GBP|JPY|AUD|CHF)' THEN 'Forex'
+            WHEN symbol ~* '(NIFTY|SENSEX|BANKNIFTY|INDEX)' THEN 'Indices'
+            WHEN exchange = 'MCX' OR symbol ~* '(GOLD|SILVER|CRUDE|COPPER|NATURALGAS)' THEN 'Commodities'
+            ELSE 'Equities'
+          END AS name,
+          COALESCE(SUM(total_value), 0) AS volume
+        FROM trades
+        WHERE created_at >= (CURRENT_DATE - ($1 || ' days')::interval)
+          AND ($2::varchar IS NULL OR tenant_id = $2)
+        GROUP BY 1
+        ORDER BY volume DESC
+      `, [days, tenantId || null]);
+
+      const rows = res.rows
+        .map(r => ({ name: r.name as string, raw: parseFloat(r.volume || '0') }))
+        .filter(row => row.raw > 0);
+      const total = rows.reduce((sum, row) => sum + row.raw, 0);
+      if (total <= 0) return [];
+
+      return rows.map(row => ({
+        name: row.name,
+        raw: row.raw,
+        value: Math.round((row.raw / total) * 1000) / 10,
+        color: colors[row.name] || '#64748b'
+      }));
+    } catch (err) {
+      console.error('[PostgresTradingDataProvider] getAssetAllocation error:', err);
       return [];
     }
   }
@@ -355,56 +599,102 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     }
   }
 
-  async getDailyPLTrend(tenantId?: string, month?: string): Promise<{ data: any[]; mtdBadge: string }> {
-    const params: any[] = [];
-    let tenantFilter = '';
-    if (tenantId) {
-      params.push(tenantId);
-      tenantFilter = `AND tenant_id = $${params.length}`;
-    }
+  async getDailyPLTrend(tenantId?: string, timeRange: string = '30d'): Promise<DailyPLTrend> {
+    const days = this.resolveRangeDays(timeRange);
+    const params: any[] = [days, tenantId || null];
 
     try {
       const res = await this.executeQuery(`
         WITH dates AS (
           SELECT generate_series(
-            CURRENT_DATE - INTERVAL '13 days',
+            CURRENT_DATE - ($1 || ' days')::interval,
             CURRENT_DATE,
             INTERVAL '1 day'
           )::date AS dt
         )
-        SELECT 
+        SELECT
           TO_CHAR(d.dt, 'Mon FMDD') AS day,
           TO_CHAR(d.dt, 'Mon FMDD') AS display_day,
-          COALESCE(
-            ROUND(SUM(CASE 
-              WHEN l.entry_type IN ('TRADE_SELL', 'P&L', 'COMMISSION') THEN (l.credit - l.debit)
-              WHEN l.entry_type = 'TRADE_BUY' THEN -(l.debit * 0.01)
-              ELSE 0 
-            END) / 1000.0, 1),
-            0.0
-          ) AS pl
+          COALESCE(SUM(CASE
+            WHEN l.entry_type IN ('TRADE_SELL', 'P&L', 'COMMISSION') THEN (l.credit - l.debit)
+            WHEN l.entry_type = 'TRADE_BUY' THEN -(l.debit * 0.01)
+            ELSE 0
+          END), 0) AS pl_rupees
         FROM dates d
-        LEFT JOIN ledger_entries l ON l.created_at::date = d.dt ${tenantFilter}
+        LEFT JOIN ledger_entries l
+          ON l.created_at::date = d.dt
+         AND ($2::varchar IS NULL OR l.tenant_id = $2)
         GROUP BY d.dt
         ORDER BY d.dt ASC
       `, params);
 
       const data = res.rows.map(r => {
-        const val = parseFloat(r.pl || '0');
+        const rupees = parseFloat(r.pl_rupees || '0');
+        const val = Math.round((rupees / 1000) * 10) / 10;
         return {
           day: r.day,
           displayDay: r.display_day,
           pl: val,
-          isProfit: val >= 0
+          isProfit: rupees >= 0
         };
       });
-      const netTotal = data.reduce((sum, item) => sum + item.pl, 0);
-      const mtdBadge = `${netTotal >= 0 ? '+' : '-'}₹${Math.abs(netTotal / 100).toFixed(1)}L`;
-      return { data, mtdBadge };
+      const rawTotal = res.rows.reduce((sum, row) => sum + parseFloat(row.pl_rupees || '0'), 0);
+      const sign = rawTotal >= 0 ? '+' : '-';
+      const abs = Math.abs(rawTotal);
+      const mtdBadge = abs >= 100000
+        ? `${sign}₹${(abs / 100000).toFixed(2)}L`
+        : `${sign}₹${abs.toFixed(0)}`;
+      return { data, mtdBadge, rawTotal };
     } catch (err) {
       console.error('[PostgresTradingDataProvider] getDailyPLTrend error:', err);
-      return { data: [], mtdBadge: '₹0' };
+      return { data: [], mtdBadge: '₹0', rawTotal: 0 };
     }
+  }
+
+  async getRecentRegistrations(tenantId?: string, limit: number = 6): Promise<RecentRegistration[]> {
+    const params: any[] = [limit, tenantId || null];
+    const res = await this.executeQuery(`
+      SELECT
+        c.client_code,
+        c.name,
+        c.kyc_status,
+        c.status,
+        c.balance,
+        COALESCE(b.name, sb.broker_name, '—') AS broker_name,
+        COALESCE(SUM(p.pnl), 0) AS pl
+      FROM clients c
+      LEFT JOIN sub_brokers sb ON sb.id = c.sub_broker_id
+      LEFT JOIN brokers b ON b.id = sb.broker_id
+      LEFT JOIN positions p ON p.client_id = c.id
+      WHERE ($2::varchar IS NULL OR c.tenant_id = $2)
+      GROUP BY c.id, c.client_code, c.name, c.kyc_status, c.status, c.balance, b.name, sb.broker_name, c.created_at
+      ORDER BY c.created_at DESC
+      LIMIT $1
+    `, params);
+
+    return res.rows.map(r => {
+      const kyc = String(r.kyc_status || '').toUpperCase();
+      const account = String(r.status || '').toUpperCase();
+      return {
+        client_id: r.client_code || r.id,
+        name: r.name,
+        broker: r.broker_name || '—',
+        kyc_status: (kyc === 'VERIFIED' || kyc === 'APPROVED')
+          ? 'APPROVED'
+          : kyc === 'REJECTED'
+          ? 'REJECTED'
+          : kyc === 'UNDER_REVIEW'
+          ? 'UNDER_REVIEW'
+          : 'PENDING',
+        account_status: account === 'ACTIVE'
+          ? 'ACTIVE'
+          : account === 'SUSPENDED' || account === 'INACTIVE'
+          ? 'SUSPENDED'
+          : 'PENDING',
+        wallet_balance: parseFloat(r.balance || '0'),
+        pl: parseFloat(r.pl || '0')
+      };
+    });
   }
 
   async getRecentTrades(tenantId?: string, limit: number = 10): Promise<Trade[]> {

@@ -1,83 +1,25 @@
 import React from 'react';
-
-export interface DisplayRegistration {
-  client_id: string;
-  name: string;
-  broker: string;
-  kyc_status: 'APPROVED' | 'PENDING' | 'REJECTED' | 'UNDER_REVIEW';
-  account_status: 'ACTIVE' | 'PENDING' | 'SUSPENDED';
-  wallet_balance: string;
-  pl: string;
-  pl_positive?: boolean;
-}
-
-const defaultRegistrations: DisplayRegistration[] = [
-  {
-    client_id: 'CLT001',
-    name: 'Alexander Hunt',
-    broker: 'Ryan Chen',
-    kyc_status: 'APPROVED',
-    account_status: 'ACTIVE',
-    wallet_balance: '$25,400',
-    pl: '+$3,820',
-    pl_positive: true
-  },
-  {
-    client_id: 'CLT002',
-    name: 'Sophia Lee',
-    broker: 'Ryan Chen',
-    kyc_status: 'APPROVED',
-    account_status: 'ACTIVE',
-    wallet_balance: '$12,100',
-    pl: '-$540',
-    pl_positive: false
-  },
-  {
-    client_id: 'CLT003',
-    name: 'Nathan Brooks',
-    broker: 'James Okafor',
-    kyc_status: 'PENDING',
-    account_status: 'PENDING',
-    wallet_balance: '$5,000',
-    pl: '+$0',
-    pl_positive: true
-  },
-  {
-    client_id: 'CLT004',
-    name: 'Maya Patel',
-    broker: 'Priya Sharma',
-    kyc_status: 'APPROVED',
-    account_status: 'ACTIVE',
-    wallet_balance: '$48,200',
-    pl: '+$11,240',
-    pl_positive: true
-  },
-  {
-    client_id: 'CLT005',
-    name: 'Ethan Clarke',
-    broker: 'Sarah Mitchell',
-    kyc_status: 'REJECTED',
-    account_status: 'SUSPENDED',
-    wallet_balance: '$0',
-    pl: '+$0'
-  }
-];
+import { RecentRegistration } from '../../types';
+import { DisplayCurrency, formatMoney, formatSignedMoney } from '../../utils/currency';
 
 interface RecentRegistrationsCardProps {
+  registrations?: RecentRegistration[];
+  currency?: DisplayCurrency;
   currencySymbol?: string;
   onViewAll: () => void;
-  onSelectClient?: (client: any) => void;
+  onSelectClient?: (client: RecentRegistration) => void;
 }
 
 export const RecentRegistrationsCard: React.FC<RecentRegistrationsCardProps> = ({
-  currencySymbol = '$',
+  registrations = [],
+  currency = 'INR',
   onViewAll,
   onSelectClient
 }) => {
-  const items = defaultRegistrations.map(r => ({
-    ...r,
-    wallet_balance: r.wallet_balance.replace('$', currencySymbol),
-    pl: r.pl.replace('$', currencySymbol)
+  const items = registrations.map(registration => ({
+    ...registration,
+    walletLabel: formatMoney(registration.wallet_balance, currency),
+    plLabel: formatSignedMoney(registration.pl, currency)
   }));
   return (
     <div className="bg-[#0b1325] border border-[#16233d] rounded-xl p-4 sm:p-5 flex flex-col h-full shadow-sm">
@@ -107,6 +49,13 @@ export const RecentRegistrationsCard: React.FC<RecentRegistrationsCardProps> = (
             </tr>
           </thead>
           <tbody className="divide-y divide-[#16233d]/60">
+            {items.length === 0 && (
+              <tr>
+                <td colSpan={7} className="py-8 text-center text-slate-500">
+                  No client registrations yet
+                </td>
+              </tr>
+            )}
             {items.map(client => (
               <tr
                 key={client.client_id}
@@ -149,18 +98,18 @@ export const RecentRegistrationsCard: React.FC<RecentRegistrationsCardProps> = (
                   </span>
                 </td>
                 <td className="py-3 font-mono text-slate-200 text-right">
-                  {client.wallet_balance}
+                  {client.walletLabel}
                 </td>
                 <td
                   className={`py-3 font-mono font-semibold text-right ${
-                    client.pl.startsWith('+') && client.pl !== '+₹0'
+                    client.pl > 0
                       ? 'text-emerald-400'
-                      : client.pl.startsWith('-')
+                      : client.pl < 0
                       ? 'text-rose-400'
                       : 'text-slate-400'
                   }`}
                 >
-                  {client.pl}
+                  {client.plLabel}
                 </td>
               </tr>
             ))}

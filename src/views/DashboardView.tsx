@@ -9,35 +9,60 @@ import {
   DollarSign,
   Coins,
   Activity,
-  Calendar,
-  RefreshCw,
-  SlidersHorizontal
+  ListOrdered,
+  Wallet,
+  Landmark,
+  RefreshCw
 } from 'lucide-react';
 import {
+  AssetAllocationSlice,
+  ClientRegistrationPoint,
   DashboardKPIs,
+  DailyPLPoint,
+  KYCRecord,
+  RecentRegistration,
   Trade,
-  KYCRecord
+  VolumeCommissionChartPoint
 } from '../types';
 import { KPICard } from '../components/dashboard/KPICard';
 import { PendingAlertsStrip } from '../components/dashboard/PendingAlertsStrip';
 import { TradingVolumeRevenueChart } from '../components/dashboard/TradingVolumeRevenueChart';
 import { AssetAllocationDonutChart } from '../components/dashboard/AssetAllocationDonutChart';
 import { NewClientRegistrationsChart } from '../components/dashboard/NewClientRegistrationsChart';
+import { DailyPLChart } from '../components/dashboard/DailyPLChart';
 import { DashboardQuickActions } from '../components/dashboard/DashboardQuickActions';
 import { RecentTradesCard } from '../components/dashboard/RecentTradesCard';
 import { RecentRegistrationsCard } from '../components/dashboard/RecentRegistrationsCard';
 import { NavigationTab } from '../components/layout/AdminSidebar';
+import { DisplayCurrency, formatMoney } from '../utils/currency';
+
+export type DashboardRange = 'today' | '7d' | '30d' | 'ytd' | 'all';
+
+const RANGE_OPTIONS: { label: string; value: DashboardRange; detail: string }[] = [
+  { label: 'Today', value: 'today', detail: 'Today' },
+  { label: '7D', value: '7d', detail: 'Last 7 days' },
+  { label: '30D', value: '30d', detail: 'Last 30 days' },
+  { label: 'YTD', value: 'ytd', detail: 'Year to date' },
+  { label: 'All', value: 'all', detail: 'Last 12 months' }
+];
 
 export interface DashboardViewProps {
   kpis?: DashboardKPIs | null;
   hasError?: boolean;
   errorMessage?: string;
-  volumeCommissionData?: any;
+  volumeCommissionData?: VolumeCommissionChartPoint[];
+  newRegistrations?: ClientRegistrationPoint[];
+  assetAllocation?: AssetAllocationSlice[];
   clientGrowthData?: any;
-  dailyPLData?: any;
+  dailyPLData?: DailyPLPoint[];
   dailyPLBadge?: string;
+  dailyPLRawTotal?: number;
   recentTrades: Trade[];
+  recentRegistrations?: RecentRegistration[];
   pendingKYC: KYCRecord[];
+  range?: DashboardRange;
+  latencyMs?: number | null;
+  onRangeChange?: (range: DashboardRange) => void;
   onNavigateTab: (tab: NavigationTab) => void;
   onNavigateFunds?: (tab: 'deposits' | 'withdrawals', status?: string) => void;
   onCreateMaster: () => void;
@@ -67,11 +92,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   hasError,
   errorMessage,
   volumeCommissionData,
-  clientGrowthData,
+  newRegistrations,
+  assetAllocation,
   dailyPLData,
   dailyPLBadge,
+  dailyPLRawTotal,
   recentTrades,
+  recentRegistrations,
   pendingKYC,
+  range = '30d',
+  latencyMs,
   onNavigateTab,
   onNavigateFunds,
   onCreateMaster,
@@ -79,15 +109,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onAddClient,
   onReviewKYC,
   onSelectTrade,
-  onRefresh
+  onRefresh,
+  onRangeChange
 }) => {
-  const [currency, setCurrency] = useState<'USD' | 'INR'>('USD');
-  const [timeRange, setTimeRange] = useState<'Today' | '7D' | '30D' | 'YTD' | 'All'>('30D');
+  const [currency, setCurrency] = useState<DisplayCurrency>('INR');
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  const currencySymbol = currency === 'USD' ? '$' : '₹';
   const activeKpis = kpis !== null && kpis !== undefined ? kpis : DEFAULT_UNAVAILABLE_KPIS;
   const isUnavailable = kpis === null || hasError;
+  const rangeMeta = RANGE_OPTIONS.find(option => option.value === range) || RANGE_OPTIONS[2];
+  const money = (raw?: number, fallback = 0) => formatMoney(Number(raw ?? fallback), currency);
+  const signedClass = (raw?: number) => Number(raw || 0) < 0 ? 'text-rose-400' : 'text-white';
+  const signedSubtitle = (raw?: number) => Number(raw || 0) < 0 ? 'text-rose-400' : 'text-emerald-400';
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
@@ -142,7 +175,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <h2 className="text-sm font-bold text-white tracking-tight">Admin Overview</h2>
               {!isUnavailable ? (
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-semibold font-mono">
-                  LIVE 12ms
+                  LIVE{typeof latencyMs === 'number' ? ` ${latencyMs}ms` : ''}
                 </span>
               ) : (
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-500/10 text-red-400 border border-red-500/20 font-semibold font-mono flex items-center gap-1">
@@ -183,18 +216,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
 
           {/* Timeframe Selector */}
-          <div className="hidden md:flex items-center bg-[#090f1f] border border-[#16233d] rounded-lg p-0.5 text-xs font-medium text-slate-400">
-            {(['Today', '7D', '30D', 'YTD', 'All'] as const).map(tab => (
+          <div className="flex items-center bg-[#090f1f] border border-[#16233d] rounded-lg p-0.5 text-xs font-medium text-slate-400">
+            {RANGE_OPTIONS.map(option => (
               <button
-                key={tab}
-                onClick={() => setTimeRange(tab)}
+                key={option.value}
+                onClick={() => onRangeChange?.(option.value)}
                 className={`px-2 py-1 rounded transition-colors cursor-pointer ${
-                  timeRange === tab
+                  range === option.value
                     ? 'bg-[#15233f] text-white font-semibold'
                     : 'hover:text-slate-200'
                 }`}
               >
-                {tab}
+                {option.label}
               </button>
             ))}
           </div>
@@ -256,9 +289,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       {/* Row 2: Financial Metrics (4 cards) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 sm:gap-4">
         <KPICard
-          title="TODAY'S TURNOVER"
-          value={activeKpis.todays_turnover?.value || '₹0'}
-          subtitle={activeKpis.todays_turnover?.subtitle || 'Today'}
+          title={range === 'today' ? "TODAY'S TURNOVER" : 'PERIOD TURNOVER'}
+          value={money(range === 'today' ? activeKpis.todays_turnover?.raw : activeKpis.period_turnover?.raw)}
+          subtitle={range === 'today' ? 'Today' : rangeMeta.detail}
           icon={TrendingUp}
           iconColor="text-amber-400"
           iconBg="bg-amber-950/60"
@@ -267,8 +300,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         <KPICard
           title="TOTAL TURNOVER"
-          value={activeKpis.total_turnover?.value || activeKpis.todays_turnover?.value || '₹0'}
-          subtitle={activeKpis.total_turnover?.subtitle || 'Total Executed'}
+          value={money(activeKpis.total_turnover?.raw)}
+          subtitle={activeKpis.total_turnover?.subtitle || 'All-time executed'}
           icon={BarChart3}
           iconColor="text-blue-400"
           iconBg="bg-blue-950/60"
@@ -277,18 +310,20 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         <KPICard
           title="NET P&L"
-          value={activeKpis.net_pl?.value || activeKpis.total_pl?.value || '₹0'}
+          value={money(activeKpis.net_pl?.raw ?? activeKpis.total_pl?.raw)}
           subtitle={activeKpis.net_pl?.subtitle || activeKpis.total_pl?.subtitle || 'Unrealized + Realized'}
           icon={DollarSign}
           iconColor="text-emerald-400"
           iconBg="bg-emerald-950/60"
+          valueClassName={signedClass(activeKpis.net_pl?.raw ?? activeKpis.total_pl?.raw)}
+          subtitleClassName={signedSubtitle(activeKpis.net_pl?.raw ?? activeKpis.total_pl?.raw)}
           onClick={() => onNavigateTab('trades')}
         />
 
         <KPICard
           title="COMMISSION EARNED"
-          value={activeKpis.commission_earned?.value ? `${activeKpis.commission_earned.value}` : '₹0'}
-          subtitle={activeKpis.commission_earned?.subtitle || 'Actual rules'}
+          value={money(activeKpis.commission_earned?.raw)}
+          subtitle={activeKpis.commission_earned?.subtitle || 'From ledger'}
           icon={Coins}
           iconColor="text-purple-400"
           iconBg="bg-purple-950/60"
@@ -296,11 +331,52 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         />
       </div>
 
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 sm:gap-4">
+        <KPICard
+          title="OPEN POSITIONS"
+          value={activeKpis.open_positions?.value ?? 0}
+          subtitle={activeKpis.open_positions?.subtitle || 'Active positions'}
+          icon={Activity}
+          iconColor="text-cyan-400"
+          iconBg="bg-cyan-950/60"
+          onClick={() => onNavigateTab('positions')}
+        />
+        <KPICard
+          title="PENDING ORDERS"
+          value={activeKpis.pending_orders?.value ?? 0}
+          subtitle={activeKpis.pending_orders?.subtitle || 'Queued orders'}
+          icon={ListOrdered}
+          iconColor="text-amber-400"
+          iconBg="bg-amber-950/60"
+          onClick={() => onNavigateTab('orders')}
+        />
+        <KPICard
+          title="USED MARGIN"
+          value={money(activeKpis.used_margin?.raw)}
+          subtitle={activeKpis.used_margin?.subtitle || 'Across clients'}
+          icon={Wallet}
+          iconColor="text-rose-400"
+          iconBg="bg-rose-950/60"
+          onClick={() => onNavigateTab('risk')}
+        />
+        <KPICard
+          title="AVAILABLE MARGIN"
+          value={money(activeKpis.available_margin?.raw)}
+          subtitle={activeKpis.available_margin?.subtitle || 'Free margin'}
+          icon={Landmark}
+          iconColor="text-emerald-400"
+          iconBg="bg-emerald-950/60"
+          onClick={() => onNavigateTab('risk')}
+        />
+      </div>
+
       {/* Row 3: Pending Status Strip */}
       <PendingAlertsStrip
         pendingKYC={Number(activeKpis.pending_kyc?.value) || 0}
         pendingDeposits={Number(activeKpis.pending_deposits?.value) || 0}
+        pendingDepositsAmount={Number(activeKpis.pending_deposits?.amount) > 0 ? money(Number(activeKpis.pending_deposits?.amount)) : undefined}
         pendingWithdrawals={Number(activeKpis.pending_withdrawals?.value) || 0}
+        pendingWithdrawalsAmount={Number(activeKpis.pending_withdrawals?.amount) > 0 ? money(Number(activeKpis.pending_withdrawals?.amount)) : undefined}
         openTickets={Number(activeKpis.open_tickets?.value) || 0}
         onNavigateKYC={() => onNavigateTab('kyc')}
         onNavigateDeposits={() => {
@@ -323,17 +399,36 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       {/* Row 4: Trading Volume & Revenue + Asset Allocation Donut Chart */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2">
-          <TradingVolumeRevenueChart data={volumeCommissionData} />
+          <TradingVolumeRevenueChart
+            data={volumeCommissionData}
+            currency={currency}
+            rangeLabel={rangeMeta.detail}
+          />
         </div>
         <div className="lg:col-span-1">
-          <AssetAllocationDonutChart />
+          <AssetAllocationDonutChart
+            data={assetAllocation}
+            currency={currency}
+            rangeLabel={rangeMeta.detail}
+          />
         </div>
       </div>
+
+      <DailyPLChart
+        data={dailyPLData || []}
+        mtdBadge={dailyPLBadge}
+        rawTotal={dailyPLRawTotal}
+        currency={currency}
+        rangeLabel={rangeMeta.detail}
+      />
 
       {/* Row 5: New Client Registrations + Quick Actions */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2">
-          <NewClientRegistrationsChart />
+          <NewClientRegistrationsChart
+            data={newRegistrations}
+            rangeLabel={rangeMeta.detail}
+          />
         </div>
         <div className="lg:col-span-1">
           <DashboardQuickActions
@@ -349,7 +444,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       {/* Row 6: Recent Trades Table */}
       <RecentTradesCard
         trades={recentTrades}
-        currencySymbol={currencySymbol}
+        currency={currency}
         onViewAll={() => onNavigateTab('trades')}
         onSelectTrade={trade => {
           if (onSelectTrade) {
@@ -362,7 +457,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
       {/* Row 7: Recent Registrations Table */}
       <RecentRegistrationsCard
-        currencySymbol={currencySymbol}
+        registrations={recentRegistrations}
+        currency={currency}
         onViewAll={() => onNavigateTab('clients')}
         onSelectClient={() => onNavigateTab('clients')}
       />

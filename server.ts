@@ -613,28 +613,52 @@ async function startServer() {
   app.get('/api/admin/dashboard', authenticate, requirePermission('dashboard.view'), async (req, res) => {
     try {
       const tenantScope = resolveStrictTenantScope(req);
-      const kpis = await activeTradingDataProvider.getDashboardKPIs(tenantScope);
-      const volumeCommission = await activeTradingDataProvider.getVolumeCommissionChart(tenantScope);
-      const clientGrowth = await activeTradingDataProvider.getClientGrowthChart(tenantScope);
-      const dailyPL = await activeTradingDataProvider.getDailyPLTrend(tenantScope);
-      const recentTrades = await activeTradingDataProvider.getRecentTrades(tenantScope, 6);
-      const pendingKYC = await activeTradingDataProvider.getPendingKYC(tenantScope, 5);
-
-      const tenants = await activeTradingDataProvider.getTenants({});
+      const range = String(req.query.range || '30d');
+      const startedAt = Date.now();
+      const [
+        kpis,
+        volumeCommission,
+        clientGrowth,
+        newRegistrations,
+        assetAllocation,
+        dailyPL,
+        recentTrades,
+        recentRegistrations,
+        pendingKYC,
+        tenants
+      ] = await Promise.all([
+        activeTradingDataProvider.getDashboardKPIs(tenantScope, range),
+        activeTradingDataProvider.getVolumeCommissionChart(tenantScope, range),
+        activeTradingDataProvider.getClientGrowthChart(tenantScope),
+        activeTradingDataProvider.getNewClientRegistrations(tenantScope, range),
+        activeTradingDataProvider.getAssetAllocation(tenantScope, range),
+        activeTradingDataProvider.getDailyPLTrend(tenantScope, range),
+        activeTradingDataProvider.getRecentTrades(tenantScope, 6),
+        activeTradingDataProvider.getRecentRegistrations(tenantScope, 6),
+        activeTradingDataProvider.getPendingKYC(tenantScope, 5),
+        activeTradingDataProvider.getTenants({})
+      ]);
 
       res.json({
         kpis,
         volumeCommission,
         clientGrowth,
+        newRegistrations,
+        assetAllocation,
         dailyPL,
         charts: {
           volumeCommission,
           clientGrowth,
+          newRegistrations,
+          assetAllocation,
           dailyPL
         },
         recentTrades,
+        recentRegistrations,
         pendingKYC,
         tenants,
+        range,
+        latencyMs: Date.now() - startedAt,
         tenantScope: tenantScope || 'ALL_TENANTS'
       });
     } catch (err: any) {

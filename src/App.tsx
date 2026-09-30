@@ -104,14 +104,19 @@ export default function App() {
     },
     volumeCommission: [],
     clientGrowth: [],
+    newRegistrations: [],
+    assetAllocation: [],
     dailyPL: [],
     recentTrades: [],
+    recentRegistrations: [],
     pendingKYC: [],
     tenants: []
   };
 
   const [dashboardData, setDashboardData] = useState<DashboardData>(EMPTY_INITIAL_DASHBOARD);
   const [dashboardError, setDashboardError] = useState<string | null>(null);
+  const [dashboardRange, setDashboardRange] = useState<'today' | '7d' | '30d' | 'ytd' | 'all'>('30d');
+  const [dashboardLatencyMs, setDashboardLatencyMs] = useState<number | null>(null);
   const [tenants, setTenants] = useState<Tenant[]>(DEFAULT_INITIAL_TENANTS);
   const [masters, setMasters] = useState<Master[]>([]);
   const [brokers, setBrokers] = useState<Broker[]>([]);
@@ -277,22 +282,36 @@ export default function App() {
 
   // Fetch Dashboard & System Data
   const loadDashboardData = useCallback(async () => {
+    const started = performance.now();
     try {
-      const url = selectedTenantScope
-        ? `/api/admin/dashboard?tenantId=${selectedTenantScope}`
-        : '/api/admin/dashboard';
-      const res = await fetch(url, { credentials: 'include' });
+      const params = new URLSearchParams();
+      if (selectedTenantScope) params.set('tenantId', selectedTenantScope);
+      params.set('range', dashboardRange);
+      const res = await fetch(`/api/admin/dashboard?${params.toString()}`, { credentials: 'include' });
       if (res.ok) {
         const data: any = await res.json();
+        const dailyPayload = data.dailyPL && !Array.isArray(data.dailyPL)
+          ? data.dailyPL
+          : data.charts?.dailyPL;
         setDashboardError(null);
+        setDashboardLatencyMs(
+          typeof data.latencyMs === 'number'
+            ? data.latencyMs
+            : Math.round(performance.now() - started)
+        );
         setDashboardData({
           kpis: data.kpis || null,
           volumeCommission: data.volumeCommission || data.charts?.volumeCommission || [],
           clientGrowth: data.clientGrowth || data.charts?.clientGrowth || [],
+          newRegistrations: data.newRegistrations || data.charts?.newRegistrations || [],
+          assetAllocation: data.assetAllocation || data.charts?.assetAllocation || [],
           dailyPL: Array.isArray(data.dailyPL)
             ? data.dailyPL
-            : (data.charts?.dailyPL?.data || []),
+            : (dailyPayload?.data || []),
+          dailyPLBadge: dailyPayload?.mtdBadge || '',
+          dailyPLRawTotal: Number(dailyPayload?.rawTotal || 0),
           recentTrades: data.recentTrades || [],
+          recentRegistrations: data.recentRegistrations || [],
           pendingKYC: data.pendingKYC || [],
           tenants: data.tenants || []
         });
@@ -308,7 +327,7 @@ export default function App() {
       setDashboardError(err.message || 'Dashboard live telemetry unavailable');
       setDashboardData(prev => ({ ...prev, kpis: null }));
     }
-  }, [selectedTenantScope]);
+  }, [selectedTenantScope, dashboardRange]);
 
   // Fetch Full Hierarchy Entities
   const [isHierarchyLoading, setIsHierarchyLoading] = useState(false);
@@ -860,11 +879,18 @@ export default function App() {
                   hasError={!!dashboardError}
                   errorMessage={dashboardError || undefined}
                   volumeCommissionData={dashboardData?.volumeCommission || []}
+                  newRegistrations={dashboardData?.newRegistrations || []}
+                  assetAllocation={dashboardData?.assetAllocation || []}
                   clientGrowthData={dashboardData?.clientGrowth || []}
                   dailyPLData={dashboardData?.dailyPL || []}
                   dailyPLBadge={dashboardData?.dailyPLBadge || ''}
+                  dailyPLRawTotal={dashboardData?.dailyPLRawTotal || 0}
                   recentTrades={recentTrades.length ? recentTrades : dashboardData?.recentTrades || []}
+                  recentRegistrations={dashboardData?.recentRegistrations || []}
                   pendingKYC={pendingKYC.length ? pendingKYC : dashboardData?.pendingKYC || []}
+                  range={dashboardRange}
+                  latencyMs={dashboardLatencyMs}
+                  onRangeChange={setDashboardRange}
                   onNavigateTab={tab => setActiveTab(tab)}
                   onNavigateFunds={handleNavigateFunds}
                   onCreateMaster={() => setShowCreateMasterModal(true)}
