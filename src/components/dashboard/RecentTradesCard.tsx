@@ -1,5 +1,6 @@
 import React from 'react';
 import { Trade } from '../../types';
+import { DisplayCurrency, formatMoney } from '../../utils/currency';
 
 export interface DisplayRecentTrade {
   trade_id: string;
@@ -8,92 +9,36 @@ export interface DisplayRecentTrade {
   side: 'BUY' | 'SELL';
   quantity: string | number;
   price: string | number;
-  fees: string;
+  notional: string;
   time: string;
+  source?: Trade;
 }
-
-const defaultRecentTrades: DisplayRecentTrade[] = [
-  {
-    trade_id: 'TRD001',
-    client_name: 'Alexander Hunt',
-    symbol: 'EUR/USD',
-    side: 'BUY',
-    quantity: '100,000',
-    price: '1.0880',
-    fees: '$10.00',
-    time: '10:14:25'
-  },
-  {
-    trade_id: 'TRD002',
-    client_name: 'Maya Patel',
-    symbol: 'BTC/USD',
-    side: 'SELL',
-    quantity: '0.50',
-    price: '30,118.00',
-    fees: '$15.06',
-    time: '10:22:48'
-  },
-  {
-    trade_id: 'TRD003',
-    client_name: 'Alexander Hunt',
-    symbol: 'TSLA',
-    side: 'SELL',
-    quantity: '20',
-    price: '248.15',
-    fees: '$4.96',
-    time: '12:00:03'
-  },
-  {
-    trade_id: 'TRD004',
-    client_name: 'Isabella Torres',
-    symbol: 'AMZN',
-    side: 'BUY',
-    quantity: '10',
-    price: '131.20',
-    fees: '$1.31',
-    time: '15:30:00'
-  },
-  {
-    trade_id: 'TRD005',
-    client_name: 'Maya Patel',
-    symbol: 'EUR/USD',
-    side: 'BUY',
-    quantity: '200,000',
-    price: '1.0850',
-    fees: '$20.00',
-    time: '09:10:00'
-  }
-];
 
 interface RecentTradesCardProps {
   trades?: Trade[];
+  currency?: DisplayCurrency;
   currencySymbol?: string;
   onViewAll: () => void;
   onSelectTrade?: (trade: any) => void;
 }
 
 export const RecentTradesCard: React.FC<RecentTradesCardProps> = ({
-  trades,
-  currencySymbol = '$',
+  trades = [],
+  currency = 'INR',
   onViewAll,
   onSelectTrade
 }) => {
-  // Use provided trades mapped to display format, or the screenshot-matched default dataset
-  const displayItems: DisplayRecentTrade[] = trades && trades.length > 0
-    ? trades.slice(0, 5).map(t => ({
-        trade_id: t.trade_id,
-        client_name: t.client_name,
-        symbol: t.symbol.replace('/INR', '/USD'),
-        side: t.side,
-        quantity: t.quantity.toLocaleString(),
-        price: t.price.toLocaleString(undefined, { minimumFractionDigits: 2 }),
-        fees: `${currencySymbol}${(t.price * 0.0005).toFixed(2)}`,
-        time: t.timestamp ? t.timestamp.split(' ')[1] || t.timestamp : '10:14:25'
-      }))
-    : defaultRecentTrades.map(t => ({
-        ...t,
-        fees: t.fees.replace('$', currencySymbol)
-      }));
+  const displayItems: DisplayRecentTrade[] = trades.slice(0, 6).map(t => ({
+    trade_id: t.trade_id,
+    client_name: t.client_name,
+    symbol: t.symbol,
+    side: t.side,
+    quantity: Number(t.quantity).toLocaleString(),
+    price: Number(t.price).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 }),
+    notional: formatMoney(Number(t.total_value || t.price * t.quantity || 0), currency),
+    time: t.timestamp ? (t.timestamp.split(' ')[1] || t.timestamp).slice(0, 19) : '—',
+    source: t
+  }));
 
   return (
     <div className="bg-[#0b1325] border border-[#16233d] rounded-xl p-4 sm:p-5 flex flex-col h-full shadow-sm">
@@ -124,15 +69,22 @@ export const RecentTradesCard: React.FC<RecentTradesCardProps> = ({
               <th className="pb-3 font-semibold">SIDE</th>
               <th className="pb-3 font-semibold text-right">QTY</th>
               <th className="pb-3 font-semibold text-right">EXEC PRICE</th>
-              <th className="pb-3 font-semibold text-right">FEES</th>
+              <th className="pb-3 font-semibold text-right">NOTIONAL</th>
               <th className="pb-3 font-semibold text-right">TIME</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-[#16233d]/60">
+            {displayItems.length === 0 && (
+              <tr>
+                <td colSpan={8} className="py-8 text-center text-slate-500">
+                  No executed trades yet
+                </td>
+              </tr>
+            )}
             {displayItems.map((trade, idx) => (
               <tr
                 key={trade.trade_id || idx}
-                onClick={() => onSelectTrade?.(trade)}
+                onClick={() => onSelectTrade?.(trade.source || trade)}
                 className="hover:bg-[#101b33] transition-colors cursor-pointer group"
               >
                 <td className="py-3 font-mono font-medium text-blue-400">
@@ -161,8 +113,8 @@ export const RecentTradesCard: React.FC<RecentTradesCardProps> = ({
                 <td className="py-3 font-mono font-medium text-white text-right">
                   {trade.price}
                 </td>
-                <td className="py-3 font-mono text-slate-400 text-right">
-                  {trade.fees}
+                <td className="py-3 font-mono text-slate-300 text-right">
+                  {trade.notional}
                 </td>
                 <td className="py-3 font-mono text-slate-400 text-right">
                   {trade.time}

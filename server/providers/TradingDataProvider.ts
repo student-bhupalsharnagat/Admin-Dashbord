@@ -2,7 +2,10 @@ import {
   DashboardKPIs,
   VolumeCommissionChartPoint,
   ClientGrowthChartPoint,
-  DailyPLPoint,
+  ClientRegistrationPoint,
+  AssetAllocationSlice,
+  RecentRegistration,
+  DailyPLTrend,
   Trade,
   KYCRecord,
   Tenant,
@@ -51,11 +54,14 @@ import { adminEventBus } from '../services/EventHandler.ts';
 export type EntityStatus = 'ACTIVE' | 'SUSPENDED' | 'INACTIVE';
 
 export interface ITradingDataProvider {
-  getDashboardKPIs(tenantId?: string): Promise<DashboardKPIs>;
+  getDashboardKPIs(tenantId?: string, timeRange?: string): Promise<DashboardKPIs>;
   getVolumeCommissionChart(tenantId?: string, timeRange?: string): Promise<VolumeCommissionChartPoint[]>;
   getClientGrowthChart(tenantId?: string): Promise<ClientGrowthChartPoint[]>;
-  getDailyPLTrend(tenantId?: string, month?: string): Promise<{ data: DailyPLPoint[]; mtdBadge: string }>;
+  getNewClientRegistrations(tenantId?: string, timeRange?: string): Promise<ClientRegistrationPoint[]>;
+  getAssetAllocation(tenantId?: string, timeRange?: string): Promise<AssetAllocationSlice[]>;
+  getDailyPLTrend(tenantId?: string, timeRange?: string): Promise<DailyPLTrend>;
   getRecentTrades(tenantId?: string, limit?: number): Promise<Trade[]>;
+  getRecentRegistrations(tenantId?: string, limit?: number): Promise<RecentRegistration[]>;
   getPendingKYC(tenantId?: string, limit?: number): Promise<KYCRecord[]>;
   
   // Tenants
@@ -1196,7 +1202,7 @@ export class MockTradingDataProvider implements ITradingDataProvider {
   ];
 
   // Exact matching KPI metrics from Figma screenshot:
-  async getDashboardKPIs(tenantId?: string): Promise<DashboardKPIs> {
+  async getDashboardKPIs(tenantId?: string, _timeRange?: string): Promise<DashboardKPIs> {
     if (tenantId) {
       const tenant = this.tenants.find(t => t.id === tenantId);
       const mastersCount = this.masters.filter(m => m.tenant_id === tenantId).length;
@@ -1348,9 +1354,17 @@ export class MockTradingDataProvider implements ITradingDataProvider {
     return [];
   }
 
+  async getNewClientRegistrations(_tenantId?: string, _timeRange?: string): Promise<ClientRegistrationPoint[]> {
+    return [];
+  }
+
+  async getAssetAllocation(_tenantId?: string, _timeRange?: string): Promise<AssetAllocationSlice[]> {
+    return [];
+  }
+
   // Daily P&L Trend:
-  async getDailyPLTrend(tenantId?: string, month?: string): Promise<{ data: DailyPLPoint[]; mtdBadge: string }> {
-    return { data: [], mtdBadge: '₹0 MTD' };
+  async getDailyPLTrend(_tenantId?: string, _timeRange?: string): Promise<DailyPLTrend> {
+    return { data: [], mtdBadge: '₹0', rawTotal: 0 };
   }
 
   async getRecentTrades(tenantId?: string, limit: number = 6): Promise<Trade[]> {
@@ -1359,6 +1373,32 @@ export class MockTradingDataProvider implements ITradingDataProvider {
       result = result.filter(t => t.tenant_id === tenantId);
     }
     return result.slice(0, limit);
+  }
+
+  async getRecentRegistrations(tenantId?: string, limit: number = 6): Promise<RecentRegistration[]> {
+    let result = this.clients;
+    if (tenantId) {
+      result = result.filter(client => client.tenant_id === tenantId);
+    }
+    return result.slice(0, limit).map(client => ({
+      client_id: client.client_code || client.id,
+      name: client.name,
+      broker: client.broker_name || '—',
+      kyc_status: client.kyc_status === 'APPROVED'
+        ? 'APPROVED'
+        : client.kyc_status === 'REJECTED'
+        ? 'REJECTED'
+        : client.kyc_status === 'UNDER_REVIEW'
+        ? 'UNDER_REVIEW'
+        : 'PENDING',
+      account_status: client.status === 'ACTIVE'
+        ? 'ACTIVE'
+        : client.status === 'SUSPENDED'
+        ? 'SUSPENDED'
+        : 'PENDING',
+      wallet_balance: Number(client.wallet_balance || 0),
+      pl: Number(client.todays_pl || 0)
+    }));
   }
 
   async getPendingKYC(tenantId?: string, limit: number = 5): Promise<KYCRecord[]> {

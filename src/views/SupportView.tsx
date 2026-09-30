@@ -30,86 +30,6 @@ export interface SupportTicketItem {
   messages?: { sender: string; time: string; text: string; isAdmin: boolean }[];
 }
 
-const INITIAL_TICKETS: SupportTicketItem[] = [
-  {
-    id: 'tkt-1',
-    ticketId: 'TKT001',
-    createdBy: 'Alexander Hunt',
-    subject: 'Withdrawal delay - 5 days pending',
-    category: 'WITHDRAWAL',
-    priority: 'HIGH',
-    status: 'OPEN',
-    assignedTo: 'Support Team A',
-    date: '2023-06-22',
-    description: 'Client submitted a withdrawal request of ₹45,000 five days ago via IMPS. Bank has not reflected the amount and account remains in pending debit status.',
-    messages: [
-      { sender: 'Alexander Hunt', time: '2023-06-22 10:15', text: 'Please check my withdrawal request ID WTH-8821. It has been pending since Monday.', isAdmin: false }
-    ]
-  },
-  {
-    id: 'tkt-2',
-    ticketId: 'TKT002',
-    createdBy: 'Sophia Lee',
-    subject: 'KYC rejected - incorrect reason',
-    category: 'KYC',
-    priority: 'MEDIUM',
-    status: 'IN PROGRESS',
-    assignedTo: 'Compliance Team',
-    date: '2023-06-20',
-    description: 'Aadhaar QR verification failed due to scanning glare on back of card. Client has re-uploaded high-res scan and requests immediate approval.',
-    messages: [
-      { sender: 'Sophia Lee', time: '2023-06-20 14:02', text: 'My Aadhaar scan is completely legible. Please re-verify the documents.', isAdmin: false },
-      { sender: 'Compliance Team', time: '2023-06-20 15:30', text: 'We have forwarded your updated high-res upload to the automated OCR pipeline.', isAdmin: true }
-    ]
-  },
-  {
-    id: 'tkt-3',
-    ticketId: 'TKT003',
-    createdBy: 'Nathan Brooks',
-    subject: 'Unable to login after password reset',
-    category: 'ACCOUNT',
-    priority: 'LOW',
-    status: 'PENDING',
-    assignedTo: 'Support Team B',
-    date: '2023-06-18',
-    description: 'Client reset password using 2FA OTP link, but received error code ERR_AUTH_SESSION_EXPIRED on next login attempt.',
-    messages: [
-      { sender: 'Nathan Brooks', time: '2023-06-18 09:20', text: 'Password reset link seemed to expire after I typed the new password.', isAdmin: false }
-    ]
-  },
-  {
-    id: 'tkt-4',
-    ticketId: 'TKT004',
-    createdBy: 'Maya Patel',
-    subject: 'Order not executing at market price',
-    category: 'TRADING',
-    priority: 'HIGH',
-    status: 'RESOLVED',
-    assignedTo: 'Tech Team',
-    date: '2023-06-15',
-    description: 'Market order executed with 0.8% slippage due to fast market volatility during central bank rate announcement.',
-    messages: [
-      { sender: 'Maya Patel', time: '2023-06-15 11:32', text: 'My BTC/INR market order filled 150 points above the displayed ticker price.', isAdmin: false },
-      { sender: 'Tech Team', time: '2023-06-15 12:10', text: 'Order execution log verified: Market order swept depth of book at 11:32:04 during high spread. Execution was correct per exchange rules.', isAdmin: true }
-    ]
-  },
-  {
-    id: 'tkt-5',
-    ticketId: 'TKT005',
-    createdBy: 'Isabella Torres',
-    subject: 'Deposit not reflected after 24 hours',
-    category: 'DEPOSIT',
-    priority: 'MEDIUM',
-    status: 'OPEN',
-    assignedTo: 'Finance Team',
-    date: '2023-06-23',
-    description: 'Client initiated UPI payment of ₹25,000 via HDFC bank. UPI reference number is 317822910382. Wallet balance not credited yet.',
-    messages: [
-      { sender: 'Isabella Torres', time: '2023-06-23 08:45', text: 'UPI transfer ₹25,000 was debited from my bank but TradeMatrix balance still shows previous amount.', isAdmin: false }
-    ]
-  }
-];
-
 interface SupportViewProps {
   onNotify?: (msg: string, type?: 'info' | 'success' | 'warning') => void;
   currentUser?: { role?: string; name?: string } | null;
@@ -118,7 +38,7 @@ interface SupportViewProps {
 export const SupportView: React.FC<SupportViewProps> = ({ onNotify, currentUser }) => {
   const canApprove = hasPermission(currentUser?.role, 'SUPPORT', 'APPROVE');
   const canEdit = hasPermission(currentUser?.role, 'SUPPORT', 'EDIT');
-  const [tickets, setTickets] = useState<SupportTicketItem[]>(INITIAL_TICKETS);
+  const [tickets, setTickets] = useState<SupportTicketItem[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [priorityFilter, setPriorityFilter] = useState('ALL');
@@ -131,10 +51,10 @@ export const SupportView: React.FC<SupportViewProps> = ({ onNotify, currentUser 
 
   // Fetch live support tickets from backend API
   useEffect(() => {
-    fetch('/api/admin/support')
+    fetch('/api/admin/support', { credentials: 'include' })
       .then(res => (res.ok ? res.json() : null))
       .then(data => {
-        if (Array.isArray(data) && data.length > 0) {
+        if (Array.isArray(data)) {
           const mapped: SupportTicketItem[] = data.map((d: any) => ({
             id: d.id,
             ticketId: d.ticket_id || d.ticketId || d.id,
@@ -159,7 +79,7 @@ export const SupportView: React.FC<SupportViewProps> = ({ onNotify, currentUser 
         }
       })
       .catch(() => {
-        // Fallback to INITIAL_TICKETS seamlessly
+        setTickets([]);
       });
   }, []);
 

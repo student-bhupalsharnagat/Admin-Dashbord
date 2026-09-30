@@ -373,6 +373,34 @@ export interface DashboardKPIs {
     badge?: string;
     subtitle?: string;
   };
+  period_turnover?: {
+    value?: string | number;
+    raw?: number;
+    badge?: string;
+    subtitle?: string;
+  };
+}
+
+export interface ClientRegistrationPoint {
+  month: string;
+  count: number;
+}
+
+export interface AssetAllocationSlice {
+  name: string;
+  value: number;
+  color: string;
+  raw?: number;
+}
+
+export interface RecentRegistration {
+  client_id: string;
+  name: string;
+  broker: string;
+  kyc_status: 'APPROVED' | 'PENDING' | 'REJECTED' | 'UNDER_REVIEW';
+  account_status: 'ACTIVE' | 'PENDING' | 'SUSPENDED';
+  wallet_balance: number;
+  pl: number;
 }
 
 export interface VolumeCommissionChartPoint {
@@ -390,8 +418,14 @@ export interface ClientGrowthChartPoint {
 export interface DailyPLPoint {
   day: string;
   displayDay: string;
-  pl: number;          // in thousands
+  pl: number;          // in thousands of INR
   isProfit: boolean;
+}
+
+export interface DailyPLTrend {
+  data: DailyPLPoint[];
+  mtdBadge: string;
+  rawTotal: number;
 }
 
 export interface WhiteLabelConfig {
@@ -555,12 +589,16 @@ export interface SubscriptionPlan {
 }
 
 export interface DashboardData {
-  kpis: DashboardKPIs;
+  kpis: DashboardKPIs | null;
   volumeCommission: VolumeCommissionChartPoint[];
   clientGrowth: ClientGrowthChartPoint[];
+  newRegistrations: ClientRegistrationPoint[];
+  assetAllocation: AssetAllocationSlice[];
   dailyPL: DailyPLPoint[];
   dailyPLBadge?: string;
+  dailyPLRawTotal?: number;
   recentTrades: Trade[];
+  recentRegistrations: RecentRegistration[];
   pendingKYC: KYCRecord[];
   tenants: Tenant[];
 }

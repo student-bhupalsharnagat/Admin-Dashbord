@@ -386,7 +386,7 @@ export const initialClientsData = [
 // Normalization helpers to ensure both initial static mock data and backend API entities render seamlessly without crashes
 const normalizeMaster = (m: any) => ({
   ...m,
-  id: String(m.id || `MST-${Math.random().toString().slice(2, 6)}`),
+  id: String(m.id || 'UNKNOWN-MASTER'),
   name: m.name || m.tenant_name || 'Master Admin',
   company: m.company || m.tenant_name || m.name || 'Master Corp',
   email: m.email || 'master@tradematrix.io',
@@ -395,16 +395,16 @@ const normalizeMaster = (m: any) => ({
   turnover: m.turnover || '₹0',
   commission: m.commission || m.commission_earned || '₹0',
   status: (m.status || 'ACTIVE').toUpperCase(),
-  created: m.created || m.created_at || '2023-01-15',
+  created: m.created || m.created_at || '—',
   region: m.region || 'North India',
-  phone: m.phone || '+91 98000 00000',
+  phone: m.phone || '—',
   tenant_id: m.tenant_id,
   tenant_name: m.tenant_name
 });
 
 const normalizeBroker = (b: any) => ({
   ...b,
-  id: String(b.id || `BRK-${Math.random().toString().slice(2, 6)}`),
+  id: String(b.id || 'UNKNOWN-BROKER'),
   name: b.name || 'Broker Admin',
   master: b.master || b.master_name || b.parent_master_name || 'Master Admin',
   master_id: b.master_id,
@@ -415,15 +415,15 @@ const normalizeBroker = (b: any) => ({
   turnover: b.turnover || '₹0',
   commission: b.commission || b.commission_earned || '₹0',
   status: (b.status || 'ACTIVE').toUpperCase(),
-  created: b.created || b.created_at || '2023-01-15',
-  phone: b.phone || '+91 98000 00000',
+  created: b.created || b.created_at || '—',
+  phone: b.phone || '—',
   tenant_id: b.tenant_id,
   tenant_name: b.tenant_name
 });
 
 const normalizeSubBroker = (sb: any) => ({
   ...sb,
-  id: String(sb.id || `SBRK-${Math.random().toString().slice(2, 6)}`),
+  id: String(sb.id || 'UNKNOWN-SUB-BROKER'),
   name: sb.name || 'Sub-Broker Admin',
   parentBroker: sb.parentBroker || sb.broker_name || sb.parent_broker_name || 'Broker Admin',
   broker_id: sb.broker_id,
@@ -432,18 +432,18 @@ const normalizeSubBroker = (sb: any) => ({
   turnover: sb.turnover || '₹0',
   commission: sb.commission || sb.commission_earned || '₹0',
   status: (sb.status || 'ACTIVE').toUpperCase(),
-  created: sb.created || sb.created_at || '2023-01-15',
-  phone: sb.phone || '+91 98000 00000',
+  created: sb.created || sb.created_at || '—',
+  phone: sb.phone || '—',
   tenant_id: sb.tenant_id,
   tenant_name: sb.tenant_name
 });
 
 const normalizeClient = (c: any) => ({
   ...c,
-  id: String(c.id || `CLI-${Math.random().toString().slice(2, 6)}`),
+  id: String(c.id || 'UNKNOWN-CLIENT'),
   name: c.name || 'Client Trader',
   email: c.email || 'trader@tradematrix.io',
-  phone: c.phone || '+91 98000 00000',
+  phone: c.phone || '—',
   master: c.master || c.master_name || 'Master Admin',
   broker: c.broker || c.broker_name || 'Broker Admin',
   subBroker: c.subBroker || c.sub_broker_name || c.parent_sub_broker_name || 'Sub-Broker Admin',
@@ -454,7 +454,7 @@ const normalizeClient = (c: any) => ({
   margin: c.margin || '₹0',
   pl: c.pl || (c.todays_pl !== undefined ? (c.todays_pl >= 0 ? `+₹${c.todays_pl}` : `-₹${Math.abs(c.todays_pl)}`) : '+₹0'),
   trades: typeof c.trades === 'number' ? c.trades : (c.open_positions_count ?? 0),
-  joined: c.joined || c.created_at || '2023-01-15',
+  joined: c.joined || c.created_at || '—',
   tenant_id: c.tenant_id,
   tenant_name: c.tenant_name
 });
@@ -839,7 +839,7 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
           status: formData.status || 'ACTIVE',
           created: today,
           region: formData.region || 'West (Mumbai)',
-          phone: formData.phone || '+91 98000 00000'
+          phone: formData.phone || '—'
         };
         const res = await fetch('/api/admin/masters', {
           method: 'POST',

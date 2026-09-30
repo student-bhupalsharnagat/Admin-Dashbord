@@ -30,84 +30,6 @@ export interface DetailedTradeItem {
   clearingBroker?: string;
 }
 
-const defaultTradesData: DetailedTradeItem[] = [
-  {
-    tradeId: 'TRD001',
-    orderId: 'ORD001',
-    client: 'Alexander Hunt',
-    clientId: 'CLT001',
-    symbol: 'EUR/INR',
-    side: 'BUY',
-    quantity: '100,000',
-    execPrice: '1.088',
-    fees: '$10',
-    timestamp: '2023-06-23 10:14:25',
-    assetClass: 'Forex',
-    executionVenue: 'NSE Currency Clearing',
-    clearingBroker: 'Apex Capital Group'
-  },
-  {
-    tradeId: 'TRD002',
-    orderId: 'ORD002',
-    client: 'Maya Patel',
-    clientId: 'CLT004',
-    symbol: 'BTC/INR',
-    side: 'SELL',
-    quantity: '0.5',
-    execPrice: '30,118',
-    fees: '$15.06',
-    timestamp: '2023-06-23 10:22:48',
-    assetClass: 'Crypto',
-    executionVenue: 'Institutional Liquidity Hub',
-    clearingBroker: 'Global Markets Ltd'
-  },
-  {
-    tradeId: 'TRD003',
-    orderId: 'ORD005',
-    client: 'Alexander Hunt',
-    clientId: 'CLT001',
-    symbol: 'TSLA',
-    side: 'SELL',
-    quantity: '20',
-    execPrice: '248.15',
-    fees: '$4.96',
-    timestamp: '2023-06-23 12:00:03',
-    assetClass: 'Equities',
-    executionVenue: 'US Direct DMA',
-    clearingBroker: 'Apex Capital Group'
-  },
-  {
-    tradeId: 'TRD004',
-    orderId: 'ORD007',
-    client: 'Isabella Torres',
-    clientId: 'CLT006',
-    symbol: 'AMZN',
-    side: 'BUY',
-    quantity: '10',
-    execPrice: '131.2',
-    fees: '$1.31',
-    timestamp: '2023-06-22 15:30:00',
-    assetClass: 'Equities',
-    executionVenue: 'US Direct DMA',
-    clearingBroker: 'Global Markets Ltd'
-  },
-  {
-    tradeId: 'TRD005',
-    orderId: 'ORD008',
-    client: 'Maya Patel',
-    clientId: 'CLT004',
-    symbol: 'EUR/INR',
-    side: 'BUY',
-    quantity: '200,000',
-    execPrice: '1.085',
-    fees: '$20',
-    timestamp: '2023-06-22 09:10:00',
-    assetClass: 'Forex',
-    executionVenue: 'NSE Currency Clearing',
-    clearingBroker: 'Global Markets Ltd'
-  }
-];
-
 interface TradesViewProps {
   initialSelectedTrade?: Trade | null;
   initialTrades?: Trade[] | DetailedTradeItem[];
@@ -120,7 +42,7 @@ export const TradesView: React.FC<TradesViewProps> = ({
   onNavigateToClient,
   onNotify
 }) => {
-  const [trades, setTrades] = useState<DetailedTradeItem[]>(defaultTradesData);
+  const [trades, setTrades] = useState<DetailedTradeItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -133,24 +55,24 @@ export const TradesView: React.FC<TradesViewProps> = ({
     const fetchTrades = async () => {
       setIsLoading(true);
       try {
-        const res = await fetch('/api/admin/trades');
+        const res = await fetch('/api/admin/trades', { credentials: 'include' });
         if (!res.ok) throw new Error(`HTTP error ${res.status}`);
         const data = await res.json();
-        if (isMounted && Array.isArray(data) && data.length > 0) {
+        if (isMounted && Array.isArray(data)) {
           const mapped: DetailedTradeItem[] = data.map((t: any, idx: number) => ({
-            tradeId: t.id || t.tradeId || `TRD${String(idx + 1).padStart(3, '0')}`,
-            orderId: t.order_id || t.orderId || `ORD${String(idx + 1).padStart(3, '0')}`,
-            client: t.client_name || t.client || 'Client Trader',
+            tradeId: t.trade_id || t.tradeId || t.id || `TRD${String(idx + 1).padStart(3, '0')}`,
+            orderId: t.order_id || t.orderId || '—',
+            client: t.client_name || t.client || 'Unknown client',
             clientId: t.client_id || t.clientId,
-            symbol: t.symbol || 'EUR/INR',
+            symbol: t.symbol || '—',
             side: (t.side || 'BUY').toUpperCase() as 'BUY' | 'SELL',
-            quantity: typeof t.quantity === 'number' ? t.quantity.toLocaleString() : String(t.quantity || '100,000'),
-            execPrice: String(t.price || t.execPrice || '1.088'),
-            fees: t.fees ? (String(t.fees).startsWith('$') || String(t.fees).startsWith('₹') ? String(t.fees) : `₹${t.fees}`) : '₹10',
-            timestamp: t.timestamp || t.created_at || '2023-06-23 10:14:25',
-            assetClass: t.asset_class || t.assetClass || 'Forex',
-            executionVenue: t.execution_venue || t.executionVenue || 'NSE Currency Clearing',
-            clearingBroker: t.clearing_broker || t.clearingBroker || 'Apex Capital Group'
+            quantity: t.quantity != null ? String(t.quantity) : '0',
+            execPrice: t.price != null || t.execPrice != null ? String(t.price ?? t.execPrice) : '—',
+            fees: t.fees != null ? String(t.fees) : '—',
+            timestamp: t.timestamp || t.created_at || '—',
+            assetClass: t.asset_class || t.assetClass || '—',
+            executionVenue: t.exchange || t.execution_venue || t.executionVenue || '—',
+            clearingBroker: t.tenant_name || t.clearing_broker || t.clearingBroker || '—'
           }));
           setTrades(mapped);
           setLoadError(null);

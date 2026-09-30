@@ -10,6 +10,8 @@ interface KPICardProps {
   iconColor?: string;
   iconBg?: string;
   badgeColor?: string;
+  valueClassName?: string;
+  subtitleClassName?: string;
   onClick?: () => void;
 }
 
@@ -22,6 +24,8 @@ export const KPICard: React.FC<KPICardProps> = ({
   iconColor = 'text-blue-400',
   iconBg = 'bg-[#0f1d38]',
   badgeColor,
+  valueClassName = 'text-white',
+  subtitleClassName = 'text-emerald-400',
   onClick
 }) => {
   return (
@@ -44,13 +48,13 @@ export const KPICard: React.FC<KPICardProps> = ({
       </div>
 
       {/* Center: Large bold value */}
-      <div className="text-xl sm:text-2xl font-bold text-white tracking-tight leading-tight truncate my-0.5">
+      <div className={`text-xl sm:text-2xl font-bold tracking-tight leading-tight truncate my-0.5 ${valueClassName}`}>
         {value}
       </div>
 
       {/* Bottom: Trend / Subtitle */}
       {(subtitle || badge) && (
-        <div className="text-xs font-semibold text-emerald-400 mt-1 truncate flex items-center gap-1">
+        <div className={`text-xs font-semibold mt-1 truncate flex items-center gap-1 ${subtitleClassName || badgeColor || ''}`}>
           {subtitle || badge}
         </div>
       )}
