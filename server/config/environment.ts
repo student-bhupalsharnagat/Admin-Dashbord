@@ -26,12 +26,18 @@ export function validateAndLoadConfig(): AppConfig {
   const tradingPlatformTimeoutMs = parseInt(process.env.TRADING_PLATFORM_TIMEOUT_MS || '5000', 10);
   const databaseUrl = process.env.DATABASE_URL || '';
   const redisUrl = process.env.REDIS_URL;
-  const rawOrigins = process.env.ALLOWED_ORIGINS || '*';
+  const rawOrigins = process.env.ALLOWED_ORIGINS || (isProduction ? '' : '*');
   const allowedOrigins = rawOrigins.split(',').map(s => s.trim()).filter(Boolean);
   const port = parseInt(process.env.PORT || '3000', 10);
 
   // Production security validations
   if (isProduction) {
+    if (process.env.ALLOWED_ORIGINS === '*' || allowedOrigins.includes('*') || rawOrigins === '*') {
+      const errorMsg = '[Configuration Error] ALLOWED_ORIGINS cannot be "*" in production. Explicit trusted origins are required.';
+      console.error(errorMsg);
+      throw new Error(errorMsg);
+    }
+
     const missing: string[] = [];
     if (!jwtSecret || jwtSecret.length < 32) {
       missing.push('JWT_SECRET (must be at least 32 characters)');

@@ -49,10 +49,19 @@ export async function seedAuthAndRbac(skipTenantCheck = false): Promise<void> {
     );
   }
 
-  // 3. Precompute password hash for demo accounts ('password123')
-  const defaultPasswordHash = await bcrypt.hash('password123', 10);
+  // 3. Compute password hash for seed users
+  const isProduction = process.env.NODE_ENV === 'production';
+  const seedAdminPassword = process.env.SEED_ADMIN_PASSWORD;
 
-  const demoUsers = [
+  if (isProduction && !seedAdminPassword) {
+    console.warn('[Auth Seed] Production mode: SEED_ADMIN_PASSWORD is not set. Refusing to seed administrative users with default password.');
+    return;
+  }
+
+  const effectivePassword = seedAdminPassword || 'password123';
+  const defaultPasswordHash = await bcrypt.hash(effectivePassword, 10);
+
+  const adminUsers = [
     {
       id: 'usr_superadmin_01',
       tenant_id: null,
@@ -85,7 +94,10 @@ export async function seedAuthAndRbac(skipTenantCheck = false): Promise<void> {
       hierarchy_level: 'PLATFORM',
       hierarchy_id: null,
       phone: '+91 98200 99999'
-    },
+    }
+  ];
+
+  const demoAccounts = [
     {
       id: 'usr_tenantadmin_01',
       tenant_id: 'TNT-001',
@@ -190,7 +202,10 @@ export async function seedAuthAndRbac(skipTenantCheck = false): Promise<void> {
     }
   ];
 
-  for (const u of demoUsers) {
+  const shouldSeedDemoUsers = isProduction ? process.env.SEED_DEMO_USERS === 'true' : true;
+  const usersToSeed = shouldSeedDemoUsers ? [...adminUsers, ...demoAccounts] : adminUsers;
+
+  for (const u of usersToSeed) {
     await query(
       `INSERT INTO users (
         id, tenant_id, name, email, role, status, password_hash,

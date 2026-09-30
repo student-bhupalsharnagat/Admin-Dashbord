@@ -259,3 +259,58 @@ export async function requireHierarchyAccess(
     return false;
   }
 }
+
+/**
+ * In-memory IP rate limiter for login and register endpoints (10 requests/min/IP).
+ */
+interface AuthRateLimitRecord {
+  count: number;
+  resetTime: number;
+}
+
+const authRateLimitMap = new Map<string, AuthRateLimitRecord>();
+
+export function authRateLimiter(req: Request, res: Response, next: NextFunction) {
+  const forwarded = req.headers['x-forwarded-for'];
+  const ip = (typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : null) ||
+    req.socket.remoteAddress ||
+    '127.0.0.1';
+
+  const now = Date.now();
+  const windowMs = 60 * 1000; // 1 minute
+  const limit = 10;
+
+  const record = authRateLimitMap.get(ip);
+
+  if (!record || now > record.resetTime) {
+    authRateLimitMap.set(ip, { count: 1, resetTime: now + windowMs });
+    return next();
+  }
+
+  if (record.count >= limit) {
+    return res.status(429).json({
+      error: 'TOO_MANY_REQUESTS',
+      message: 'Too many authentication attempts from this IP address. Please try again after 1 minute.'
+    });
+  }
+
+  record.count += 1;
+
+  if (authRateLimitMap.size > 5000) {
+    for (const [k, v] of authRateLimitMap.entries()) {
+      if (now > v.resetTime) {
+        authRateLimitMap.delete(k);
+      }
+    }
+  }
+
+  return next();
+}
+
+export function resetAuthRateLimit(ip?: string) {
+  if (ip) {
+    authRateLimitMap.delete(ip);
+  } else {
+    authRateLimitMap.clear();
+  }
+}

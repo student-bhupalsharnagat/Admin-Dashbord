@@ -1050,7 +1050,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       id: r.id,
       client_code: r.client_code,
       sub_broker_id: r.sub_broker_id,
-      sub_broker_name: r.parent_sub_broker_name || r.sub_broker_name || 'Sub-Broker Admin',
+      sub_broker_name: r.parent_sub_broker_name || r.sub_broker_name || (r.sub_broker_id ? 'Sub-Broker Admin' : 'Unassigned'),
       broker_name: 'Apex Broking',
       master_name: 'Alpha Prime Master',
       tenant_id: r.tenant_id,
@@ -1068,19 +1068,53 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     }));
   }
 
+  async getTradingTenantId(adminTenantId: string): Promise<string | undefined> {
+    const res = await this.executeQuery(
+      'SELECT trading_tenant_id FROM tenants WHERE id = $1 LIMIT 1',
+      [adminTenantId]
+    );
+    return res.rows[0]?.trading_tenant_id || process.env.TRADING_TENANT_ID || adminTenantId;
+  }
+
+  async getAdminTenantIdByTradingTenantId(tradingTenantId: string): Promise<string | undefined> {
+    const res = await this.executeQuery(
+      'SELECT id FROM tenants WHERE trading_tenant_id = $1 OR id = $1 LIMIT 1',
+      [tradingTenantId]
+    );
+    if (res.rows.length > 0) return res.rows[0].id;
+    if (process.env.TRADING_TENANT_ID && tradingTenantId === process.env.TRADING_TENANT_ID) {
+      const envRes = await this.executeQuery(
+        'SELECT id FROM tenants WHERE trading_tenant_id = $1 OR id = $1 LIMIT 1',
+        [process.env.TRADING_TENANT_ID]
+      );
+      if (envRes.rows.length > 0) return envRes.rows[0].id;
+    }
+    const fallbackRes = await this.executeQuery(
+      "SELECT id FROM tenants WHERE status = 'ACTIVE' ORDER BY created_at ASC, id ASC LIMIT 1"
+    );
+    return fallbackRes.rows[0]?.id;
+  }
+
   async createClient(data: Partial<Client>): Promise<Client> {
     const id = data.id || `CLT-${Date.now().toString().slice(-4)}`;
-    let subBrokerId = data.sub_broker_id || 'SBRK-001';
+    let subBrokerId: string | null = data.sub_broker_id === 'UNASSIGNED' || data.sub_broker_id === undefined ? null : data.sub_broker_id;
     let tenantId = data.tenant_id;
-
-    // Verify parent sub-broker
-    const sbRes = await this.executeQuery('SELECT tenant_id, name FROM sub_brokers WHERE id = $1', [subBrokerId]);
     let subBrokerName = data.sub_broker_name;
-    if (sbRes.rows.length > 0) {
-      tenantId = tenantId || sbRes.rows[0].tenant_id;
-      subBrokerName = sbRes.rows[0].name;
+
+    if (subBrokerId) {
+      // Verify parent sub-broker
+      const sbRes = await this.executeQuery('SELECT tenant_id, name FROM sub_brokers WHERE id = $1', [subBrokerId]);
+      if (sbRes.rows.length > 0) {
+        tenantId = tenantId || sbRes.rows[0].tenant_id;
+        subBrokerName = sbRes.rows[0].name;
+      } else {
+        subBrokerId = null;
+        subBrokerName = 'Unassigned';
+        tenantId = tenantId || 'TNT-001';
+      }
     } else {
       tenantId = tenantId || 'TNT-001';
+      subBrokerName = 'Unassigned';
     }
 
     const clientCode = data.client_code || `CLT${id.replace(/[^0-9]/g, '').slice(-3) || '999'}`;
@@ -1098,7 +1132,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       id,
       tenantId,
       subBrokerId,
-      subBrokerName || 'Sub-Broker Admin',
+      subBrokerName || (subBrokerId ? 'Sub-Broker Admin' : 'Unassigned'),
       clientCode,
       data.name || 'New Client',
       data.email || 'client@tradematrix.io',
@@ -1111,11 +1145,13 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       0
     ]);
 
-    // Update parent sub-broker client count
-    await this.executeQuery(
-      'UPDATE sub_brokers SET clients_count = clients_count + 1 WHERE id = $1',
-      [subBrokerId]
-    );
+    // Update parent sub-broker client count if assigned
+    if (subBrokerId) {
+      await this.executeQuery(
+        'UPDATE sub_brokers SET clients_count = clients_count + 1 WHERE id = $1',
+        [subBrokerId]
+      );
+    }
 
     const r = res.rows[0];
 
@@ -1312,7 +1348,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     try {
       const s2sRes = await tradingPlatformClient.getClientOrders(cleanId, tenantId);
       const list = Array.isArray(s2sRes.data) ? s2sRes.data : (Array.isArray(s2sRes.data?.orders) ? s2sRes.data.orders : null);
-      if (s2sRes.success && list && list.length > 0) {
+      if (s2sRes.success && Array.isArray(list)) {
         return list.map((r: any) => ({
           id: r.id || r.order_id,
           order_id: r.order_id || r.id,
@@ -1356,7 +1392,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     try {
       const s2sRes = await tradingPlatformClient.getClientTrades(cleanId, tenantId);
       const list = Array.isArray(s2sRes.data) ? s2sRes.data : (Array.isArray(s2sRes.data?.trades) ? s2sRes.data.trades : null);
-      if (s2sRes.success && list && list.length > 0) {
+      if (s2sRes.success && Array.isArray(list)) {
         return list.map((r: any) => ({
           id: r.id || r.trade_id,
           trade_id: r.trade_id || r.id,
@@ -1406,7 +1442,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     try {
       const s2sRes = await tradingPlatformClient.getClientPositions(cleanId, tenantId);
       const list = Array.isArray(s2sRes.data) ? s2sRes.data : (Array.isArray(s2sRes.data?.positions) ? s2sRes.data.positions : null);
-      if (s2sRes.success && list && list.length > 0) {
+      if (s2sRes.success && Array.isArray(list)) {
         return list.map((r: any) => {
           const pnlNum = parseFloat(r.pnl || r.unrealized_pnl || '0');
           const buyPriceNum = parseFloat(r.buy_price || r.avg_price || '0');
@@ -1638,13 +1674,19 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
   async rejectFundDeposit(id: string, actor: string = 'Compliance Officer'): Promise<any> {
     const res = await this.executeQuery(`
       UPDATE fund_deposits
-      SET status = 'FAILED', notes = 'Rejected by ' || $1, updated_at = CURRENT_TIMESTAMP
+      SET status = 'REJECTED', notes = 'Rejected by ' || $1, updated_at = CURRENT_TIMESTAMP
       WHERE id = $2
       RETURNING *
     `, [actor, id]);
 
     if (res.rows.length > 0) {
       const dep = res.rows[0];
+      // Update fund_transactions projection if present
+      await this.executeQuery(
+        `UPDATE fund_transactions SET status = 'REJECTED', updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+        [id]
+      ).catch(() => {});
+
       await this.executeQuery(`
         INSERT INTO audit_logs (id, tenant_id, user_name, action, module, details, ip_address)
         VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -1689,8 +1731,12 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
 
     const res = await this.executeQuery(sql, params);
     return res.rows.map(r => ({
+      id: r.id,
       txnId: r.id,
       client: r.client_name,
+      client_name: r.client_name,
+      client_code: r.client_code,
+      client_id: r.client_id,
       amount: `₹${parseFloat(r.amount).toLocaleString('en-IN')}`,
       method: r.bank_name ? `${r.bank_name} (${r.bank_account_number ? r.bank_account_number.slice(-4) : 'Bank'})` : 'Bank Wire',
       reference: r.ifsc_code || r.id,
@@ -1763,13 +1809,19 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
   async rejectFundWithdrawal(id: string, actor: string = 'Compliance Officer'): Promise<any> {
     const res = await this.executeQuery(`
       UPDATE fund_withdrawals
-      SET status = 'FAILED', notes = 'Rejected by ' || $1, updated_at = CURRENT_TIMESTAMP
+      SET status = 'REJECTED', notes = 'Rejected by ' || $1, updated_at = CURRENT_TIMESTAMP
       WHERE id = $2
       RETURNING *
     `, [actor, id]);
 
     if (res.rows.length > 0) {
       const wdr = res.rows[0];
+      // Update fund_transactions projection if present
+      await this.executeQuery(
+        `UPDATE fund_transactions SET status = 'REJECTED', updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+        [id]
+      ).catch(() => {});
+
       await this.executeQuery(`
         INSERT INTO audit_logs (id, tenant_id, user_name, action, module, details, ip_address)
         VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -2055,11 +2107,15 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     const s2sRes = await tradingPlatformClient.sendEmergencySquareOff({
       positionId: id,
       actor,
-      reason: `Squared off by ${actor}`,
+      reason: `Square-off client position ${pos.id} for client ${pos.client_name}`,
       tenantId: pos.tenant_id
     });
 
-    // Update local DB source of truth
+    if (!s2sRes.success) {
+      throw new Error(`Trading Platform unreachable. Failed to square-off position ${id}.`);
+    }
+
+    // Update local DB source of truth only after Trading returns success
     await this.executeQuery(
       `UPDATE positions SET quantity = 0, pnl = 0, status = 'CLOSED', updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
       [id]
@@ -2070,13 +2126,13 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       VALUES ($1, $2, $3, $4, $5, $6, $7)
     `, [
       `LOG-${Date.now()}`, pos.tenant_id, actor, 'POSITION_SQUARE_OFF', 'RISK',
-      `Squared off position ${pos.id} (${pos.symbol}, qty: ${pos.quantity}) for client ${pos.client_name}. S2S status: ${s2sRes.success ? 'ACKNOWLEDGED' : 'STANDALONE_FALLBACK'}`,
+      `Squared off position ${pos.id} (${pos.symbol}, qty: ${pos.quantity}) for client ${pos.client_name}. S2S status: ACKNOWLEDGED`,
       '127.0.0.1'
     ]);
 
     return {
       success: true,
-      remoteAcknowledged: s2sRes.success,
+      remoteAcknowledged: true,
       message: `Position ${pos.symbol} squared off successfully`
     };
   }
@@ -2091,15 +2147,14 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     }
     const openPositions = await this.executeQuery(sql, params);
 
-    let remoteAck = true;
-    for (const pos of openPositions.rows) {
-      const s2sRes = await tradingPlatformClient.sendEmergencySquareOff({
-        positionId: pos.id,
-        actor,
-        reason,
-        tenantId: pos.tenant_id
-      });
-      if (!s2sRes.success) remoteAck = false;
+    const s2sRes = await tradingPlatformClient.sendEmergencySquareOff({
+      actor,
+      reason,
+      tenantId
+    });
+
+    if (!s2sRes.success) {
+      throw new Error(`Trading Platform unreachable. Failed to square-off open positions.`);
     }
 
     let updateSql = `UPDATE positions SET quantity = 0, pnl = 0, status = 'CLOSED', updated_at = CURRENT_TIMESTAMP WHERE status != 'CLOSED' AND quantity > 0`;
@@ -2116,14 +2171,14 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       VALUES ($1, $2, $3, $4, $5, $6, $7)
     `, [
       `LOG-${Date.now()}`, tenantId || 'TNT-001', actor, 'EMERGENCY_MARGIN_SQUARE_OFF', 'RISK',
-      `Emergency Margin Square-off triggered by ${actor}. Squared off ${count} positions. Reason: ${reason}`,
+      `Emergency Margin Square-off triggered by ${actor}. Squared off ${count} positions. S2S status: ACKNOWLEDGED. Reason: ${reason}`,
       '127.0.0.1'
     ]);
 
     return {
       squaredOffCount: count,
       message: `Emergency Margin Square-off executed. ${count} open positions squared off.`,
-      remoteAcknowledged: remoteAck
+      remoteAcknowledged: true
     };
   }
 
@@ -2178,10 +2233,11 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
 
   async createCommissionTransaction(data: any): Promise<any> {
     const id = data.id || `COM-${Date.now().toString().slice(-4)}`;
+    const dateStr = data.date || new Date().toISOString().split('T')[0];
     const res = await this.executeQuery(`
       INSERT INTO commission_transactions (
-        id, tenant_id, beneficiary, role, amount, currency, period, status, disbursed_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        id, tenant_id, beneficiary, role, amount, currency, period, status, disbursed_at, date
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       RETURNING *
     `, [
       id,
@@ -2192,7 +2248,8 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       data.currency || 'INR',
       data.period || new Date().toLocaleString('en-US', { month: 'short', year: 'numeric' }),
       data.status || 'PAID',
-      data.disbursed_at || data.date || new Date().toISOString()
+      data.disbursed_at || data.date || new Date().toISOString(),
+      dateStr
     ]);
     return res.rows[0];
   }
@@ -2249,6 +2306,10 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       reason
     });
 
+    if (!s2sRes.success) {
+      throw new Error(`Trading Platform unreachable. Failed to cancel all open orders.`);
+    }
+
     const tenantFilter = tenantId ? 'AND tenant_id = $1' : '';
     const params = tenantId ? [tenantId] : [];
 
@@ -2271,13 +2332,13 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       actor,
       'EMERGENCY_CANCEL_ALL_ORDERS',
       'EMERGENCY_CONTROLS',
-      `Cancelled ${cancelledCount} open orders. S2S status: ${s2sRes.success ? 'ACKNOWLEDGED' : 'STANDALONE_FALLBACK'}. Reason: ${reason}`,
+      `Cancelled ${cancelledCount} open orders. S2S status: ACKNOWLEDGED. Reason: ${reason}`,
       '127.0.0.1'
     ]);
 
     return {
       cancelledOrdersCount: cancelledCount,
-      remoteAcknowledged: s2sRes.success,
+      remoteAcknowledged: true,
       message: `Successfully cancelled ${cancelledCount} open orders.`
     };
   }
@@ -2327,6 +2388,10 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     // S2S dispatch to Trading Platform
     const s2sRes = await tradingPlatformClient.sendEmergencyTrading(active, actor, reason, tenantId);
 
+    if (!s2sRes.success) {
+      throw new Error(`Trading Platform unreachable. Failed to ${active ? 'resume' : 'halt'} trading.`);
+    }
+
     await this.executeQuery(`
       INSERT INTO emergency_controls (
         id, global_trading_active, trading_reason, trading_paused_at, trading_paused_by, updated_at
@@ -2353,7 +2418,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       actor,
       active ? 'GLOBAL_TRADING_RESUMED' : 'GLOBAL_TRADING_PAUSED',
       'EMERGENCY_CONTROLS',
-      `Trading ${active ? 'resumed' : 'suspended'} by ${actor}. S2S status: ${s2sRes.success ? 'ACKNOWLEDGED' : 'STANDALONE_FALLBACK'}. Reason: ${reason || 'N/A'}`
+      `Trading ${active ? 'resumed' : 'suspended'} by ${actor}. S2S status: ACKNOWLEDGED. Reason: ${reason || 'N/A'}`
     ]);
 
     return this.getEmergencyControls();
@@ -2365,6 +2430,10 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
 
     // S2S dispatch to Trading Platform
     const s2sRes = await tradingPlatformClient.sendEmergencyKillSwitch('TRIGGER', actor, reason, tenantId);
+
+    if (!s2sRes.success) {
+      throw new Error(`Trading Platform unreachable. Failed to activate kill-switch.`);
+    }
 
     await this.executeQuery(`
       UPDATE emergency_controls
@@ -2379,7 +2448,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         triggeredAt: new Date().toISOString(),
         reason: reason || 'Master Kill-Switch Triggered',
         ipAddress: '103.21.58.14',
-        s2sStatus: s2sRes.success ? 'ACKNOWLEDGED' : 'STANDALONE'
+        s2sStatus: 'ACKNOWLEDGED'
       })
     ]);
 
@@ -2392,7 +2461,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       actor,
       'KILL_SWITCH_ACTIVATED',
       'EMERGENCY_CONTROLS',
-      `Master Kill-Switch triggered by ${actor}. S2S status: ${s2sRes.success ? 'ACKNOWLEDGED' : 'STANDALONE_FALLBACK'}. Reason: ${reason || 'N/A'}`
+      `Master Kill-Switch triggered by ${actor}. S2S status: ACKNOWLEDGED. Reason: ${reason || 'N/A'}`
     ]);
 
     return this.getEmergencyControls();
@@ -2400,6 +2469,10 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
 
   async deactivateKillSwitch(actor: string, reason: string, tenantId?: string): Promise<EmergencyControlsState> {
     const s2sRes = await tradingPlatformClient.sendEmergencyKillSwitch('RESET', actor, reason, tenantId);
+
+    if (!s2sRes.success) {
+      throw new Error(`Trading Platform unreachable. Failed to reset kill-switch.`);
+    }
 
     await this.executeQuery(`
       UPDATE emergency_controls
@@ -2418,7 +2491,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       actor,
       'KILL_SWITCH_DEACTIVATED',
       'EMERGENCY_CONTROLS',
-      `Kill-Switch deactivated by ${actor}. S2S status: ${s2sRes.success ? 'ACKNOWLEDGED' : 'STANDALONE_FALLBACK'}. Reason: ${reason || 'N/A'}`
+      `Kill-Switch deactivated by ${actor}. S2S status: ACKNOWLEDGED. Reason: ${reason || 'N/A'}`
     ]);
 
     return this.getEmergencyControls();
@@ -2426,6 +2499,10 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
 
   async setNewUserCreation(enabled: boolean, actor: string, tenantId?: string): Promise<EmergencyControlsState> {
     const s2sRes = await tradingPlatformClient.sendEmergencyRegistrations(enabled, actor, tenantId);
+
+    if (!s2sRes.success) {
+      throw new Error(`Trading Platform unreachable. Failed to ${enabled ? 'enable' : 'pause'} user registrations.`);
+    }
 
     await this.executeQuery(
       'UPDATE emergency_controls SET new_user_creation_enabled = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
@@ -2441,7 +2518,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       actor,
       enabled ? 'REGISTRATIONS_ENABLED' : 'REGISTRATIONS_PAUSED',
       'EMERGENCY_CONTROLS',
-      `New user registration ${enabled ? 'enabled' : 'paused'} by ${actor}. S2S status: ${s2sRes.success ? 'ACKNOWLEDGED' : 'STANDALONE_FALLBACK'}`
+      `New user registration ${enabled ? 'enabled' : 'paused'} by ${actor}. S2S status: ACKNOWLEDGED`
     ]);
 
     return this.getEmergencyControls();
@@ -2453,6 +2530,10 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
 
   async setApiAccess(enabled: boolean, actor: string, tenantId?: string): Promise<EmergencyControlsState> {
     const s2sRes = await tradingPlatformClient.sendEmergencyApiAccess(enabled, actor, tenantId);
+
+    if (!s2sRes.success) {
+      throw new Error(`Trading Platform unreachable. Failed to ${enabled ? 'enable' : 'pause'} API access.`);
+    }
 
     await this.executeQuery(
       'UPDATE emergency_controls SET api_access_enabled = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
@@ -2468,7 +2549,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       actor,
       enabled ? 'API_ACCESS_ENABLED' : 'API_ACCESS_PAUSED',
       'EMERGENCY_CONTROLS',
-      `API access ${enabled ? 'enabled' : 'paused'} by ${actor}. S2S status: ${s2sRes.success ? 'ACKNOWLEDGED' : 'STANDALONE_FALLBACK'}`
+      `API access ${enabled ? 'enabled' : 'paused'} by ${actor}. S2S status: ACKNOWLEDGED`
     ]);
 
     return this.getEmergencyControls();
@@ -2479,7 +2560,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
   }
 
   async freezeMaster(masterId: string, masterName: string, actor: string, reason: string, tenantId?: string): Promise<EmergencyControlsState> {
-    await tradingPlatformClient.sendEmergencyFreeze({
+    const s2sRes = await tradingPlatformClient.sendEmergencyFreeze({
       entityType: 'MASTER',
       entityId: masterId,
       action: 'FREEZE',
@@ -2487,24 +2568,30 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       reason,
       tenantId
     });
+    if (!s2sRes.success) {
+      throw new Error(`Trading Platform unreachable. Failed to freeze Master ${masterId}.`);
+    }
     await this.updateMasterStatus(masterId, 'SUSPENDED');
     return this.getEmergencyControls();
   }
 
   async unfreezeMaster(masterId: string, actor: string, tenantId?: string): Promise<EmergencyControlsState> {
-    await tradingPlatformClient.sendEmergencyFreeze({
+    const s2sRes = await tradingPlatformClient.sendEmergencyFreeze({
       entityType: 'MASTER',
       entityId: masterId,
       action: 'UNFREEZE',
       actor,
       tenantId
     });
+    if (!s2sRes.success) {
+      throw new Error(`Trading Platform unreachable. Failed to unfreeze Master ${masterId}.`);
+    }
     await this.updateMasterStatus(masterId, 'ACTIVE');
     return this.getEmergencyControls();
   }
 
   async freezeBroker(brokerId: string, brokerName: string, actor: string, reason: string, tenantId?: string): Promise<EmergencyControlsState> {
-    await tradingPlatformClient.sendEmergencyFreeze({
+    const s2sRes = await tradingPlatformClient.sendEmergencyFreeze({
       entityType: 'BROKER',
       entityId: brokerId,
       action: 'FREEZE',
@@ -2512,24 +2599,30 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       reason,
       tenantId
     });
+    if (!s2sRes.success) {
+      throw new Error(`Trading Platform unreachable. Failed to freeze Broker ${brokerId}.`);
+    }
     await this.updateBrokerStatus(brokerId, 'SUSPENDED');
     return this.getEmergencyControls();
   }
 
   async unfreezeBroker(brokerId: string, actor: string, tenantId?: string): Promise<EmergencyControlsState> {
-    await tradingPlatformClient.sendEmergencyFreeze({
+    const s2sRes = await tradingPlatformClient.sendEmergencyFreeze({
       entityType: 'BROKER',
       entityId: brokerId,
       action: 'UNFREEZE',
       actor,
       tenantId
     });
+    if (!s2sRes.success) {
+      throw new Error(`Trading Platform unreachable. Failed to unfreeze Broker ${brokerId}.`);
+    }
     await this.updateBrokerStatus(brokerId, 'ACTIVE');
     return this.getEmergencyControls();
   }
 
   async freezeUser(userId: string, userName: string, actor: string, reason: string, tenantId?: string): Promise<EmergencyControlsState> {
-    await tradingPlatformClient.sendEmergencyFreeze({
+    const s2sRes = await tradingPlatformClient.sendEmergencyFreeze({
       entityType: 'CLIENT',
       entityId: userId,
       action: 'FREEZE',
@@ -2537,23 +2630,45 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       reason,
       tenantId
     });
+    if (!s2sRes.success) {
+      throw new Error(`Trading Platform unreachable. Failed to freeze Client ${userId}.`);
+    }
     await this.updateClientStatus(userId, 'SUSPENDED');
     return this.getEmergencyControls();
   }
 
   async unfreezeUser(userId: string, actor: string, tenantId?: string): Promise<EmergencyControlsState> {
-    await tradingPlatformClient.sendEmergencyFreeze({
+    const s2sRes = await tradingPlatformClient.sendEmergencyFreeze({
       entityType: 'CLIENT',
       entityId: userId,
       action: 'UNFREEZE',
       actor,
       tenantId
     });
+    if (!s2sRes.success) {
+      throw new Error(`Trading Platform unreachable. Failed to unfreeze Client ${userId}.`);
+    }
     await this.updateClientStatus(userId, 'ACTIVE');
     return this.getEmergencyControls();
   }
 
-  async executeAccountAction(entityType: string, entityId: string, action: string, actor: string, reason: string): Promise<any> {
+  async executeAccountAction(entityType: string, entityId: string, action: string, actor: string, reason: string, tenantId?: string): Promise<any> {
+    const s2sAction = action === 'SUSPEND' || action === 'FREEZE' ? 'FREEZE' : 'UNFREEZE';
+    const normType = entityType.includes('master') ? 'MASTER' : (entityType.includes('broker') && !entityType.includes('sub') ? 'BROKER' : 'CLIENT');
+    
+    const s2sRes = await tradingPlatformClient.sendEmergencyFreeze({
+      entityType: normType,
+      entityId,
+      action: s2sAction,
+      actor,
+      reason,
+      tenantId
+    });
+
+    if (!s2sRes.success) {
+      throw new Error(`Trading Platform unreachable. Could not perform ${action} on ${entityType} ${entityId}.`);
+    }
+
     if (entityType === 'masters') {
       return this.updateMasterStatus(entityId, action === 'SUSPEND' ? 'SUSPENDED' : 'ACTIVE');
     } else if (entityType === 'brokers') {

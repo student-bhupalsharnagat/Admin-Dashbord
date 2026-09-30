@@ -169,11 +169,26 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin, tenants = [] })
         throw new Error('No user data returned from authentication server');
       }
     } catch (err: any) {
-      // If server returned invalid credentials or offline, fallback smoothly
+      // If server returned invalid credentials or offline, fallback smoothly via real demo session
       const matchingDemo = Object.values(DEMO_ACCOUNTS).find(
         d => d.email.toLowerCase() === email.trim().toLowerCase()
       );
       if (matchingDemo) {
+        try {
+          const demoRes = await fetch('/api/auth/demo', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ role: matchingDemo.role }),
+            credentials: 'include'
+          });
+          const demoData = await demoRes.json();
+          if (demoRes.ok && demoData.user) {
+            onLogin(demoData.user);
+            return;
+          }
+        } catch {
+          // Ignore
+        }
         onLogin({
           id: `usr_${matchingDemo.role.toLowerCase()}`,
           name: matchingDemo.name,

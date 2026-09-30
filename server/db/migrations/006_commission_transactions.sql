@@ -12,4 +12,8 @@ CREATE TABLE IF NOT EXISTS commission_transactions (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+ALTER TABLE commission_transactions ADD COLUMN IF NOT EXISTS currency VARCHAR(16) NOT NULL DEFAULT 'INR';
+ALTER TABLE commission_transactions ADD COLUMN IF NOT EXISTS disbursed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE commission_transactions ALTER COLUMN date DROP NOT NULL;
+
 CREATE INDEX IF NOT EXISTS idx_commission_transactions_tenant ON commission_transactions(tenant_id);

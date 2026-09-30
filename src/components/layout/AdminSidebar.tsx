@@ -144,16 +144,16 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
       {mobileOpen && (
         <div
           onClick={onCloseMobile}
-          className="fixed inset-0 z-40 bg-black/75 backdrop-blur-xs lg:hidden transition-opacity"
+          className="fixed inset-0 z-40 bg-black/75 backdrop-blur-xs md:hidden transition-opacity"
           aria-hidden="true"
         />
       )}
 
       {/* Sidebar Container */}
       <aside
-        className={`fixed lg:static top-0 bottom-0 left-0 z-50 lg:z-auto bg-[#070d19] border-r border-[#131d33] flex flex-col transition-all duration-300 select-none shrink-0 ${
-          mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
-        } ${collapsed ? 'lg:w-20 w-64' : 'w-64'}`}
+        className={`fixed md:static top-0 bottom-0 left-0 z-50 md:z-auto bg-[#070d19] border-r border-[#131d33] flex flex-col transition-all duration-300 select-none shrink-0 safe-top safe-bottom ${
+          mobileOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
+        } ${collapsed ? 'md:w-20 w-64' : 'w-64'}`}
       >
         {/* Brand Header - TradeMatrix Logo and Toggle */}
         <div className="h-14 flex items-center justify-between px-4 border-b border-[#131d33] shrink-0">
@@ -174,7 +174,7 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
               <button
                 onClick={onToggleCollapse}
                 title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-                className="hidden lg:flex p-1.5 rounded text-slate-500 hover:text-white hover:bg-[#111c34] transition-colors cursor-pointer"
+                className="hidden md:flex p-1.5 rounded text-slate-500 hover:text-white hover:bg-[#111c34] transition-colors cursor-pointer"
               >
                 {collapsed ? <ChevronRight size={15} /> : <ChevronLeft size={15} />}
               </button>
@@ -184,7 +184,7 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
             <button
               onClick={onCloseMobile}
               title="Close navigation"
-              className="lg:hidden p-1.5 rounded text-slate-400 hover:text-white hover:bg-[#111c34] transition-colors cursor-pointer"
+              className="md:hidden p-2 rounded-lg text-slate-400 hover:text-white hover:bg-[#111c34] transition-colors cursor-pointer min-h-[40px] min-w-[40px] flex items-center justify-center"
             >
               <X size={18} />
             </button>
@@ -217,7 +217,7 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
                 key={item.id}
                 onClick={() => handleItemClick(item.id)}
                 title={collapsed && !mobileOpen ? item.label : undefined}
-                className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-xs font-medium transition-all group relative cursor-pointer ${
+                className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-xs font-medium transition-all group relative cursor-pointer min-h-[40px] ${
                   isActive
                     ? 'bg-[#0d2246] border border-[#1d4ed8] text-white shadow-sm font-semibold'
                     : 'text-slate-400 hover:text-slate-200 hover:bg-[#0d172c] border border-transparent'
@@ -254,7 +254,7 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
         <div className="p-3 border-t border-[#131d33] shrink-0 space-y-1.5">
           {/* Theme Switch Pill */}
           {(!collapsed || mobileOpen) ? (
-            <div className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-[#0d172c] border border-[#131d33] text-xs">
+            <div className="flex items-center justify-between px-3 py-2 rounded-lg bg-[#0d172c] border border-[#131d33] text-xs min-h-[40px]">
               <div className="flex items-center gap-2 text-slate-300">
                 {theme === 'dark' ? (
                   <Moon size={13} className="text-blue-400" />
@@ -287,7 +287,7 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
               onClick={toggleTheme}
               title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
               aria-label="Toggle Theme"
-              className="w-full flex items-center justify-center p-2 rounded-lg text-slate-400 hover:text-white hover:bg-[#111c34] transition-colors cursor-pointer"
+              className="w-full flex items-center justify-center p-2 rounded-lg text-slate-400 hover:text-white hover:bg-[#111c34] transition-colors cursor-pointer min-h-[40px]"
             >
               {theme === 'dark' ? (
                 <Sun size={16} className="text-amber-400" />
@@ -301,7 +301,7 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
             onClick={() => {
               if (onLogout) onLogout();
             }}
-            className={`w-full flex items-center gap-3 px-3.5 py-2 rounded-lg text-xs font-medium text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer ${
+            className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-xs font-medium text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer min-h-[40px] ${
               collapsed && !mobileOpen ? 'justify-center' : ''
             }`}
             title="Logout"

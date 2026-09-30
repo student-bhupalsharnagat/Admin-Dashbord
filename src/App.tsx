@@ -28,6 +28,7 @@ import { TradingPlatformView } from './views/TradingPlatformView';
 import { SystemToolsView } from './views/SystemToolsView';
 import { RbacView } from './components/views/RbacView';
 import { useTheme } from './context/ThemeContext';
+import { apiFetch } from './utils/api';
 import { canAccessTab } from './utils/rbac';
 import { ShieldAlert } from 'lucide-react';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -138,12 +139,12 @@ export default function App() {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
       controller.abort();
-    }, 1200);
+    }, 8000);
 
     async function checkAuthSession() {
       try {
         // Pre-fetch public active tenants
-        fetch('/api/public/tenants', { signal: controller.signal })
+        apiFetch('/api/public/tenants', { signal: controller.signal })
           .then(res => res.ok ? res.json() : null)
           .then(list => {
             if (Array.isArray(list) && list.length > 0 && isMounted) {
@@ -152,8 +153,7 @@ export default function App() {
           })
           .catch(() => {});
 
-        const res = await fetch('/api/auth/me', {
-          credentials: 'include',
+        const res = await apiFetch('/api/auth/me', {
           signal: controller.signal
         });
 
@@ -281,7 +281,7 @@ export default function App() {
       const url = selectedTenantScope
         ? `/api/admin/dashboard?tenantId=${selectedTenantScope}`
         : '/api/admin/dashboard';
-      const res = await fetch(url, { credentials: 'include' });
+      const res = await apiFetch(url);
       if (res.ok) {
         const data: any = await res.json();
         setDashboardError(null);
@@ -300,10 +300,15 @@ export default function App() {
         if (data.recentTrades && Array.isArray(data.recentTrades)) setRecentTrades(data.recentTrades);
         if (data.pendingKYC && Array.isArray(data.pendingKYC)) setPendingKYC(data.pendingKYC);
       } else {
-        setDashboardError('Failed to fetch dashboard live telemetry from PostgreSQL');
+        if (res.status === 401 || res.status === 403) {
+          setDashboardError(null);
+        } else {
+          setDashboardError('Failed to fetch dashboard live telemetry from PostgreSQL');
+        }
         setDashboardData(prev => ({ ...prev, kpis: null }));
       }
     } catch (err: any) {
+      if (err.name === 'AbortError') return;
       console.warn('Dashboard API fetch error:', err);
       setDashboardError(err.message || 'Dashboard live telemetry unavailable');
       setDashboardData(prev => ({ ...prev, kpis: null }));
@@ -320,13 +325,13 @@ export default function App() {
     try {
       const scopeParam = selectedTenantScope ? `?tenantId=${selectedTenantScope}` : '';
       const [mRes, bRes, sbRes, cRes, kRes, tRes, tnRes] = await Promise.all([
-        fetch(`/api/admin/masters${scopeParam}`, { credentials: 'include' }),
-        fetch(`/api/admin/brokers${scopeParam}`, { credentials: 'include' }),
-        fetch(`/api/admin/sub-brokers${scopeParam}`, { credentials: 'include' }),
-        fetch(`/api/admin/clients${scopeParam}`, { credentials: 'include' }),
-        fetch(`/api/admin/kyc${scopeParam}`, { credentials: 'include' }),
-        fetch(`/api/admin/trades${scopeParam}`, { credentials: 'include' }),
-        fetch('/api/admin/tenants', { credentials: 'include' })
+        apiFetch(`/api/admin/masters${scopeParam}`),
+        apiFetch(`/api/admin/brokers${scopeParam}`),
+        apiFetch(`/api/admin/sub-brokers${scopeParam}`),
+        apiFetch(`/api/admin/clients${scopeParam}`),
+        apiFetch(`/api/admin/kyc${scopeParam}`),
+        apiFetch(`/api/admin/trades${scopeParam}`),
+        apiFetch('/api/admin/tenants')
       ]);
 
       if (mRes.ok) setMasters(await mRes.json());
