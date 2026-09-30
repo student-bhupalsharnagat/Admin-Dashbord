@@ -44,7 +44,7 @@ export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify }) => {
       const res = await fetch('/api/admin/positions');
       if (res.ok) {
         const data = await res.json();
-        setPositions(data);
+        setPositions(Array.isArray(data) ? data : []);
       }
     } catch (e) {
       console.error('Failed to fetch positions:', e);
@@ -72,8 +72,8 @@ export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify }) => {
 
   const filteredPositions = positions.filter(p => {
     return (
-      p.client.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      p.symbol.toLowerCase().includes(searchQuery.toLowerCase())
+      (p.client || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (p.symbol || '').toLowerCase().includes(searchQuery.toLowerCase())
     );
   });
 

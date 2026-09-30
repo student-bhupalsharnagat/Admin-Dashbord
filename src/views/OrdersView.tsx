@@ -12,7 +12,7 @@ import {
   DollarSign
 } from 'lucide-react';
 import { ClientDetailView } from '../components/clients/ClientDetailView';
-import { initialClientsData } from './HierarchyViews';
+import { Client } from '../types';
 
 export interface OrderItem {
   orderId: string;
@@ -32,13 +32,41 @@ export interface OrderItem {
 const initialOrdersData: OrderItem[] = [];
 
 interface OrdersViewProps {
+  clients?: Client[];
   onNotify?: (message: string, type?: 'info' | 'success' | 'warning') => void;
   onNavigateToClient?: (clientId?: string) => void;
   onNavigateToTrade?: (orderId?: string) => void;
   onOpenTradingPlatform?: (clientData?: any) => void;
 }
 
+function mapOrder(raw: any): OrderItem {
+  const statusRaw = String(raw.status || 'PENDING').toUpperCase();
+  const status: OrderItem['status'] =
+    statusRaw === 'EXECUTED' || statusRaw === 'FILLED' || statusRaw === 'SETTLED'
+      ? 'FILLED'
+      : statusRaw === 'CANCELLED' || statusRaw === 'REJECTED'
+      ? 'CANCELLED'
+      : 'PENDING';
+  const typeRaw = String(raw.type || raw.order_type || 'LIMIT').toUpperCase();
+  const type: OrderItem['type'] = typeRaw === 'MARKET' ? 'Market' : typeRaw.includes('STOP') ? 'Stop' : 'Limit';
+  const side = String(raw.side || 'BUY').toUpperCase() === 'SELL' ? 'SELL' : 'BUY';
+  return {
+    orderId: String(raw.orderId || raw.order_id || raw.id || '—'),
+    client: raw.client || raw.client_name || 'Unknown client',
+    clientId: raw.clientId || raw.client_id || raw.client_code,
+    symbol: raw.symbol || '—',
+    side,
+    quantity: raw.quantity != null ? String(raw.quantity) : '0',
+    type,
+    price: raw.price != null ? String(raw.price) : '—',
+    status,
+    created: raw.created || raw.created_at || '—',
+    exchange: raw.exchange
+  };
+}
+
 export const OrdersView: React.FC<OrdersViewProps> = ({
+  clients = [],
   onNotify,
   onNavigateToClient,
   onNavigateToTrade,
@@ -60,10 +88,10 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
 
   const fetchOrders = async () => {
     try {
-      const res = await fetch('/api/admin/orders');
+      const res = await fetch('/api/admin/orders', { credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
-        setOrders(data);
+        setOrders(Array.isArray(data) ? data.map(mapOrder) : []);
       }
     } catch (e) {
       console.error('Failed to fetch orders:', e);
@@ -75,29 +103,45 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
   }, []);
 
   const handleOpenClientDetail = (order: OrderItem) => {
-    const found = initialClientsData.find(
-      c => c.id === order.clientId || c.name.toLowerCase() === order.client.toLowerCase()
+    const found = clients.find(
+      c => c.id === order.clientId || c.client_code === order.clientId || c.name.toLowerCase() === order.client.toLowerCase()
     );
 
     if (found) {
-      setActiveClientDetail(found);
+      setActiveClientDetail({
+        id: found.client_code || found.id,
+        name: found.name,
+        email: found.email,
+        phone: found.phone || '—',
+        master: found.master_name || '—',
+        broker: found.broker_name || '—',
+        subBroker: found.sub_broker_name || '—',
+        kyc: found.kyc_status,
+        account: found.status,
+        balance: `₹${Number(found.wallet_balance || 0).toLocaleString('en-IN')}`,
+        netPl: `${found.todays_pl >= 0 ? '+' : '-'}₹${Math.abs(found.todays_pl || 0).toLocaleString('en-IN')}`,
+        totalOrders: found.open_positions_count || 0,
+        totalTrades: found.open_positions_count || 0,
+        created: found.created_at,
+        joined: found.created_at
+      });
     } else {
       setActiveClientDetail({
-        id: order.clientId || 'CLT001',
-        name: order.client,
-        email: `${order.client.toLowerCase().replace(/\s+/g, '.')}@mail.com`,
-        phone: '+1-555-3001',
-        master: 'Apex Capital',
-        broker: 'Ryan Chen',
-        subBroker: 'Tom Anderson',
-        kyc: 'APPROVED',
+        id: order.clientId || '—',
+        name: order.client || 'Unknown client',
+        email: '—',
+        phone: '—',
+        master: '—',
+        broker: '—',
+        subBroker: '—',
+        kyc: 'PENDING',
         account: 'ACTIVE',
-        balance: '₹25,400',
-        netPl: '+₹3,820',
-        totalOrders: 2,
-        totalTrades: 2,
-        created: '2023-04-01',
-        joined: '2023-04-01'
+        balance: '—',
+        netPl: '—',
+        totalOrders: 0,
+        totalTrades: 0,
+        created: order.created,
+        joined: order.created
       });
     }
   };
@@ -114,9 +158,9 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
 
   const filteredOrders = orders.filter(o => {
     const matchSearch =
-      o.symbol.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      o.client.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      o.orderId.toLowerCase().includes(searchQuery.toLowerCase());
+      (o.symbol || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (o.client || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (o.orderId || '').toLowerCase().includes(searchQuery.toLowerCase());
     const matchSide = sideFilter === 'All Sides' || o.side === sideFilter;
     const matchStatus = statusFilter === 'All Status' || o.status === statusFilter;
     return matchSearch && matchSide && matchStatus;

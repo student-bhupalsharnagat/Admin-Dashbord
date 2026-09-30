@@ -1316,10 +1316,22 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
   // ----------------------------------------------------
   async getClients(tenantId?: string, subBrokerId?: string): Promise<Client[]> {
     let sql = `
-      SELECT c.*, t.name as tenant_name, sb.name as parent_sub_broker_name
+      SELECT c.*, t.name as tenant_name, sb.name as parent_sub_broker_name,
+             b.name as parent_broker_name, m.name as parent_master_name,
+             COALESCE(pos.open_count, 0) as open_positions_count,
+             COALESCE(pos.open_pnl, 0) as open_pnl
       FROM clients c
       LEFT JOIN tenants t ON c.tenant_id = t.id
       LEFT JOIN sub_brokers sb ON c.sub_broker_id = sb.id
+      LEFT JOIN brokers b ON sb.broker_id = b.id
+      LEFT JOIN masters m ON b.master_id = m.id
+      LEFT JOIN (
+        SELECT client_id,
+               SUM(CASE WHEN status = 'OPEN' THEN 1 ELSE 0 END) as open_count,
+               COALESCE(SUM(CASE WHEN status = 'OPEN' THEN pnl ELSE 0 END), 0) as open_pnl
+        FROM positions
+        GROUP BY client_id
+      ) pos ON pos.client_id = c.id
       WHERE 1=1
     `;
     const params: any[] = [];
@@ -1340,20 +1352,20 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       id: r.id,
       client_code: r.client_code,
       sub_broker_id: r.sub_broker_id,
-      sub_broker_name: r.parent_sub_broker_name || r.sub_broker_name || 'Sub-Broker Admin',
-      broker_name: 'Apex Broking',
-      master_name: 'Alpha Prime Master',
+      sub_broker_name: r.parent_sub_broker_name || r.sub_broker_name || '—',
+      broker_name: r.parent_broker_name || '—',
+      master_name: r.parent_master_name || '—',
       tenant_id: r.tenant_id,
-      tenant_name: r.tenant_name || 'Alpha Prime Capital',
+      tenant_name: r.tenant_name || '—',
       name: r.name,
       email: r.email,
       phone: r.phone || '',
       status: r.status as 'ACTIVE' | 'SUSPENDED',
       kyc_status: (r.kyc_status === 'VERIFIED' ? 'APPROVED' : (r.kyc_status || 'PENDING')) as KYCStatus,
       wallet_balance: parseFloat(r.balance || '0'),
-      available_margin: parseFloat(r.equity || '0'),
-      todays_pl: 0,
-      open_positions_count: 0,
+      available_margin: Math.max(0, parseFloat(r.equity || '0') - parseFloat(r.margin_used || '0')),
+      todays_pl: parseFloat(r.open_pnl || '0'),
+      open_positions_count: parseInt(r.open_positions_count || '0', 10),
       created_at: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : '2026-01-01'
     }));
   }
@@ -1417,7 +1429,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         name: r.name,
         email: r.email,
         phone: r.phone,
-        initialBalance: parseFloat(r.balance) || 100000,
+        initialBalance: Number.isFinite(parseFloat(r.balance)) ? parseFloat(r.balance) : 0,
         subBrokerId: r.sub_broker_id,
         tenantId: r.tenant_id
       });
@@ -1426,22 +1438,26 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       console.warn(`[S2S] Client account ${r.id} created locally, S2S push queued/notified:`, syncErr?.message || syncErr);
     }
 
+    const refreshed = await this.getClients(r.tenant_id);
+    const mapped = refreshed.find(client => client.id === r.id);
+    if (mapped) return mapped;
+
     return {
       id: r.id,
       client_code: r.client_code,
       sub_broker_id: r.sub_broker_id,
       sub_broker_name: r.sub_broker_name,
-      broker_name: 'Apex Broking',
-      master_name: 'Alpha Prime Master',
+      broker_name: data.broker_name || '—',
+      master_name: data.master_name || '—',
       tenant_id: r.tenant_id,
-      tenant_name: 'Alpha Prime Capital',
+      tenant_name: data.tenant_name || '—',
       name: r.name,
       email: r.email,
       phone: r.phone,
       status: r.status as 'ACTIVE' | 'SUSPENDED',
       kyc_status: (r.kyc_status === 'VERIFIED' ? 'APPROVED' : (r.kyc_status || 'PENDING')) as KYCStatus,
-      wallet_balance: parseFloat(r.balance),
-      available_margin: parseFloat(r.equity),
+      wallet_balance: parseFloat(r.balance || '0'),
+      available_margin: Math.max(0, parseFloat(r.equity || '0') - parseFloat(r.margin_used || '0')),
       todays_pl: 0,
       open_positions_count: 0,
       created_at: new Date(r.created_at).toISOString().split('T')[0]

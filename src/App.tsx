@@ -924,6 +924,7 @@ export default function App() {
               {/* Orders View - matching user screenshot */}
               {activeTab === 'orders' && (
                 <OrdersView
+                  clients={clients}
                   onNotify={showToast}
                   onNavigateToClient={() => setActiveTab('clients')}
                   onNavigateToTrade={() => setActiveTab('trades')}
