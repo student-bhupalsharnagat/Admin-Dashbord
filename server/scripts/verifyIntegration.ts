@@ -261,7 +261,7 @@ async function runIntegrationVerification() {
   // 3.5 Assert Trades Store
   const tradeRows = await query('SELECT * FROM trades WHERE id = $1 OR trade_id = $2', [tradeId, tradeId]);
   const recentTrades = await activeTradingDataProvider.getRecentTrades(testTenantId);
-  const tradeInList = recentTrades.some(t => t.tradeId === tradeId || (t as any).id === tradeId);
+  const tradeInList = recentTrades.some(t => (t as any).tradeId === tradeId || t.id === tradeId);
   assertCheck(
     '3.5 Trades Store Updated with Ingested Trade',
     tradeRows.rows.length > 0 && tradeInList,
