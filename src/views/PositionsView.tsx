@@ -41,10 +41,28 @@ export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify }) => {
 
   const fetchPositions = async () => {
     try {
-      const res = await fetch('/api/admin/positions');
+      const res = await fetch('/api/admin/positions', { credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
-        setPositions(data);
+        if (Array.isArray(data)) {
+          const mapped: PositionItem[] = data.map((p: any, idx: number) => {
+            const pnlNum = typeof p.unrealizedPL === 'number' ? p.unrealizedPL : parseFloat(String(p.pnl || p.unrealized_pnl || 0));
+            return {
+              id: p.id || `POS-${idx + 1}`,
+              client: p.client || p.client_name || 'Retail Client',
+              symbol: p.symbol || 'NIFTY50',
+              qty: String(p.qty || p.quantity || '1'),
+              avgPrice: typeof p.avgPrice === 'number' ? `₹${p.avgPrice.toLocaleString('en-IN')}` : String(p.avgPrice || p.buy_price || '0'),
+              currentPrice: typeof p.currentPrice === 'number' ? `₹${p.currentPrice.toLocaleString('en-IN')}` : String(p.currentPrice || p.last_price || '0'),
+              unrealizedPL: typeof p.unrealizedPL === 'string' ? p.unrealizedPL : `${pnlNum >= 0 ? '+' : ''}₹${pnlNum.toLocaleString('en-IN')}`,
+              realizedPL: typeof p.realizedPL === 'string' ? p.realizedPL : '+₹0',
+              margin: typeof p.margin === 'string' ? p.margin : `₹${p.margin || '15,000'}`,
+              unrealizedPLPositive: p.unrealizedPLPositive !== undefined ? p.unrealizedPLPositive : pnlNum >= 0,
+              realizedPLPositive: p.realizedPLPositive !== undefined ? p.realizedPLPositive : true
+            };
+          });
+          setPositions(mapped);
+        }
       }
     } catch (e) {
       console.error('Failed to fetch positions:', e);
@@ -53,11 +71,33 @@ export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify }) => {
 
   useEffect(() => {
     fetchPositions();
+
+    // Real-time EventSource listener for position updates
+    let eventSource: EventSource | null = null;
+    try {
+      eventSource = new EventSource('/api/admin/events/stream');
+      eventSource.onmessage = (e) => {
+        try {
+          const evt = JSON.parse(e.data);
+          if (
+            evt?.eventType === 'position.updated' ||
+            evt?.eventType === 'position.closed' ||
+            evt?.eventType === 'trade.executed'
+          ) {
+            fetchPositions();
+          }
+        } catch {}
+      };
+    } catch {}
+
+    return () => {
+      if (eventSource) eventSource.close();
+    };
   }, []);
 
   const handleSquareOff = async (pos: PositionItem) => {
     try {
-      const res = await fetch(`/api/admin/positions/${pos.id}/square-off`, { method: 'POST' });
+      const res = await fetch(`/api/admin/positions/${pos.id}/square-off`, { method: 'POST', credentials: 'include' });
       if (res.ok) {
         fetchPositions();
         notify(`Position in ${pos.symbol} for ${pos.client} successfully squared off at market.`, 'success');

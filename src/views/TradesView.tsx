@@ -127,13 +127,35 @@ export const TradesView: React.FC<TradesViewProps> = ({
   const [sideFilter, setSideFilter] = useState<'All Sides' | 'BUY' | 'SELL'>('All Sides');
   const [selectedTrade, setSelectedTrade] = useState<DetailedTradeItem | null>(null);
 
+  // Synchronize when initialTrades prop updates from App.tsx SSE
+  useEffect(() => {
+    if (initialTrades && Array.isArray(initialTrades) && initialTrades.length > 0) {
+      const mapped: DetailedTradeItem[] = initialTrades.map((t: any, idx: number) => ({
+        tradeId: t.trade_id || t.tradeId || t.id || `TRD${String(idx + 1).padStart(3, '0')}`,
+        orderId: t.order_id || t.orderId || `ORD${String(idx + 1).padStart(3, '0')}`,
+        client: t.client_name || t.client || 'Client Trader',
+        clientId: t.client_id || t.clientId,
+        symbol: t.symbol || 'EUR/INR',
+        side: (t.side || 'BUY').toUpperCase() as 'BUY' | 'SELL',
+        quantity: typeof t.quantity === 'number' ? t.quantity.toLocaleString() : String(t.quantity || '100,000'),
+        execPrice: String(t.price || t.execPrice || '1.088'),
+        fees: t.fees ? (String(t.fees).startsWith('$') || String(t.fees).startsWith('₹') ? String(t.fees) : `₹${t.fees}`) : '₹10',
+        timestamp: t.timestamp || t.created_at || '2023-06-23 10:14:25',
+        assetClass: t.asset_class || t.assetClass || 'Forex',
+        executionVenue: t.execution_venue || t.executionVenue || 'NSE Currency Clearing',
+        clearingBroker: t.clearing_broker || t.clearingBroker || 'Apex Capital Group'
+      }));
+      setTrades(mapped);
+    }
+  }, [initialTrades]);
+
   // Synchronize with API /api/admin/trades
   useEffect(() => {
     let isMounted = true;
     const fetchTrades = async () => {
       setIsLoading(true);
       try {
-        const res = await fetch('/api/admin/trades');
+        const res = await fetch('/api/admin/trades', { credentials: 'include' });
         if (!res.ok) throw new Error(`HTTP error ${res.status}`);
         const data = await res.json();
         if (isMounted && Array.isArray(data) && data.length > 0) {
@@ -166,8 +188,24 @@ export const TradesView: React.FC<TradesViewProps> = ({
     };
 
     fetchTrades();
+
+    // Real-time EventSource listener
+    let eventSource: EventSource | null = null;
+    try {
+      eventSource = new EventSource('/api/admin/events/stream');
+      eventSource.onmessage = (e) => {
+        try {
+          const evt = JSON.parse(e.data);
+          if (evt?.eventType === 'trade.executed') {
+            fetchTrades();
+          }
+        } catch {}
+      };
+    } catch {}
+
     return () => {
       isMounted = false;
+      if (eventSource) eventSource.close();
     };
   }, []);
 

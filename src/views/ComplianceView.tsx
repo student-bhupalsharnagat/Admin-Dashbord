@@ -156,7 +156,7 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
       const url = kycStatusFilter && kycStatusFilter !== 'All Status'
         ? `/api/admin/kyc?status=${kycStatusFilter}`
         : '/api/admin/kyc';
-      const res = await fetch(url);
+      const res = await fetch(url, { credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
         const mapped: KycItem[] = data.map((d: any) => ({
@@ -183,8 +183,8 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
     try {
       const statusParam = fundsStatusFilter && fundsStatusFilter !== 'All Status' ? `?status=${fundsStatusFilter}` : '';
       const [depRes, wdrRes] = await Promise.all([
-        fetch(`/api/admin/compliance/deposits${statusParam}`),
-        fetch(`/api/admin/compliance/withdrawals${statusParam}`)
+        fetch(`/api/admin/compliance/deposits${statusParam}`, { credentials: 'include' }),
+        fetch(`/api/admin/compliance/withdrawals${statusParam}`, { credentials: 'include' })
       ]);
       if (depRes.ok) {
         const depData = await depRes.json();
@@ -202,7 +202,7 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
   const fetchLedgerData = async () => {
     try {
       const typeParam = ledgerTypeFilter && ledgerTypeFilter !== 'All Types' ? `?type=${ledgerTypeFilter}` : '';
-      const res = await fetch(`/api/admin/compliance/ledger${typeParam}`);
+      const res = await fetch(`/api/admin/compliance/ledger${typeParam}`, { credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
         setLedgerList(data);
@@ -223,6 +223,34 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
   useEffect(() => {
     fetchLedgerData();
   }, [ledgerTypeFilter]);
+
+  // Real-time EventSource listener for funds, withdrawals, kyc, and ledger events
+  useEffect(() => {
+    let eventSource: EventSource | null = null;
+    try {
+      eventSource = new EventSource('/api/admin/events/stream');
+      eventSource.onmessage = (e) => {
+        try {
+          const evt = JSON.parse(e.data);
+          if (evt?.eventType?.startsWith('deposit.') || evt?.eventType?.startsWith('fund.')) {
+            fetchFundsData();
+            fetchLedgerData();
+          } else if (evt?.eventType?.startsWith('withdrawal.')) {
+            fetchFundsData();
+            fetchLedgerData();
+          } else if (evt?.eventType === 'trade.executed') {
+            fetchLedgerData();
+          } else if (evt?.eventType?.startsWith('kyc.')) {
+            fetchKycData();
+          }
+        } catch {}
+      };
+    } catch {}
+
+    return () => {
+      if (eventSource) eventSource.close();
+    };
+  }, []);
 
   // ----------------------------------------------------------------------
   // KYC ACTIONS

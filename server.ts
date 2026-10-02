@@ -78,10 +78,31 @@ async function startServer() {
 
   // ----------------------------------------------------
   // S2S INBOUND EVENT WEBHOOK (Trading Platform -> Central Admin)
+  // Handles all event types: client.registered, trade.executed, order.created, deposits, etc.
   // ----------------------------------------------------
-  app.post(['/api/internal/events', '/api/events/trading-platform'], async (req, res) => {
+  app.post([
+    '/api/internal/v1/events/:eventType',
+    '/api/internal/v1/events/*',
+    '/api/internal/events',
+    '/api/events/trading-platform',
+    '/api/events'
+  ], async (req, res) => {
     try {
       const rawBody = (req as any).rawBody || JSON.stringify(req.body);
+      const eventTypeParam = (req.params as any)?.eventType;
+      if (eventTypeParam && !req.body.eventType) {
+        req.body.eventType = eventTypeParam.replace(/-/g, '.');
+      }
+      if (!req.body.eventId) {
+        req.body.eventId = `evt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      }
+      if (!req.body.tenantId) {
+        req.body.tenantId = (req.headers['x-tenant-id'] as string) || 'TNT-001';
+      }
+      if (!req.body.timestamp) {
+        req.body.timestamp = (req.headers['x-internal-timestamp'] as string) || (req.headers['x-timestamp'] as string) || new Date().toISOString();
+      }
+
       const result = await eventHandler.handleInboundEvent(
         req.headers as any,
         req.method,
@@ -92,7 +113,25 @@ async function startServer() {
       const statusCode = result.success ? (result.duplicate ? 200 : 201) : 400;
       res.status(statusCode).json(result);
     } catch (err: any) {
+      console.error('[Inbound Event Error]', err);
       res.status(500).json({ error: 'INTERNAL_ERROR', message: err.message });
+    }
+  });
+
+  // Real-time Active Users API Endpoint
+  app.get('/api/admin/active-users', authenticate, (req, res) => {
+    try {
+      const tenantScope = resolveStrictTenantScope(req);
+      const count = eventHandler.getActiveUsersCount(tenantScope);
+      const users = eventHandler.getActiveUsersList(tenantScope);
+      res.json({
+        success: true,
+        count,
+        users,
+        tenantScope: tenantScope || 'GLOBAL'
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
     }
   });
 
@@ -620,10 +659,16 @@ async function startServer() {
       const recentTrades = await activeTradingDataProvider.getRecentTrades(tenantScope, 6);
       const pendingKYC = await activeTradingDataProvider.getPendingKYC(tenantScope, 5);
 
-      const tenants = await activeTradingDataProvider.getTenants({});
+      const activeUsersCount = eventHandler.getActiveUsersCount(tenantScope);
+      if (kpis && kpis.total_clients) {
+        kpis.total_clients.subtitle = `${activeUsersCount} active trader${activeUsersCount === 1 ? '' : 's'}`;
+      }
+
+      const tenants = await activeTradingDataProvider.getTenants();
 
       res.json({
         kpis,
+        activeUsersCount,
         volumeCommission,
         clientGrowth,
         dailyPL,
@@ -1065,7 +1110,7 @@ async function startServer() {
   });
 
   app.get('/api/admin/integration/trading-platform-url', authenticate, (_req, res) => {
-    const mainPlatformUrl = process.env.TRADING_PLATFORM_WEB_URL || 'https://ai.studio/apps/9cd34c34-cb38-4875-8889-4e68e6b8ed7e';
+    const mainPlatformUrl = process.env.TRADING_PLATFORM_WEB_URL || 'https://trading-platform-3-1v13.onrender.com';
     res.json({
       webUrl: mainPlatformUrl,
       s2sUrl: process.env.TRADING_PLATFORM_URL || 'http://localhost:3001',

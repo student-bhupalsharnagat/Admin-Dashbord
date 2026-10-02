@@ -130,8 +130,8 @@ export const SupportView: React.FC<SupportViewProps> = ({ onNotify, currentUser 
   const [replyText, setReplyText] = useState('');
 
   // Fetch live support tickets from backend API
-  useEffect(() => {
-    fetch('/api/admin/support')
+  const fetchTickets = () => {
+    fetch('/api/admin/support', { credentials: 'include' })
       .then(res => (res.ok ? res.json() : null))
       .then(data => {
         if (Array.isArray(data) && data.length > 0) {
@@ -161,6 +161,28 @@ export const SupportView: React.FC<SupportViewProps> = ({ onNotify, currentUser 
       .catch(() => {
         // Fallback to INITIAL_TICKETS seamlessly
       });
+  };
+
+  useEffect(() => {
+    fetchTickets();
+
+    // Real-time EventSource listener
+    let eventSource: EventSource | null = null;
+    try {
+      eventSource = new EventSource('/api/admin/events/stream');
+      eventSource.onmessage = (e) => {
+        try {
+          const evt = JSON.parse(e.data);
+          if (evt?.eventType?.startsWith('support.')) {
+            fetchTickets();
+          }
+        } catch {}
+      };
+    } catch {}
+
+    return () => {
+      if (eventSource) eventSource.close();
+    };
   }, []);
 
   // Calculate KPIs

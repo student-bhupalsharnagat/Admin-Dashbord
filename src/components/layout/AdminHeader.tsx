@@ -31,6 +31,7 @@ interface AdminHeaderProps {
   onSearchChange: (query: string) => void;
   onLogout: () => void;
   currentUser?: AuthUser | null;
+  activeUsersCount?: number;
   onOpenNotifications?: () => void;
   onNavigateFunds?: (tab: 'deposits' | 'withdrawals', status?: string) => void;
   onOpenMobileMenu?: () => void;
@@ -46,6 +47,7 @@ export const AdminHeader: React.FC<AdminHeaderProps> = ({
   onSearchChange,
   onLogout,
   currentUser,
+  activeUsersCount = 1,
   onOpenNotifications,
   onNavigateFunds,
   onOpenMobileMenu,
@@ -217,16 +219,30 @@ export const AdminHeader: React.FC<AdminHeaderProps> = ({
           )}
         </div>
 
+        {/* Live Active Traders Telemetry Indicator */}
+        <div
+          className="hidden md:flex items-center gap-1.5 px-2 py-1 rounded-lg bg-[#0e1629] border border-[#18243e] text-[11px] text-slate-300 select-none"
+          title={`${activeUsersCount} Active User${activeUsersCount === 1 ? '' : 's'} connected across trading infrastructure`}
+        >
+          <span className="relative flex h-2 w-2">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+          </span>
+          <span className="font-semibold text-emerald-400 font-mono">{activeUsersCount}</span>
+          <span className="text-slate-400 text-[10px]">Active</span>
+        </div>
+
         {/* Launch Tenant Trading Platform */}
         {onOpenTradingPlatform && (
           <button
+            id="trading-platform-btn"
             onClick={onOpenTradingPlatform}
-            className="hidden sm:flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg bg-emerald-600/15 hover:bg-emerald-600/25 border border-emerald-500/30 text-emerald-400 hover:text-emerald-300 font-bold text-xs transition-colors cursor-pointer"
-            title="Launch Branded Tenant Trading Platform"
+            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg bg-emerald-600/15 hover:bg-emerald-600/25 border border-emerald-500/30 text-emerald-400 hover:text-emerald-300 font-bold text-xs transition-colors cursor-pointer"
+            title="Open B2C Trading Platform Terminal"
           >
-            <Globe size={14} className="animate-pulse text-emerald-400" />
-            <span className="hidden md:inline">Trading Platform</span>
-            <span className="md:hidden">Terminal</span>
+            <Globe size={14} className="animate-pulse text-emerald-400 shrink-0" />
+            <span className="hidden sm:inline">Trading Platform</span>
+            <span className="sm:hidden">Terminal</span>
           </button>
         )}
 

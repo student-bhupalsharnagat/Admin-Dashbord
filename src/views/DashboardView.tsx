@@ -30,6 +30,7 @@ import { NavigationTab } from '../components/layout/AdminSidebar';
 
 export interface DashboardViewProps {
   kpis?: DashboardKPIs | null;
+  clients?: any[];
   volumeCommissionData?: any;
   clientGrowthData?: any;
   dailyPLData?: any;
@@ -59,6 +60,7 @@ const DEFAULT_FALLBACK_KPIS: DashboardKPIs = {
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
   kpis,
+  clients,
   volumeCommissionData,
   clientGrowthData,
   dailyPLData,
@@ -329,6 +331,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
       {/* Row 7: Recent Registrations Table */}
       <RecentRegistrationsCard
+        clients={clients}
         currencySymbol={currencySymbol}
         onViewAll={() => onNavigateTab('clients')}
         onSelectClient={() => onNavigateTab('clients')}

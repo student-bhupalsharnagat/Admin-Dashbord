@@ -60,10 +60,26 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
 
   const fetchOrders = async () => {
     try {
-      const res = await fetch('/api/admin/orders');
+      const res = await fetch('/api/admin/orders', { credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
-        setOrders(data);
+        if (Array.isArray(data)) {
+          const mapped: OrderItem[] = data.map((o: any, idx: number) => ({
+            orderId: o.orderId || o.order_id || o.id || `ORD-${String(idx + 1).padStart(3, '0')}`,
+            client: o.client || o.client_name || 'Retail Client',
+            clientId: o.clientId || o.client_id,
+            symbol: o.symbol || 'NIFTY50',
+            side: ((o.side || 'BUY').toUpperCase() === 'SELL' ? 'SELL' : 'BUY') as 'BUY' | 'SELL',
+            quantity: String(o.quantity || o.qty || '1'),
+            type: (o.type || o.order_type || 'Market') as any,
+            price: typeof o.price === 'number' ? `₹${o.price.toLocaleString('en-IN')}` : String(o.price || 'Market'),
+            status: ((o.status || 'PENDING').toUpperCase() === 'EXECUTED' ? 'FILLED' : (o.status?.toUpperCase() || 'PENDING')) as 'FILLED' | 'PENDING' | 'CANCELLED',
+            created: o.created || (o.created_at ? o.created_at.slice(0, 19).replace('T', ' ') : new Date().toISOString().slice(0, 19).replace('T', ' ')),
+            filledQty: o.filledQty || o.filled_quantity,
+            exchange: o.exchange || 'NSE'
+          }));
+          setOrders(mapped);
+        }
       }
     } catch (e) {
       console.error('Failed to fetch orders:', e);
@@ -72,6 +88,29 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
 
   useEffect(() => {
     fetchOrders();
+
+    // Real-time EventSource listener for new orders and executions
+    let eventSource: EventSource | null = null;
+    try {
+      eventSource = new EventSource('/api/admin/events/stream');
+      eventSource.onmessage = (e) => {
+        try {
+          const evt = JSON.parse(e.data);
+          if (
+            evt?.eventType === 'order.created' ||
+            evt?.eventType === 'order.updated' ||
+            evt?.eventType === 'order.cancelled' ||
+            evt?.eventType === 'trade.executed'
+          ) {
+            fetchOrders();
+          }
+        } catch {}
+      };
+    } catch {}
+
+    return () => {
+      if (eventSource) eventSource.close();
+    };
   }, []);
 
   const handleOpenClientDetail = (order: OrderItem) => {

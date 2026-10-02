@@ -406,6 +406,26 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
     setOrderModalOpen(true);
   };
 
+  // Telemetry Heartbeat: send active trader heartbeat to Central Admin
+  useEffect(() => {
+    try {
+      fetch('/api/events/trading-platform', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-tenant-id': activeTenantId || 'TNT-001' },
+        body: JSON.stringify({
+          eventType: 'user.login',
+          tenantId: activeTenantId || 'TNT-001',
+          payload: {
+            userId: client.userId || 'CLI-001',
+            clientId: client.userId || 'CLI-001',
+            clientCode: client.userId || 'CLI-001',
+            name: client.fullName || 'Active Trader'
+          }
+        })
+      }).catch(() => {});
+    } catch {}
+  }, [activeTenantId, client.userId, client.fullName]);
+
   const handlePlaceOrder = (orderData: Partial<ClientOrder>) => {
     const newOrder: ClientOrder = {
       id: `ORD-${Date.now().toString().slice(-6)}`,
@@ -425,6 +445,37 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
     };
 
     setOrders(prev => [newOrder, ...prev]);
+
+    // Dispatch S2S event to Central Admin in real-time
+    try {
+      const orderPayload = {
+        orderId: newOrder.id,
+        clientId: client.userId || 'CLI-001',
+        clientName: client.fullName || 'Trading Client',
+        tenantId: activeTenantId || 'TNT-001',
+        symbol: newOrder.symbol,
+        side: newOrder.type,
+        quantity: newOrder.quantity,
+        price: newOrder.executionPrice || newOrder.price,
+        productType: newOrder.product,
+        status: newOrder.status,
+        timestamp: new Date().toISOString()
+      };
+
+      fetch('/api/events/trading-platform', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-tenant-id': activeTenantId || 'TNT-001' },
+        body: JSON.stringify({
+          eventType: newOrder.status === 'EXECUTED' ? 'trade.executed' : 'order.created',
+          tenantId: activeTenantId || 'TNT-001',
+          payload: {
+            ...orderPayload,
+            tradeId: `TRD-${newOrder.id.replace('ORD-', '')}`,
+            totalValue: (newOrder.executionPrice || newOrder.price) * (newOrder.quantity || 1)
+          }
+        })
+      }).catch(err => console.warn('[TradingPlatformView] Order sync notice:', err));
+    } catch {}
 
     // If order executed, add or update position and adjust margin
     if (newOrder.status === 'EXECUTED') {
@@ -462,6 +513,21 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
     setOrders(prev =>
       prev.map(o => (o.id === orderId ? { ...o, status: 'CANCELLED' } : o))
     );
+    try {
+      fetch('/api/events/trading-platform', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-tenant-id': activeTenantId || 'TNT-001' },
+        body: JSON.stringify({
+          eventType: 'order.cancelled',
+          tenantId: activeTenantId || 'TNT-001',
+          payload: {
+            orderId,
+            clientId: client.userId || 'CLI-001',
+            status: 'CANCELLED'
+          }
+        })
+      }).catch(() => {});
+    } catch {}
     onNotify?.(`Order ${orderId} cancelled.`, 'info');
   };
 
@@ -480,6 +546,25 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
     }));
 
     setPositions(prev => prev.filter(p => p.id !== positionId));
+
+    try {
+      fetch('/api/events/trading-platform', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-tenant-id': activeTenantId || 'TNT-001' },
+        body: JSON.stringify({
+          eventType: 'position.closed',
+          tenantId: activeTenantId || 'TNT-001',
+          payload: {
+            positionId,
+            clientId: client.userId || 'CLI-001',
+            symbol: pos.symbol,
+            pnl: pos.pnl,
+            status: 'CLOSED'
+          }
+        })
+      }).catch(() => {});
+    } catch {}
+
     onNotify?.(`Squared off ${pos.symbol}. Realized P&L: ₹${pos.pnl.toFixed(2)}.`, 'success');
   };
 
@@ -502,6 +587,27 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
       ...prev,
       availableBalance: prev.availableBalance + amount
     }));
+
+    try {
+      fetch('/api/events/trading-platform', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-tenant-id': activeTenantId || 'TNT-001' },
+        body: JSON.stringify({
+          eventType: 'deposit.approved',
+          tenantId: activeTenantId || 'TNT-001',
+          payload: {
+            depositId: `DEP-${Date.now().toString().slice(-6)}`,
+            clientId: client.userId || 'CLI-001',
+            clientName: client.fullName || 'Trading Client',
+            amount,
+            currency: 'INR',
+            method,
+            status: 'COMPLETED'
+          }
+        })
+      }).catch(() => {});
+    } catch {}
+
     onNotify?.(`₹${amount.toLocaleString()} deposited instantly via ${method}!`, 'success');
   };
 
@@ -510,6 +616,27 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
       ...prev,
       availableBalance: Math.max(0, prev.availableBalance - amount)
     }));
+
+    try {
+      fetch('/api/events/trading-platform', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-tenant-id': activeTenantId || 'TNT-001' },
+        body: JSON.stringify({
+          eventType: 'withdrawal.approved',
+          tenantId: activeTenantId || 'TNT-001',
+          payload: {
+            withdrawalId: `WTH-${Date.now().toString().slice(-6)}`,
+            clientId: client.userId || 'CLI-001',
+            clientName: client.fullName || 'Trading Client',
+            amount,
+            currency: 'INR',
+            bank,
+            status: 'COMPLETED'
+          }
+        })
+      }).catch(() => {});
+    } catch {}
+
     onNotify?.(`₹${amount.toLocaleString()} withdrawal initiated to ${bank}.`, 'success');
   };
 

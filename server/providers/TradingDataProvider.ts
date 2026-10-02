@@ -1623,8 +1623,8 @@ export class MockTradingDataProvider implements ITradingDataProvider {
       tradingAccount: {
         accountNumber: `TRD-${client.id}`,
         dematNumber: `IN300128-${client.id}`,
-        tradingPlatformUrl: `https://ai.studio/apps/9cd34c34-cb38-4875-8889-4e68e6b8ed7e?client_id=${encodeURIComponent(client.id)}&name=${encodeURIComponent(client.name)}&balance=${balance}`,
-        mainPlatformLink: 'https://ai.studio/apps/9cd34c34-cb38-4875-8889-4e68e6b8ed7e',
+        tradingPlatformUrl: `https://trading-platform-3-1v13.onrender.com?client_id=${encodeURIComponent(client.id)}&name=${encodeURIComponent(client.name)}&balance=${balance}`,
+        mainPlatformLink: 'https://trading-platform-3-1v13.onrender.com',
         currency: 'INR',
         balance: `₹${balance.toLocaleString('en-IN')}`,
         rawBalance: balance,

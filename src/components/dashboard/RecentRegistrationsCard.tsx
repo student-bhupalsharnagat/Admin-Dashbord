@@ -65,20 +65,33 @@ const defaultRegistrations: DisplayRegistration[] = [
 
 interface RecentRegistrationsCardProps {
   currencySymbol?: string;
+  clients?: any[];
   onViewAll: () => void;
   onSelectClient?: (client: any) => void;
 }
 
 export const RecentRegistrationsCard: React.FC<RecentRegistrationsCardProps> = ({
   currencySymbol = '$',
+  clients,
   onViewAll,
   onSelectClient
 }) => {
-  const items = defaultRegistrations.map(r => ({
-    ...r,
-    wallet_balance: r.wallet_balance.replace('$', currencySymbol),
-    pl: r.pl.replace('$', currencySymbol)
-  }));
+  const items: DisplayRegistration[] = (clients && clients.length > 0)
+    ? clients.slice(0, 5).map(c => ({
+        client_id: c.client_code || c.id,
+        name: c.name,
+        broker: c.broker || c.broker_name || 'Apex Direct',
+        kyc_status: (c.kyc_status === 'VERIFIED' ? 'APPROVED' : (c.kyc_status || 'PENDING')) as any,
+        account_status: (c.status || 'ACTIVE').toUpperCase() as any,
+        wallet_balance: `${currencySymbol}${Number(c.balance || c.wallet_balance || 0).toLocaleString()}`,
+        pl: '+₹0',
+        pl_positive: true
+      }))
+    : defaultRegistrations.map(r => ({
+        ...r,
+        wallet_balance: r.wallet_balance.replace('$', currencySymbol),
+        pl: r.pl.replace('$', currencySymbol)
+      }));
   return (
     <div className="bg-[#0b1325] border border-[#16233d] rounded-xl p-4 sm:p-5 flex flex-col h-full shadow-sm">
       {/* Header */}

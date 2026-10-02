@@ -73,6 +73,9 @@ export default function App() {
   // Global search input in header
   const [searchQuery, setSearchQuery] = useState('');
 
+  // Live active users telemetry
+  const [activeUsersCount, setActiveUsersCount] = useState<number>(1);
+
   // Funds View navigation control (deep-linking to deposits or withdrawals)
   const [fundsInitialTab, setFundsInitialTab] = useState<'deposits' | 'withdrawals'>('deposits');
   const [fundsInitialStatus, setFundsInitialStatus] = useState<string>('All Status');
@@ -298,6 +301,7 @@ export default function App() {
         if (data.tenants && data.tenants.length) setTenants(data.tenants);
         if (data.recentTrades && data.recentTrades.length) setRecentTrades(data.recentTrades);
         if (data.pendingKYC && data.pendingKYC.length) setPendingKYC(data.pendingKYC);
+        if (data.activeUsersCount !== undefined) setActiveUsersCount(Number(data.activeUsersCount));
       }
     } catch (err) {
       console.warn('Backend API fetch error, using resilient state:', err);
@@ -363,6 +367,50 @@ export default function App() {
           if (!event || !event.eventType) return;
 
           switch (event.eventType) {
+            case 'client.registered':
+            case 'client.activated': {
+              const p = event.payload || {};
+              const clientId = p.clientId || p.userId || p.tradingUserId || `CLI-${Date.now()}`;
+              const clientCode = (p.clientCode || p.userId || clientId).toUpperCase();
+              const newClient: Client = {
+                id: clientId,
+                client_code: clientCode,
+                sub_broker_id: p.subBrokerId || p.sub_broker_id || 'SB-001',
+                name: p.name || p.fullName || 'Registered Client',
+                email: p.email || `${clientCode.toLowerCase()}@client.tradematrix.io`,
+                phone: p.phone || p.mobile || '+91 98000 00000',
+                status: (p.status || p.accountStatus || 'ACTIVE').toUpperCase() as any,
+                kyc_status: (p.kycStatus === 'VERIFIED' ? 'APPROVED' : (p.kycStatus || 'APPROVED')) as any,
+                wallet_balance: Number(p.balance || p.walletBalance || 500000),
+                available_margin: Number(p.equity || p.balance || 500000),
+                todays_pl: 0,
+                open_positions_count: 0,
+                tenant_id: event.tenantId,
+                tenant_name: p.tenantName || 'Alpha Prime Capital',
+                sub_broker_name: 'Apex Direct',
+                broker_name: 'Apex Broking',
+                master_name: 'Alpha Prime Master',
+                created_at: new Date().toISOString().split('T')[0]
+              };
+              setClients(prev => [newClient, ...prev.filter(c => c.id !== clientId && c.client_code !== clientCode)]);
+              showToast(`New client registered: ${newClient.name} (${newClient.client_code})`, 'success');
+              loadDashboardData();
+              loadHierarchyData();
+              break;
+            }
+
+            case 'login.succeeded':
+            case 'user.login':
+            case 'user.active': {
+              const count = Number(event.payload?.activeUsers || event.payload?.count);
+              if (!isNaN(count) && count > 0) {
+                setActiveUsersCount(count);
+              } else {
+                setActiveUsersCount(prev => prev + 1);
+              }
+              break;
+            }
+
             case 'trade.executed':
               if (event.payload) {
                 const newTrade: Trade = {
@@ -370,44 +418,90 @@ export default function App() {
                   trade_id: event.payload.tradeId || `TRD-${Date.now()}`,
                   tenant_id: event.tenantId,
                   tenant_name: event.payload.tenantName || 'Alpha Prime Capital',
-                  client_id: event.payload.clientId || 'CLI-001',
+                  client_id: event.payload.clientId || event.payload.tradingUserId || 'CLI-001',
                   client_name: event.payload.clientName || 'Live Client',
                   symbol: event.payload.symbol || 'NIFTY50',
                   exchange: event.payload.exchange || 'NSE',
                   side: event.payload.side || 'BUY',
-                  quantity: event.payload.quantity || 1,
-                  price: event.payload.price || 100,
-                  total_value: Number(event.payload.totalValue || (event.payload.price * event.payload.quantity) || 0),
+                  quantity: event.payload.quantity || event.payload.lots || 1,
+                  price: event.payload.price || event.payload.executionPrice || 100,
+                  total_value: Number(event.payload.totalValue || event.payload.executionValue || (event.payload.price * event.payload.quantity) || 0),
                   pl: Number(event.payload.pl || 0),
                   status: 'EXECUTED',
                   timestamp: event.timestamp || new Date().toISOString()
                 };
                 setTrades(prev => [newTrade, ...prev.slice(0, 99)]);
                 setRecentTrades(prev => [newTrade, ...prev.slice(0, 9)]);
+                showToast(`Trade Executed: ${newTrade.side} ${newTrade.quantity} ${newTrade.symbol} @ ₹${newTrade.price}`, 'success');
               }
               loadDashboardData();
               break;
+
             case 'order.created':
             case 'order.updated':
+            case 'order.cancelled':
+              loadDashboardData();
+              showToast(`Order ${event.payload?.orderId || 'ORD'}: ${event.payload?.status || 'UPDATED'}`, 'info');
+              break;
+
             case 'position.updated':
+            case 'position.closed':
               loadDashboardData();
               break;
+
+            case 'deposit.created':
+            case 'deposit.approved':
+            case 'deposit.rejected':
+              loadDashboardData();
+              loadHierarchyData();
+              showToast(`Deposit Event (${event.payload?.status || 'UPDATED'}): ₹${event.payload?.amount || 0}`, 'info');
+              break;
+
+            case 'withdrawal.created':
+            case 'withdrawal.approved':
+            case 'withdrawal.rejected':
+              loadDashboardData();
+              loadHierarchyData();
+              showToast(`Withdrawal Event (${event.payload?.status || 'UPDATED'}): ₹${event.payload?.amount || 0}`, 'info');
+              break;
+
+            case 'kyc.submitted':
             case 'kyc.updated':
               if (event.payload?.id && event.payload?.status) {
                 setKycRecords(prev => prev.map(k => k.id === event.payload.id ? { ...k, status: event.payload.status } : k));
               }
+              loadDashboardData();
               break;
+
             case 'wallet.updated':
             case 'client.account_updated':
-              if (event.payload?.clientId) {
-                setClients(prev => prev.map(c => c.id === event.payload.clientId ? { ...c, wallet_balance: event.payload.balance ?? c.wallet_balance } : c));
+              if (event.payload?.clientId || event.payload?.userId) {
+                const targetId = event.payload?.clientId || event.payload?.userId;
+                setClients(prev => prev.map(c => (c.id === targetId || c.client_code === targetId) ? { ...c, wallet_balance: event.payload.balance ?? c.wallet_balance } : c));
               }
+              loadDashboardData();
               break;
+
+            case 'risk.margin_breach':
+              showToast(`Critical Risk Alert: Margin breach on position for ${event.payload?.clientName || 'Client'}`, 'warning');
+              loadDashboardData();
+              break;
+
+            case 'execution.failure':
+              showToast(`Execution Warning: Order execution failed for ${event.payload?.symbol || 'Order'}`, 'warning');
+              break;
+
             case 'notification.created':
               if (event.payload?.title) {
                 showToast(`New Notification: ${event.payload.title}`, 'info');
               }
               break;
+
+            case 'support.created':
+            case 'support.updated':
+              showToast(`Support Ticket: ${event.payload?.subject || 'Ticket updated'}`, 'info');
+              break;
+
             case 'tenant.config.updated':
             case 'tenant.branding.updated':
             case 'tenant.status.updated':
@@ -760,6 +854,7 @@ export default function App() {
           onSearchChange={setSearchQuery}
           onLogout={handleLogout}
           currentUser={currentUser}
+          activeUsersCount={activeUsersCount}
           onOpenNotifications={() => {
             setActiveTab('notifications');
           }}
@@ -815,6 +910,7 @@ export default function App() {
               {activeTab === 'dashboard' && (
                 <DashboardView
                   kpis={dashboardData?.kpis || null}
+                  clients={clients}
                   volumeCommissionData={dashboardData?.volumeCommission || []}
                   clientGrowthData={dashboardData?.clientGrowth || []}
                   dailyPLData={dashboardData?.dailyPL || []}
@@ -857,6 +953,7 @@ export default function App() {
                   onNotify={showToast}
                   onNavigateToClient={() => setActiveTab('clients')}
                   onNavigateToTrade={() => setActiveTab('trades')}
+                  onOpenTradingPlatform={handleOpenTradingPlatform}
                 />
               )}
 
@@ -910,6 +1007,7 @@ export default function App() {
                   onAddClient={() => setShowAddClientModal(true)}
                   onToggleStatus={handleToggleEntityStatus}
                   onNotify={showToast}
+                  onOpenTradingPlatform={handleOpenTradingPlatform}
                 />
               )}
 
