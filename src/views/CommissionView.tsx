@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Plus,
   Eye,
@@ -213,8 +213,9 @@ interface CommissionViewProps {
 }
 
 export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
-  const [plans, setPlans] = useState<CommissionPlanItem[]>(initialPlansData);
+  const [plans, setPlans] = useState<CommissionPlanItem[]>([]);
   const [activeTab, setActiveTab] = useState<'plans' | 'rules' | 'transactions'>('plans');
+  const [transactionsList, setTransactionsList] = useState<any[]>([]);
 
   const [selectedPlan, setSelectedPlan] = useState<CommissionPlanItem | null>(null);
   const [editingPlan, setEditingPlan] = useState<CommissionPlanItem | null>(null);
@@ -226,8 +227,8 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
   const [newPlanInstruments, setNewPlanInstruments] = useState('All');
 
   // Rules state matching Screenshot 2026-09-11 001527.png
-  const [rulesList, setRulesList] = useState<CommissionRuleItem[]>(initialRulesData);
-  const [selectedRule, setSelectedRule] = useState<CommissionRuleItem>(initialRulesData[0]);
+  const [rulesList, setRulesList] = useState<CommissionRuleItem[]>([]);
+  const [selectedRule, setSelectedRule] = useState<CommissionRuleItem | null>(null);
   const [ruleSubTab, setRuleSubTab] = useState<
     'Overview' | 'Hierarchy Splits' | 'Slab Tiers' | 'Applicable Instruments' | 'Enforced Accounts' | 'Audit History'
   >('Overview');
@@ -246,6 +247,78 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
   const notify = (msg: string, type: 'info' | 'success' | 'warning' = 'info') => {
     if (onNotify) onNotify(msg, type);
   };
+
+  useEffect(() => {
+    let isMounted = true;
+    const fetchCommissionData = async () => {
+      try {
+        const [plansRes, rulesRes, txnsRes] = await Promise.all([
+          fetch('/api/admin/commercial/commission-plans', { credentials: 'include' }),
+          fetch('/api/admin/commercial/commission-rules', { credentials: 'include' }),
+          fetch('/api/admin/commercial/commission-transactions', { credentials: 'include' })
+        ]);
+
+        if (plansRes.ok) {
+          const plansData = await plansRes.json();
+          if (isMounted && Array.isArray(plansData)) {
+            const mappedPlans: CommissionPlanItem[] = plansData.map((p: any) => ({
+              planId: p.id,
+              planName: p.name,
+              type: (p.plan_type === 'TIERED' ? 'TIERED' : (p.plan_type === 'FIXED' ? 'FIXED' : 'PERCENTAGE')) as any,
+              rate: p.rate_value ? `${p.rate_value}%` : (p.rate || '0.05%'),
+              instruments: p.instruments || 'All',
+              users: p.users_count || p.users || 0,
+              status: p.status === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE',
+              description: p.description || '',
+              masterShare: p.master_share || '40%',
+              brokerShare: p.broker_share || '60%'
+            }));
+            setPlans(mappedPlans);
+          }
+        }
+
+        if (rulesRes.ok) {
+          const rulesData = await rulesRes.json();
+          if (isMounted && Array.isArray(rulesData)) {
+            const mappedRules: CommissionRuleItem[] = rulesData.map((r: any, idx: number) => ({
+              id: r.id || `RUL-0${idx + 1}`,
+              name: r.name || `Rule ${r.id}`,
+              condition: r.condition || `Asset Class: ${r.asset_class || 'EQUITY'}`,
+              split: r.split || 'Master: 40%, Broker: 40%, Sub-Broker: 20%',
+              masterShare: r.master_share || '40%',
+              brokerShare: r.broker_share || '40%',
+              subBrokerShare: r.sub_broker_share || '20%',
+              baseRate: r.base_rate || `₹${r.rate_value || '25,000'}`,
+              overrideMargin: r.override_margin || '+15.0%',
+              enforcedAccounts: r.enforced_accounts || 100,
+              activeSlabs: r.active_slabs || 2,
+              instruments: r.asset_class || r.instruments || 'All Instruments',
+              status: r.status === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE',
+              joined: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : '2026-01-01',
+              policyType: r.rate_type || 'Turnover Slab Incentive',
+              description: r.description || 'Commission policy rule'
+            }));
+            setRulesList(mappedRules);
+            if (mappedRules.length > 0) {
+              setSelectedRule(mappedRules[0]);
+            }
+          }
+        }
+
+        if (txnsRes.ok) {
+          const txnsData = await txnsRes.json();
+          if (isMounted && Array.isArray(txnsData)) {
+            setTransactionsList(txnsData);
+          }
+        }
+      } catch (err) {
+        console.warn('Commission API fetch error:', err);
+      }
+    };
+
+    fetchCommissionData();
+    return () => { isMounted = false; };
+  }, []);
 
   const handleToggleRuleStatus = () => {
     const updatedStatus = selectedRule.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE';
@@ -508,14 +581,26 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
                     </td>
                   </tr>
                 ))}
+                {plans.length === 0 && (
+                  <tr>
+                    <td colSpan={8} className="py-8 text-center text-slate-500">
+                      No commission plans configured in database.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
         </div>
       )}
 
-      {/* Tab 2: Rules Dashboard & Specification (Matches Screenshot 2026-09-11 001527.png) */}
+      {/* Tab 2: Rules Dashboard & Specification */}
       {activeTab === 'rules' && (
+        !selectedRule ? (
+          <div className="bg-[#070e1b] border border-[#121d33] rounded-xl p-12 text-center text-slate-500 text-xs">
+            No commission rules configured in database. Click &quot;Add Rule&quot; to configure one.
+          </div>
+        ) : (
         <div className="space-y-6 animate-in fade-in duration-150">
           {/* 1. HERO CARD (Matches Screenshot exactly) */}
           <div className="bg-[#070e1b] border border-[#121d33] rounded-xl p-5 shadow-sm space-y-6">
@@ -524,7 +609,7 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
               <div className="flex items-start sm:items-center gap-3.5">
                 {/* Avatar / Icon Block */}
                 <div className="w-11 h-11 rounded-lg bg-[#06261f] border border-[#065f46] flex items-center justify-center text-[#34d399] font-bold text-lg shrink-0">
-                  {selectedRule.name.charAt(0).toUpperCase()}
+                  {(selectedRule?.name || 'R').charAt(0).toUpperCase()}
                 </div>
 
                 {/* Title, Badges, Condition, and Hierarchy Lineage */}
@@ -1042,6 +1127,7 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
             </div>
           </div>
         </div>
+        )
       )}
 
       {/* Tab 3: Transactions Table */}
@@ -1061,17 +1147,24 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#131e36]/60">
-                {initialCommissionTxns.map(t => (
+                {transactionsList.map(t => (
                   <tr key={t.id} className="hover:bg-[#0c152a] transition-colors">
                     <td className="py-3.5 px-4 font-mono font-bold text-[#38bdf8]">{t.id}</td>
                     <td className="py-3.5 px-4 font-bold text-white">{t.beneficiary}</td>
                     <td className="py-3.5 px-4 text-slate-300">{t.role}</td>
                     <td className="py-3.5 px-4 font-mono font-bold text-[#34d399]">{t.amount}</td>
                     <td className="py-3.5 px-4 text-slate-400">{t.period}</td>
-                    <td className="py-3.5 px-4">{renderStatusBadge('ACTIVE')}</td>
+                    <td className="py-3.5 px-4">{renderStatusBadge(t.status || 'PAID')}</td>
                     <td className="py-3.5 px-4 font-mono text-slate-400">{t.date}</td>
                   </tr>
                 ))}
+                {transactionsList.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="py-8 text-center text-slate-500">
+                      No commission payout transactions found in PostgreSQL ledger.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>

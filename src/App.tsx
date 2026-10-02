@@ -16,6 +16,8 @@ import { OrdersView } from './views/OrdersView';
 import { PositionsView } from './views/PositionsView';
 import { CommissionView } from './views/CommissionView';
 import { RiskLimitsView } from './views/RiskLimitsView';
+
+
 import { ComplianceView } from './views/ComplianceView';
 import { ReportsView } from './views/ReportsView';
 import { NotificationsView } from './views/NotificationsView';
@@ -26,6 +28,7 @@ import { TradingPlatformView } from './views/TradingPlatformView';
 import { SystemToolsView } from './views/SystemToolsView';
 import { RbacView } from './components/views/RbacView';
 import { useTheme } from './context/ThemeContext';
+import { apiFetch } from './utils/api';
 import { canAccessTab } from './utils/rbac';
 import { ShieldAlert } from 'lucide-react';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -54,6 +57,8 @@ import {
   AuthUser,
   UserRole
 } from './types';
+
+const DEFAULT_INITIAL_TENANTS: Tenant[] = [];
 
 export default function App() {
   const { isDark } = useTheme();
@@ -88,50 +93,30 @@ export default function App() {
     setActiveTab('funds');
   };
 
-  // Dashboard Data State
-  const DEFAULT_INITIAL_DASHBOARD: DashboardData = {
+  // Dashboard Data State - Clean empty initial state without fake numbers
+  const EMPTY_INITIAL_DASHBOARD: DashboardData = {
     kpis: {
-      total_masters: { value: 5, badge: '+2 new', subtitle: 'Across all regions' },
-      total_brokers: { value: 43, badge: '+5 new', subtitle: '38 active' },
-      total_clients: { value: 3073, badge: '↑ 12.3%', subtitle: '1,360 KYC approved' },
-      commission_earned: { value: '₹862K', badge: '↑ 11.4%', subtitle: 'Today' },
-      todays_turnover: { value: '₹48.2M', badge: '↑ 9.8%', subtitle: 'Today' },
-      total_pl: { value: '₹8.44M', badge: '↑ 22.1%', subtitle: 'Unrealized + Realized' },
-      pending_kyc: { value: 2, subtitle: 'Requires review' },
-      open_tickets: { value: 4, subtitle: '2 high priority' }
+      total_masters: { value: 0, subtitle: 'Across all regions' },
+      total_brokers: { value: 0, subtitle: '0 active' },
+      total_clients: { value: 0, subtitle: '0 registered' },
+      commission_earned: { value: '₹0', subtitle: 'Today' },
+      todays_turnover: { value: '₹0', subtitle: 'Today' },
+      total_turnover: { value: '₹0', subtitle: 'Total volume' },
+      total_pl: { value: '₹0', subtitle: 'Net P&L' },
+      pending_kyc: { value: 0, subtitle: 'Requires review' },
+      open_tickets: { value: 0, subtitle: '0 open tickets' }
     },
-    volumeCommission: [
-      { date: '2026-01-01', displayDate: 'Jan', volume: 25, commission: 135 },
-      { date: '2026-02-01', displayDate: 'Feb', volume: 25, commission: 142 },
-      { date: '2026-03-01', displayDate: 'Mar', volume: 28, commission: 155 },
-      { date: '2026-04-01', displayDate: 'Apr', volume: 26, commission: 145 },
-      { date: '2026-05-01', displayDate: 'May', volume: 45, commission: 200 },
-      { date: '2026-06-01', displayDate: 'Jun', volume: 55, commission: 215 }
-    ],
-    clientGrowth: [
-      { month: 'Apr', clients: 2400 },
-      { month: 'May', clients: 2600 },
-      { month: 'Jun', clients: 2750 },
-      { month: 'Jul', clients: 2900 },
-      { month: 'Aug', clients: 2980 },
-      { month: 'Sep', clients: 3073 }
-    ],
-    dailyPL: [
-      { day: 'Sep 13', displayDay: '13 Sep', pl: 12.4, isProfit: true },
-      { day: 'Sep 14', displayDay: '14 Sep', pl: -4.2, isProfit: false },
-      { day: 'Sep 15', displayDay: '15 Sep', pl: 18.6, isProfit: true },
-      { day: 'Sep 16', displayDay: '16 Sep', pl: 8.2, isProfit: true },
-      { day: 'Sep 17', displayDay: '17 Sep', pl: -2.1, isProfit: false },
-      { day: 'Sep 18', displayDay: '18 Sep', pl: 15.3, isProfit: true },
-      { day: 'Sep 19', displayDay: '19 Sep', pl: 21.8, isProfit: true }
-    ],
+    volumeCommission: [],
+    clientGrowth: [],
+    dailyPL: [],
     recentTrades: [],
     pendingKYC: [],
     tenants: []
   };
 
-  const [dashboardData, setDashboardData] = useState<DashboardData>(DEFAULT_INITIAL_DASHBOARD);
-  const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [dashboardData, setDashboardData] = useState<DashboardData>(EMPTY_INITIAL_DASHBOARD);
+  const [dashboardError, setDashboardError] = useState<string | null>(null);
+  const [tenants, setTenants] = useState<Tenant[]>(DEFAULT_INITIAL_TENANTS);
   const [masters, setMasters] = useState<Master[]>([]);
   const [brokers, setBrokers] = useState<Broker[]>([]);
   const [subBrokers, setSubBrokers] = useState<SubBroker[]>([]);
@@ -149,16 +134,32 @@ export default function App() {
 
   // Authentication State (managed via secure HTTP-only cookie session)
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
-  const [authChecking, setAuthChecking] = useState(true);
+  const [authChecking, setAuthChecking] = useState(false);
 
-  // Check active session on initial load
+  // Check active session on initial load in background (non-blocking)
   useEffect(() => {
     let isMounted = true;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+    }, 8000);
+
     async function checkAuthSession() {
       try {
-        const res = await fetch('/api/auth/me', {
-          credentials: 'include'
+        // Pre-fetch public active tenants
+        apiFetch('/api/public/tenants', { signal: controller.signal })
+          .then(res => res.ok ? res.json() : null)
+          .then(list => {
+            if (Array.isArray(list) && list.length > 0 && isMounted) {
+              setTenants(list);
+            }
+          })
+          .catch(() => {});
+
+        const res = await apiFetch('/api/auth/me', {
+          signal: controller.signal
         });
+
         if (res.ok) {
           const data = await res.json();
           if (data.user && isMounted) {
@@ -185,20 +186,19 @@ export default function App() {
             loadDashboardData();
             loadHierarchyData();
           }
-        } else if (isMounted) {
-          setCurrentUser(null);
         }
       } catch (err) {
-        console.warn('Authentication session check error:', err);
-        if (isMounted) setCurrentUser(null);
+        // Quietly fallback to auth screen
       } finally {
-        if (isMounted) setAuthChecking(false);
+        clearTimeout(timeoutId);
       }
     }
 
     checkAuthSession();
     return () => {
       isMounted = false;
+      clearTimeout(timeoutId);
+      controller.abort();
     };
   }, []);
 
@@ -284,15 +284,17 @@ export default function App() {
       const url = selectedTenantScope
         ? `/api/admin/dashboard?tenantId=${selectedTenantScope}`
         : '/api/admin/dashboard';
-      const res = await fetch(url, { credentials: 'include' });
+      const res = await apiFetch(url);
       if (res.ok) {
         const data: any = await res.json();
-        setDashboardData(prev => ({
-          kpis: data.kpis || prev.kpis,
-          volumeCommission: data.volumeCommission || data.charts?.volumeCommission || prev.volumeCommission,
-          clientGrowth: data.clientGrowth || data.charts?.clientGrowth || prev.clientGrowth,
+        setDashboardError(null);
+        setDashboardData({
+          kpis: data.kpis || null,
+          volumeCommission: data.volumeCommission || data.charts?.volumeCommission || [],
+          clientGrowth: data.clientGrowth || data.charts?.clientGrowth || [],
           dailyPL: Array.isArray(data.dailyPL)
             ? data.dailyPL
+<<<<<<< HEAD
             : (data.charts?.dailyPL?.data || prev.dailyPL),
           recentTrades: data.recentTrades || prev.recentTrades,
           pendingKYC: data.pendingKYC || prev.pendingKYC,
@@ -302,9 +304,29 @@ export default function App() {
         if (data.recentTrades && data.recentTrades.length) setRecentTrades(data.recentTrades);
         if (data.pendingKYC && data.pendingKYC.length) setPendingKYC(data.pendingKYC);
         if (data.activeUsersCount !== undefined) setActiveUsersCount(Number(data.activeUsersCount));
+=======
+            : (data.charts?.dailyPL?.data || []),
+          recentTrades: data.recentTrades || [],
+          pendingKYC: data.pendingKYC || [],
+          tenants: data.tenants || []
+        });
+        if (data.tenants && Array.isArray(data.tenants)) setTenants(data.tenants);
+        if (data.recentTrades && Array.isArray(data.recentTrades)) setRecentTrades(data.recentTrades);
+        if (data.pendingKYC && Array.isArray(data.pendingKYC)) setPendingKYC(data.pendingKYC);
+      } else {
+        if (res.status === 401 || res.status === 403) {
+          setDashboardError(null);
+        } else {
+          setDashboardError('Failed to fetch dashboard live telemetry from PostgreSQL');
+        }
+        setDashboardData(prev => ({ ...prev, kpis: null }));
+>>>>>>> 3eb279a3a987a5596e31a324551957d91f2feb92
       }
-    } catch (err) {
-      console.warn('Backend API fetch error, using resilient state:', err);
+    } catch (err: any) {
+      if (err.name === 'AbortError') return;
+      console.warn('Dashboard API fetch error:', err);
+      setDashboardError(err.message || 'Dashboard live telemetry unavailable');
+      setDashboardData(prev => ({ ...prev, kpis: null }));
     }
   }, [selectedTenantScope]);
 
@@ -318,13 +340,13 @@ export default function App() {
     try {
       const scopeParam = selectedTenantScope ? `?tenantId=${selectedTenantScope}` : '';
       const [mRes, bRes, sbRes, cRes, kRes, tRes, tnRes] = await Promise.all([
-        fetch(`/api/admin/masters${scopeParam}`, { credentials: 'include' }),
-        fetch(`/api/admin/brokers${scopeParam}`, { credentials: 'include' }),
-        fetch(`/api/admin/sub-brokers${scopeParam}`, { credentials: 'include' }),
-        fetch(`/api/admin/clients${scopeParam}`, { credentials: 'include' }),
-        fetch(`/api/admin/kyc${scopeParam}`, { credentials: 'include' }),
-        fetch(`/api/admin/trades${scopeParam}`, { credentials: 'include' }),
-        fetch('/api/admin/tenants', { credentials: 'include' })
+        apiFetch(`/api/admin/masters${scopeParam}`),
+        apiFetch(`/api/admin/brokers${scopeParam}`),
+        apiFetch(`/api/admin/sub-brokers${scopeParam}`),
+        apiFetch(`/api/admin/clients${scopeParam}`),
+        apiFetch(`/api/admin/kyc${scopeParam}`),
+        apiFetch(`/api/admin/trades${scopeParam}`),
+        apiFetch('/api/admin/tenants')
       ]);
 
       if (mRes.ok) setMasters(await mRes.json());
@@ -335,7 +357,7 @@ export default function App() {
       if (tRes.ok) setTrades(await tRes.json());
       if (tnRes.ok) {
         const tnList = await tnRes.json();
-        if (Array.isArray(tnList) && tnList.length > 0) setTenants(tnList);
+        if (Array.isArray(tnList)) setTenants(tnList);
       }
     } catch (err: any) {
       console.warn('Hierarchy API sync warning:', err);
@@ -745,17 +767,69 @@ export default function App() {
     }
   };
 
-  // If authentication check is in progress, show clean loader
-  if (authChecking) {
-    return (
-      <div className="min-h-screen w-full bg-[#050811] flex items-center justify-center text-slate-400">
-        <div className="flex flex-col items-center gap-3">
-          <div className="w-8 h-8 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
-          <span className="text-xs font-mono">Authenticating session...</span>
-        </div>
-      </div>
-    );
-  }
+  // Helper to open Trading Platform with optional client context
+  const handleOpenTradingPlatform = useCallback((clientData?: any) => {
+    if (clientData) {
+      const normalizedClient = {
+        id: clientData.id || 'CLI-001',
+        userId: clientData.client_code || clientData.userId || clientData.id || 'CLI-001',
+        fullName: clientData.name || clientData.fullName || 'Client Trader',
+        name: clientData.name || clientData.fullName || 'Client Trader',
+        email: clientData.email || 'trader@tradematrix.io',
+        phone: clientData.phone || '+91 98000 00000',
+        balance: clientData.balance || '₹25,400',
+        pl: clientData.pl || clientData.netPl || '+₹0',
+        netPl: clientData.netPl || clientData.pl || '+₹0',
+        tenantId: clientData.tenantId || clientData.tenant_id || selectedTenantScope || 'TNT-001',
+        tenantName: clientData.tenantName || clientData.tenant_name || 'Alpha Prime Capital',
+        kyc: clientData.kyc || clientData.kyc_status || 'APPROVED',
+        status: clientData.account || clientData.status || 'ACTIVE'
+      };
+      setActiveTradingClient(normalizedClient);
+      const clientTenantId = normalizedClient.tenantId;
+      const matchedTenant = tenants.find(t => t.id === clientTenantId || t.name === normalizedClient.tenantName);
+      if (matchedTenant?.domain) {
+        setActiveTradingDomain(matchedTenant.domain);
+      }
+      if (clientTenantId && clientTenantId !== 'GLOBAL') {
+        setSelectedTenantScope(clientTenantId);
+      }
+    } else {
+      setActiveTradingClient(null);
+      const currentTenant = tenants.find(t => t.id === selectedTenantScope);
+      const domain = currentTenant?.domain || (selectedTenantScope === 'ten-02' ? 'trade.zenithmarkets.in' : selectedTenantScope === 'ten-03' ? 'trade.quantumfx.io' : 'trade.alphaprime.com');
+      setActiveTradingDomain(domain);
+    }
+    setAppMode('trading-platform');
+  }, [selectedTenantScope, tenants]);
+
+  // Check URL params on initial load for deep linking to trading platform
+  useEffect(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        const params = new URLSearchParams(window.location.search);
+        const modeParam = params.get('mode') || params.get('app_mode');
+        const clientId = params.get('client_id');
+        if (modeParam === 'trading' || modeParam === 'trading-platform') {
+          if (clientId) {
+            const clientName = params.get('name') || 'Client Trader';
+            const clientBalance = params.get('balance') || '₹25,400';
+            handleOpenTradingPlatform({
+              id: clientId,
+              name: clientName,
+              fullName: clientName,
+              balance: clientBalance,
+              tenantId: params.get('tenant_id') || undefined
+            });
+          } else {
+            handleOpenTradingPlatform();
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('URL param parse error:', e);
+    }
+  }, [handleOpenTradingPlatform]);
 
   // If no user is logged in, show the TradeMatrix Login & Sign Up screen
   if (!currentUser) {
@@ -790,34 +864,18 @@ export default function App() {
     );
   }
 
-  // Helper to open Trading Platform with optional client context
-  const handleOpenTradingPlatform = (clientData?: any) => {
-    if (clientData) {
-      setActiveTradingClient(clientData);
-      // If client belongs to a tenant or has tenantId
-      const clientTenantId = clientData.tenantId;
-      const matchedTenant = tenants.find(t => t.id === clientTenantId || t.name === clientData.tenantName);
-      if (matchedTenant?.domain) {
-        setActiveTradingDomain(matchedTenant.domain);
-      }
-    } else {
-      setActiveTradingClient(null);
-      const currentTenant = tenants.find(t => t.id === selectedTenantScope);
-      const domain = currentTenant?.domain || (selectedTenantScope === 'ten-02' ? 'trade.zenithmarkets.in' : selectedTenantScope === 'ten-03' ? 'trade.quantumfx.io' : 'trade.alphaprime.com');
-      setActiveTradingDomain(domain);
-    }
-    setAppMode('trading-platform');
-  };
-
   // If in Trading Platform Mode: render the dedicated Branded Tenant Trading Platform
   if (appMode === 'trading-platform') {
     return (
       <TradingPlatformView
         initialTenantDomain={activeTradingDomain}
-        initialTenantId={selectedTenantScope}
+        initialTenantId={selectedTenantScope || undefined}
         initialClient={activeTradingClient}
         isAdmin={currentUser?.role !== 'CLIENT'}
-        onReturnToAdmin={currentUser?.role === 'CLIENT' ? handleLogout : () => setAppMode('admin')}
+        onReturnToAdmin={currentUser?.role === 'CLIENT' ? handleLogout : () => {
+          setAppMode('admin');
+          setActiveTradingClient(null);
+        }}
         onNotify={showToast}
       />
     );
@@ -837,8 +895,8 @@ export default function App() {
         onCloseMobile={() => setMobileSidebarOpen(false)}
         currentUser={currentUser}
         badgeCounts={{
-          kycPending: dashboardData?.kpis.pending_kyc.value || 2,
-          openTickets: dashboardData?.kpis.open_tickets.value || 4
+          kycPending: Number(dashboardData?.kpis?.pending_kyc?.value) || 0,
+          openTickets: Number(dashboardData?.kpis?.open_tickets?.value) || 0
         }}
       />
 
@@ -909,12 +967,18 @@ export default function App() {
               {/* Dashboard View */}
               {activeTab === 'dashboard' && (
                 <DashboardView
+<<<<<<< HEAD
                   kpis={dashboardData?.kpis || null}
                   clients={clients}
+=======
+                  kpis={dashboardData?.kpis}
+                  hasError={!!dashboardError}
+                  errorMessage={dashboardError || undefined}
+>>>>>>> 3eb279a3a987a5596e31a324551957d91f2feb92
                   volumeCommissionData={dashboardData?.volumeCommission || []}
                   clientGrowthData={dashboardData?.clientGrowth || []}
                   dailyPLData={dashboardData?.dailyPL || []}
-                  dailyPLBadge="+₹28.4L MTD"
+                  dailyPLBadge={dashboardData?.dailyPLBadge || ''}
                   recentTrades={recentTrades.length ? recentTrades : dashboardData?.recentTrades || []}
                   pendingKYC={pendingKYC.length ? pendingKYC : dashboardData?.pendingKYC || []}
                   onNavigateTab={tab => setActiveTab(tab)}
@@ -1008,6 +1072,13 @@ export default function App() {
                   onToggleStatus={handleToggleEntityStatus}
                   onNotify={showToast}
                   onOpenTradingPlatform={handleOpenTradingPlatform}
+<<<<<<< HEAD
+=======
+                  onRefresh={async () => {
+                    await loadHierarchyData();
+                    await loadDashboardData();
+                  }}
+>>>>>>> 3eb279a3a987a5596e31a324551957d91f2feb92
                 />
               )}
 

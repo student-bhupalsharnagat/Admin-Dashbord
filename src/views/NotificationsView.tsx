@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   UserCheck,
   DollarSign,
@@ -10,7 +10,8 @@ import {
   Clock,
   ExternalLink,
   Trash2,
-  Filter
+  Filter,
+  Bell
 } from 'lucide-react';
 import { NavigationTab } from '../components/layout/AdminSidebar';
 
@@ -110,21 +111,67 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
   onNotify,
   onNavigateTab
 }) => {
-  const [notifications, setNotifications] = useState<NotificationItem[]>(INITIAL_NOTIFICATIONS);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [activeCategory, setActiveCategory] = useState<string>('All');
+
+  useEffect(() => {
+    let isMounted = true;
+    const fetchNotifications = async () => {
+      try {
+        const token = localStorage.getItem('auth_token') || sessionStorage.getItem('auth_token');
+        const res = await fetch('/api/admin/notifications', {
+          credentials: 'include',
+          headers: token ? { Authorization: `Bearer ${token}` } : {}
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data) && isMounted) {
+            const mapped: NotificationItem[] = data.map((d: any, idx: number) => ({
+              id: d.id || `notif-backend-${idx}`,
+              title: d.title || 'Notification',
+              message: d.message || d.details || '',
+              timeAgo: d.created_at ? new Date(d.created_at).toLocaleTimeString() : 'Just now',
+              category: d.category || 'System',
+              read: d.is_read ?? d.read ?? false,
+              icon: Bell,
+              iconBg: 'bg-blue-500/10',
+              iconColor: 'text-blue-400',
+              targetTab: d.target_tab || d.targetTab || undefined
+            }));
+            setNotifications(mapped);
+          }
+        }
+      } catch {
+        if (isMounted) setNotifications([]);
+      }
+    };
+    fetchNotifications();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const unreadCount = notifications.filter(n => !n.read).length;
 
-  const handleMarkAllAsRead = () => {
+  const handleMarkAllAsRead = async () => {
     setNotifications(prev => prev.map(n => ({ ...n, read: true })));
     onNotify?.('All notifications marked as read', 'success');
   };
 
-  const handleToggleRead = (id: string, e?: React.MouseEvent) => {
+  const handleToggleRead = async (id: string, e?: React.MouseEvent) => {
     e?.stopPropagation();
     setNotifications(prev =>
       prev.map(n => (n.id === id ? { ...n, read: !n.read } : n))
     );
+    try {
+      const token = localStorage.getItem('auth_token') || sessionStorage.getItem('auth_token');
+      await fetch(`/api/admin/notifications/${id}/read`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {}
+      });
+    } catch {
+      // Ignored
+    }
   };
 
   const handleDelete = (id: string, e: React.MouseEvent) => {

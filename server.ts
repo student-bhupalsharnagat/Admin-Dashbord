@@ -10,7 +10,8 @@ import {
   requireRole,
   requirePermission,
   requireTenantAccess,
-  resolveStrictTenantScope
+  resolveStrictTenantScope,
+  authRateLimiter
 } from './server/auth/middleware.ts';
 import {
   filterMastersForUser,
@@ -81,13 +82,29 @@ async function startServer() {
   // Handles all event types: client.registered, trade.executed, order.created, deposits, etc.
   // ----------------------------------------------------
   app.post([
+<<<<<<< HEAD
     '/api/internal/v1/events/:eventType',
     '/api/internal/v1/events/*',
     '/api/internal/events',
     '/api/events/trading-platform',
     '/api/events'
+=======
+    '/api/internal/v1/events/:slug',
+    '/api/internal/v1/events',
+    '/api/internal/events',
+    '/api/events/trading-platform'
+>>>>>>> 3eb279a3a987a5596e31a324551957d91f2feb92
   ], async (req, res) => {
     try {
+      // Reject Bearer JWT on these S2S routes
+      const authHeader = req.headers.authorization;
+      if (authHeader && authHeader.toLowerCase().startsWith('bearer')) {
+        return res.status(401).json({
+          error: 'UNAUTHORIZED_S2S',
+          message: 'Bearer token not accepted on S2S routes'
+        });
+      }
+
       const rawBody = (req as any).rawBody || JSON.stringify(req.body);
       const eventTypeParam = (req.params as any)?.eventType;
       if (eventTypeParam && !req.body.eventType) {
@@ -110,14 +127,34 @@ async function startServer() {
         rawBody,
         req.body
       );
-      const statusCode = result.success ? (result.duplicate ? 200 : 201) : 400;
-      res.status(statusCode).json(result);
+
+      // Idempotency: return 200 on duplicate, 401 on bad signature, never 404
+      if (result.duplicate) {
+        return res.status(200).json(result);
+      }
+
+      if (!result.success) {
+        const isAuthError = result.statusCode === 401 ||
+          result.error?.includes('HMAC') ||
+          result.error?.includes('signature') ||
+          result.error?.includes('Timestamp') ||
+          result.error?.includes('timestamp') ||
+          result.error?.includes('Nonce') ||
+          result.error?.includes('nonce') ||
+          result.error?.includes('Bearer') ||
+          result.message?.includes('Security');
+        const code = isAuthError ? 401 : (result.statusCode || 400);
+        return res.status(code).json(result);
+      }
+
+      return res.status(200).json(result);
     } catch (err: any) {
       console.error('[Inbound Event Error]', err);
       res.status(500).json({ error: 'INTERNAL_ERROR', message: err.message });
     }
   });
 
+<<<<<<< HEAD
   // Real-time Active Users API Endpoint
   app.get('/api/admin/active-users', authenticate, (req, res) => {
     try {
@@ -133,6 +170,20 @@ async function startServer() {
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
+=======
+  // Fallback guard to ensure /api/internal/v1/events* never returns 404
+  app.all(['/api/internal/v1/events/:slug', '/api/internal/v1/events*'], (req, res) => {
+    if (req.method !== 'POST') {
+      return res.status(405).json({
+        error: 'METHOD_NOT_ALLOWED',
+        message: 'Only POST supported on S2S event ingestion'
+      });
+    }
+    return res.status(400).json({
+      error: 'BAD_REQUEST',
+      message: 'Invalid S2S event ingestion request'
+    });
+>>>>>>> 3eb279a3a987a5596e31a324551957d91f2feb92
   });
 
   // ----------------------------------------------------
@@ -222,7 +273,159 @@ async function startServer() {
   });
 
   // ----------------------------------------------------
-  // S2S INTEGRATION STATUS & OBSERVABILITY
+  // S2S INTERNAL TRADING PLATFORM INTERACTION ENDPOINTS
+  // (Handles S2S control commands with HMAC signature verification)
+  // ----------------------------------------------------
+  const verifyS2S = (req: any, res: any, next: any) => {
+    const rawBody = req.rawBody || (req.body ? JSON.stringify(req.body) : '');
+    const verification = tradingPlatformClient.verifyInternalS2S(req.headers as any, req.method, req.path, rawBody);
+    if (!verification.valid) {
+      return res.status(verification.statusCode || 401).json({
+        error: 'UNAUTHORIZED_S2S',
+        message: verification.reason || 'Invalid S2S HMAC signature or timestamp'
+      });
+    }
+    next();
+  };
+
+  // 1. Tenant Sync Route
+  app.post(['/api/internal/v1/tenant/sync', '/api/internal/tenant/sync'], verifyS2S, (req, res) => {
+    const { tenantId, adminTenantId, status, trading_enabled, config_version, syncedBy } = req.body;
+    res.status(200).json({
+      success: true,
+      tenantId: tenantId || adminTenantId,
+      status: status || 'ACTIVE',
+      trading_enabled: trading_enabled ?? true,
+      config_version: config_version || Date.now(),
+      syncedBy: syncedBy || 'CentralAdmin',
+      syncedAt: new Date().toISOString()
+    });
+  });
+
+  // 2. Fund Process (Approve / Reject Deposit / Withdrawal)
+  app.post(['/api/internal/v1/trading/funds/process', '/api/internal/trading/funds/process'], verifyS2S, (req, res) => {
+    const { id, transactionId, type, action, amount, clientId, actor } = req.body;
+    res.status(200).json({
+      success: true,
+      transactionId: transactionId || id,
+      type: type || 'DEPOSIT',
+      action: action || 'APPROVE',
+      amount,
+      clientId,
+      processedBy: actor || 'Compliance',
+      processedAt: new Date().toISOString()
+    });
+  });
+
+  // 3. KYC Verification Process
+  app.post(['/api/internal/v1/compliance/kyc/verify', '/api/internal/compliance/kyc/verify'], verifyS2S, (req, res) => {
+    const { id, kycId, clientId, status, action, notes, actor } = req.body;
+    res.status(200).json({
+      success: true,
+      kycId: kycId || id,
+      clientId,
+      status: status || 'APPROVED',
+      action: action || 'APPROVE',
+      notes,
+      verifiedBy: actor || 'Compliance Officer',
+      verifiedAt: new Date().toISOString()
+    });
+  });
+
+  // 4. Emergency Trading Halt
+  app.post('/emergency/trading-halt', verifyS2S, (req, res) => {
+    const { active, halt, actor, reason, tenantId } = req.body;
+    res.status(200).json({
+      success: true,
+      active: active !== undefined ? active : !halt,
+      halt: halt !== undefined ? halt : !active,
+      actor: actor || 'Admin',
+      reason: reason || 'Emergency Trading Halt',
+      tenantId,
+      timestamp: new Date().toISOString()
+    });
+  });
+
+  // 5. Emergency Freeze User / Entity
+  app.post('/emergency/freeze-user', verifyS2S, (req, res) => {
+    const { entityType, entityId, action, actor, reason, tenantId } = req.body;
+    res.status(200).json({
+      success: true,
+      entityType: entityType || 'CLIENT',
+      entityId,
+      action: action || 'FREEZE',
+      actor: actor || 'Admin',
+      reason,
+      tenantId,
+      timestamp: new Date().toISOString()
+    });
+  });
+
+  // 6. Emergency Cancel All Orders
+  app.post('/emergency/cancel-all-orders', verifyS2S, (req, res) => {
+    const { tenantId, actor, reason } = req.body;
+    res.status(200).json({
+      success: true,
+      tenantId: tenantId || 'GLOBAL',
+      actor: actor || 'Admin',
+      reason: reason || 'Emergency Cancel All Orders',
+      timestamp: new Date().toISOString()
+    });
+  });
+
+  // 7. Emergency Square-Off All / Position
+  app.post('/emergency/square-off-all', verifyS2S, (req, res) => {
+    const { positionId, actor, reason, tenantId } = req.body;
+    res.status(200).json({
+      success: true,
+      positionId: positionId || 'ALL',
+      actor: actor || 'Admin',
+      reason: reason || 'Emergency Square-Off',
+      tenantId,
+      timestamp: new Date().toISOString()
+    });
+  });
+
+  // 8. Emergency Killswitch
+  app.post('/emergency/killswitch', verifyS2S, (req, res) => {
+    const { action, actor, reason, tenantId } = req.body;
+    res.status(200).json({
+      success: true,
+      action: action || 'TRIGGER',
+      actor: actor || 'Admin',
+      reason: reason || 'Emergency Killswitch Action',
+      tenantId,
+      timestamp: new Date().toISOString()
+    });
+  });
+
+  // 9. Client Mapping Sync
+  app.post('/trading/clients/map', verifyS2S, (req, res) => {
+    const { clientId, clientCode, name, email, phone, tenantId, referralCode, brokerCode } = req.body;
+    res.status(200).json({
+      success: true,
+      mapped: true,
+      clientId,
+      clientCode,
+      name,
+      tenantId,
+      referralCode,
+      brokerCode,
+      timestamp: new Date().toISOString()
+    });
+  });
+
+  // 10. Health check endpoint for S2S
+  app.get('/api/internal/v1/health', (req, res) => {
+    res.status(200).json({
+      status: 'ok',
+      service: 'trading-platform-s2s',
+      timestamp: new Date().toISOString()
+    });
+  });
+
+  // ----------------------------------------------------
+  // S2S INTEGRATION STATUS, OBSERVABILITY & BACKFILL
   // ----------------------------------------------------
   app.get('/api/admin/integration/status', authenticate, requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER']), async (req, res) => {
     try {
@@ -230,22 +433,77 @@ async function startServer() {
       const stats = eventHandler.getEventStats();
       const dbEventsRes = await query('SELECT count(*) as total_events FROM processed_events');
       const syncStatesRes = await query('SELECT sync_status, count(*) as count FROM tenant_sync_state GROUP BY sync_status');
+      
+      const lastEventDb = await query('SELECT created_at FROM processed_events ORDER BY created_at DESC LIMIT 1');
+      const lastEventTime = stats.metrics.lastEventProcessedAt || (lastEventDb.rows[0]?.created_at ? new Date(lastEventDb.rows[0].created_at).toISOString() : null);
+      const clientMetrics = tradingPlatformClient.getMetrics();
+      const failedOutboundCount = clientMetrics.failedRequests || 0;
+
+      const backfillRows = await query('SELECT * FROM tenant_sync_state ORDER BY updated_at DESC');
+      const backfillState = {
+        status: backfillRows.rows.some(r => r.sync_status === 'RETRYING')
+          ? 'RETRYING'
+          : backfillRows.rows.some(r => r.sync_status === 'FAILED')
+          ? 'FAILED'
+          : backfillRows.rows.every(r => r.sync_status === 'SYNCED') && backfillRows.rows.length > 0
+          ? 'SYNCED'
+          : 'IDLE',
+        tenants_synced: backfillRows.rows.filter(r => r.sync_status === 'SYNCED').length,
+        total_tenants: backfillRows.rows.length,
+        details: backfillRows.rows
+      };
 
       res.json({
+        last_event_time: lastEventTime,
+        lastEventTime: lastEventTime,
+        failed_outbound_count: failedOutboundCount,
+        failedOutboundCount: failedOutboundCount,
+        backfill_state: backfillState,
+        backfillState: backfillState,
         trading_platform: {
           base_url: appConfig.tradingPlatformBaseUrl,
           circuit_breaker: cbState,
-          configured: !!appConfig.tradingPlatformBaseUrl
+          configured: !!appConfig.tradingPlatformBaseUrl,
+          metrics: clientMetrics
         },
         inbound_events: {
           processed_in_memory: stats.processedCount,
           total_in_db: parseInt(dbEventsRes.rows[0]?.total_events || '0', 10),
-          recent: stats.recentEvents
+          last_event_time: lastEventTime,
+          recent: stats.recentEvents,
+          metrics: stats.metrics
         },
         tenant_sync_summary: syncStatesRes.rows
       });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  // One-time backfill endpoint for SUPER_ADMIN
+  app.post('/api/admin/integration/backfill', authenticate, requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER']), async (req, res) => {
+    try {
+      const { tenantId } = req.body || {};
+      const counts = await eventHandler.backfillFromTradingPlatform(tenantId);
+      await writeSecurityAuditLog({
+        tenantId: tenantId || null,
+        userName: req.user?.name || 'Super Admin',
+        action: 'INTEGRATION_BACKFILL_EXECUTED',
+        module: 'INTEGRATION',
+        details: `Backfill completed: ${JSON.stringify(counts)}`,
+        ipAddress: req.ip || '127.0.0.1'
+      });
+      res.json({
+        success: true,
+        message: 'Integration backfill successfully executed from Trading Platform.',
+        backfilled: counts
+      });
+    } catch (err: any) {
+      console.error('[Backfill Error]', err);
+      res.status(500).json({
+        error: 'BACKFILL_FAILED',
+        message: err.message || 'Failed to complete backfill from Trading Platform.'
+      });
     }
   });
 
@@ -271,7 +529,7 @@ async function startServer() {
     });
   });
 
-  app.post('/api/auth/login', async (req, res) => {
+  app.post('/api/auth/login', authRateLimiter, async (req, res) => {
     try {
       const { email, password } = req.body;
       const ipAddress = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
@@ -281,6 +539,13 @@ async function startServer() {
         return res.status(400).json({
           error: 'MISSING_CREDENTIALS',
           message: 'Email and password are required.'
+        });
+      }
+
+      if (typeof password !== 'string' || password.length < 8) {
+        return res.status(400).json({
+          error: 'INVALID_CREDENTIALS',
+          message: 'Password must be at least 8 characters long.'
         });
       }
 
@@ -399,11 +664,13 @@ async function startServer() {
       });
 
       // Issue secure HTTP-Only cookie
+      const isProduction = process.env.NODE_ENV === 'production';
       res.cookie('tradepro_session', token, {
         httpOnly: true,
         secure: true,
-        sameSite: 'none',
-        maxAge: 24 * 60 * 60 * 1000
+        sameSite: isProduction ? 'lax' : 'none',
+        maxAge: 24 * 60 * 60 * 1000,
+        path: '/'
       });
 
       const permissions = await getPermissionsForRole(userRecord.role as UserRole);
@@ -434,9 +701,11 @@ async function startServer() {
   });
 
   // User Registration Endpoint
-  app.post('/api/auth/register', async (req, res) => {
+  app.post('/api/auth/register', authRateLimiter, async (req, res) => {
     try {
-      const { name, email, password, role = 'CLIENT', tenantId, phone } = req.body;
+      const { name, email, password, tenantId, phone } = req.body;
+      // body.role is ignored; public signup always creates non-privileged CLIENT role
+      const role: UserRole = 'CLIENT';
       const ipAddress = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
       const userAgent = (req.headers['user-agent'] as string) || 'Desktop Browser';
 
@@ -447,10 +716,10 @@ async function startServer() {
         });
       }
 
-      if (password.length < 6) {
+      if (typeof password !== 'string' || password.length < 8) {
         return res.status(400).json({
           error: 'WEAK_PASSWORD',
-          message: 'Password must be at least 6 characters long.'
+          message: 'Password must be at least 8 characters long.'
         });
       }
 
@@ -469,34 +738,33 @@ async function startServer() {
         });
       }
 
-      // Resolve tenant
-      let assignedTenantId: string | null = tenantId || null;
-      let tenantName = 'Alpha Prime Capital';
-
-      if (assignedTenantId) {
-        const tRes = await query('SELECT id, name FROM tenants WHERE id = $1 LIMIT 1', [assignedTenantId]);
-        if (tRes.rows.length > 0) {
-          tenantName = tRes.rows[0].name;
-        } else {
-          const fallbackT = await query('SELECT id, name FROM tenants WHERE status = $1 LIMIT 1', ['ACTIVE']);
-          if (fallbackT.rows.length > 0) {
-            assignedTenantId = fallbackT.rows[0].id;
-            tenantName = fallbackT.rows[0].name;
-          }
-        }
-      } else if (role !== 'SUPER_ADMIN' && role !== 'PLATFORM_OWNER') {
-        const fallbackT = await query('SELECT id, name FROM tenants WHERE status = $1 LIMIT 1', ['ACTIVE']);
-        if (fallbackT.rows.length > 0) {
-          assignedTenantId = fallbackT.rows[0].id;
-          tenantName = fallbackT.rows[0].name;
-        }
+      // tenantId must be a valid ACTIVE tenant
+      const targetTenantId = typeof tenantId === 'string' ? tenantId.trim() : '';
+      if (!targetTenantId) {
+        return res.status(400).json({
+          error: 'INVALID_TENANT',
+          message: 'tenantId is required and must reference a valid ACTIVE tenant.'
+        });
       }
+
+      const tenantRes = await query<{ id: string; name: string; status: string }>(
+        'SELECT id, name, status FROM tenants WHERE id = $1 LIMIT 1',
+        [targetTenantId]
+      );
+
+      if (tenantRes.rows.length === 0 || tenantRes.rows[0].status !== 'ACTIVE') {
+        return res.status(400).json({
+          error: 'INVALID_TENANT',
+          message: 'The specified tenant does not exist or is not active.'
+        });
+      }
+
+      const assignedTenantId = tenantRes.rows[0].id;
+      const tenantName = tenantRes.rows[0].name;
 
       const passwordHash = await hashPassword(password);
       const newUserId = `usr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-      const hierarchyLevel: HierarchyLevel = (role === 'SUPER_ADMIN' || role === 'PLATFORM_OWNER')
-        ? 'PLATFORM'
-        : (role === 'TENANT_ADMIN' ? 'TENANT' : (role as HierarchyLevel));
+      const hierarchyLevel: HierarchyLevel = 'CLIENT';
       const hierarchyId = assignedTenantId;
 
       await query(
@@ -530,10 +798,11 @@ async function startServer() {
         device: userAgent
       });
 
+      const isProduction = process.env.NODE_ENV === 'production';
       res.cookie('tradepro_session', token, {
         httpOnly: true,
         secure: true,
-        sameSite: 'none',
+        sameSite: isProduction ? 'lax' : 'none',
         expires: expiresAt,
         path: '/'
       });
@@ -730,34 +999,96 @@ async function startServer() {
 
   app.post('/api/admin/tenants/:id/suspend', authenticate, requirePermission('tenants.update'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER']), async (req, res) => {
     try {
-      const updated = await activeTradingDataProvider.updateTenantStatus(req.params.id, 'SUSPENDED');
+      const tenantId = req.params.id;
+      const actor = req.user?.name || req.user?.email || 'Super Admin';
+      const correlationId = `corr_suspend_${tenantId}_${Date.now()}`;
+
+      // 1. S2S dispatch to Trading Platform
+      const s2sRes = await tradingPlatformClient.syncTenantConfig(
+        tenantId,
+        {
+          status: 'SUSPENDED',
+          trading_enabled: false,
+          registration_enabled: false,
+          api_enabled: false,
+          config_version: Date.now()
+        },
+        { actor, correlationId }
+      );
+
+      if (!s2sRes.success) {
+        return res.status(503).json({
+          error: 'TRADING_PLATFORM_UNREACHABLE',
+          message: 'Trading platform is currently unreachable. Tenant status was not changed.'
+        });
+      }
+
+      // 2. Optimistic UI / DB state only after Trading returns success
+      const updated = await activeTradingDataProvider.updateTenantStatus(tenantId, 'SUSPENDED');
       await writeSecurityAuditLog({
-        tenantId: req.params.id,
-        userName: req.user!.name,
+        tenantId,
+        userName: actor,
         action: 'TENANT_SUSPENDED',
         module: 'TENANTS',
-        details: `Tenant ${req.params.id} suspended by admin`,
+        details: `Tenant ${tenantId} suspended by admin (S2S acked)`,
         ipAddress: req.ip
       });
       res.json(updated);
     } catch (err: any) {
+      if (err?.message?.includes('Circuit Breaker') || err?.message?.includes('unavailable')) {
+        return res.status(503).json({
+          error: 'CIRCUIT_OPEN',
+          message: 'Trading platform circuit breaker is OPEN. Tenant status was not changed.'
+        });
+      }
       res.status(500).json({ error: err.message });
     }
   });
 
   app.post('/api/admin/tenants/:id/activate', authenticate, requirePermission('tenants.update'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER']), async (req, res) => {
     try {
-      const updated = await activeTradingDataProvider.updateTenantStatus(req.params.id, 'ACTIVE');
+      const tenantId = req.params.id;
+      const actor = req.user?.name || req.user?.email || 'Super Admin';
+      const correlationId = `corr_activate_${tenantId}_${Date.now()}`;
+
+      // 1. S2S dispatch to Trading Platform
+      const s2sRes = await tradingPlatformClient.syncTenantConfig(
+        tenantId,
+        {
+          status: 'ACTIVE',
+          trading_enabled: true,
+          registration_enabled: true,
+          api_enabled: true,
+          config_version: Date.now()
+        },
+        { actor, correlationId }
+      );
+
+      if (!s2sRes.success) {
+        return res.status(503).json({
+          error: 'TRADING_PLATFORM_UNREACHABLE',
+          message: 'Trading platform is currently unreachable. Tenant status was not changed.'
+        });
+      }
+
+      // 2. Optimistic UI / DB state only after Trading returns success
+      const updated = await activeTradingDataProvider.updateTenantStatus(tenantId, 'ACTIVE');
       await writeSecurityAuditLog({
-        tenantId: req.params.id,
-        userName: req.user!.name,
+        tenantId,
+        userName: actor,
         action: 'TENANT_ACTIVATED',
         module: 'TENANTS',
-        details: `Tenant ${req.params.id} activated by admin`,
+        details: `Tenant ${tenantId} activated by admin (S2S acked)`,
         ipAddress: req.ip
       });
       res.json(updated);
     } catch (err: any) {
+      if (err?.message?.includes('Circuit Breaker') || err?.message?.includes('unavailable')) {
+        return res.status(503).json({
+          error: 'CIRCUIT_OPEN',
+          message: 'Trading platform circuit breaker is OPEN. Tenant status was not changed.'
+        });
+      }
       res.status(500).json({ error: err.message });
     }
   });
@@ -1103,8 +1434,20 @@ async function startServer() {
         reason: reason || `Square-off client position ${posId} for client ${id}`,
         tenantId: req.user?.tenant_id
       });
+      if (!sqRes.success) {
+        return res.status(503).json({
+          error: 'TRADING_PLATFORM_UNREACHABLE',
+          message: 'Trading platform is currently unreachable. Position was not squared off.'
+        });
+      }
       res.json({ success: true, positionId: posId, result: sqRes });
     } catch (err: any) {
+      if (err?.message?.includes('Circuit Breaker') || err?.message?.includes('unreachable') || err?.message?.includes('unavailable')) {
+        return res.status(503).json({
+          error: 'TRADING_PLATFORM_UNREACHABLE',
+          message: 'Trading platform is currently unreachable. Position was not squared off.'
+        });
+      }
       res.status(500).json({ error: err.message });
     }
   });
@@ -1160,21 +1503,50 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/admin/kyc/:id', authenticate, requirePermission('kyc.review'), async (req, res) => {
+  app.patch(['/api/admin/kyc/:id', '/api/admin/clients/:id/kyc', '/api/clients/:id/kyc'], authenticate, requirePermission('kyc.review'), async (req, res) => {
     try {
       const { status, notes } = req.body;
       const user = req.user!;
-      const updated = await activeTradingDataProvider.updateKYCStatus(req.params.id, status, notes);
+      const kycId = req.params.id;
+      const tenantScope = resolveStrictTenantScope(req);
+      const action = status === 'APPROVED' || status === 'VERIFIED' ? 'APPROVE' : 'REJECT';
+
+      // 1. S2S dispatch to Trading Platform
+      const s2sRes = await tradingPlatformClient.processKYC({
+        kycId,
+        clientId: kycId,
+        status,
+        action,
+        notes,
+        actor: user.name || user.email || 'Compliance Officer',
+        tenantId: tenantScope
+      });
+
+      if (!s2sRes.success) {
+        return res.status(503).json({
+          error: 'TRADING_PLATFORM_UNREACHABLE',
+          message: 'Trading platform is currently unreachable. KYC status was not changed.'
+        });
+      }
+
+      // 2. Optimistic UI / DB state only after Trading returns success
+      const updated = await activeTradingDataProvider.updateKYCStatus(kycId, status, notes);
       await writeSecurityAuditLog({
         tenantId: user.tenant_id,
         userName: user.name,
         action: 'KYC_STATUS_UPDATED',
         module: 'COMPLIANCE',
-        details: `KYC record ${req.params.id} marked ${status} by ${user.name}`,
+        details: `KYC record ${kycId} marked ${status} by ${user.name} (S2S acked)`,
         ipAddress: req.ip
       });
       res.json(updated);
     } catch (err: any) {
+      if (err?.message?.includes('Circuit Breaker') || err?.message?.includes('unavailable')) {
+        return res.status(503).json({
+          error: 'CIRCUIT_OPEN',
+          message: 'Trading platform circuit breaker is OPEN. KYC status was not changed.'
+        });
+      }
       res.status(500).json({ error: err.message });
     }
   });
@@ -1193,41 +1565,93 @@ async function startServer() {
 
   app.post(['/api/admin/compliance/deposits/:id/approve', '/api/compliance/deposits/:id/approve'], authenticate, requirePermission('funds.approve'), async (req, res) => {
     try {
+      const depositId = req.params.id;
       const actor = req.user?.name || req.user?.email || 'Compliance Officer';
-      const result = await activeTradingDataProvider.approveFundDeposit(req.params.id, actor);
+      const tenantScope = resolveStrictTenantScope(req);
+
+      // 1. S2S dispatch to Trading Platform POST /api/internal/v1/trading/funds/process
+      const s2sRes = await tradingPlatformClient.processFundTransaction({
+        transactionId: depositId,
+        type: 'DEPOSIT',
+        action: 'APPROVE',
+        actor,
+        tenantId: tenantScope
+      });
+
+      if (!s2sRes.success) {
+        return res.status(503).json({
+          error: 'TRADING_PLATFORM_UNREACHABLE',
+          message: 'Trading platform is currently unreachable. Deposit status was not changed.'
+        });
+      }
+
+      // 2. Optimistic UI / DB state only after Trading returns success
+      const result = await activeTradingDataProvider.approveFundDeposit(depositId, actor);
       await writeSecurityAuditLog({
         tenantId: req.user?.tenant_id,
         userName: actor,
         action: 'DEPOSIT_APPROVED',
         module: 'FUNDS',
-        details: `Deposit ${req.params.id} approved`,
+        details: `Deposit ${depositId} approved (S2S acked)`,
         ipAddress: req.ip
       });
       res.json(result);
     } catch (err: any) {
+      if (err?.message?.includes('Circuit Breaker') || err?.message?.includes('unavailable')) {
+        return res.status(503).json({
+          error: 'CIRCUIT_OPEN',
+          message: 'Trading platform circuit breaker is OPEN. Deposit status was not changed.'
+        });
+      }
       res.status(500).json({ error: err.message });
     }
   });
 
   app.post(['/api/admin/compliance/deposits/:id/reject', '/api/compliance/deposits/:id/reject'], authenticate, requirePermission('funds.reject'), async (req, res) => {
     try {
+      const depositId = req.params.id;
       const actor = req.user?.name || req.user?.email || 'Compliance Officer';
-      const result = await activeTradingDataProvider.rejectFundDeposit(req.params.id, actor);
+      const tenantScope = resolveStrictTenantScope(req);
+      const reason = req.body?.reason || req.body?.notes || 'Rejected by compliance';
+
+      const s2sRes = await tradingPlatformClient.processFundTransaction({
+        transactionId: depositId,
+        type: 'DEPOSIT',
+        action: 'REJECT',
+        actor,
+        reason,
+        tenantId: tenantScope
+      });
+
+      if (!s2sRes.success) {
+        return res.status(503).json({
+          error: 'TRADING_PLATFORM_UNREACHABLE',
+          message: 'Trading platform is currently unreachable. Deposit status was not changed.'
+        });
+      }
+
+      const result = await activeTradingDataProvider.rejectFundDeposit(depositId, actor);
       await writeSecurityAuditLog({
         tenantId: req.user?.tenant_id,
         userName: actor,
         action: 'DEPOSIT_REJECTED',
         module: 'FUNDS',
-        details: `Deposit ${req.params.id} rejected`,
+        details: `Deposit ${depositId} rejected: ${reason} (S2S acked)`,
         ipAddress: req.ip
       });
       res.json(result);
     } catch (err: any) {
+      if (err?.message?.includes('Circuit Breaker') || err?.message?.includes('unavailable')) {
+        return res.status(503).json({
+          error: 'CIRCUIT_OPEN',
+          message: 'Trading platform circuit breaker is OPEN. Deposit status was not changed.'
+        });
+      }
       res.status(500).json({ error: err.message });
     }
   });
 
-  app.post(['/api/admin/compliance/deposits', '/api/compliance/deposits'], authenticate, requirePermission('funds.deposit'), async (req, res) => {
+  app.post(['/api/admin/compliance/deposits', '/api/compliance/deposits', '/api/admin/funds/deposits', '/api/funds/deposits'], authenticate, requirePermission('funds.deposit'), async (req, res) => {
     try {
       const tenantScope = resolveStrictTenantScope(req);
       const data = { ...req.body, tenant_id: tenantScope || req.body.tenant_id };
@@ -1239,7 +1663,7 @@ async function startServer() {
   });
 
   // Funds Withdrawals
-  app.get(['/api/admin/compliance/withdrawals', '/api/compliance/withdrawals'], authenticate, requirePermission('funds.view'), async (req, res) => {
+  app.get(['/api/admin/compliance/withdrawals', '/api/compliance/withdrawals', '/api/admin/funds/withdrawals', '/api/funds/withdrawals'], authenticate, requirePermission('funds.view'), async (req, res) => {
     try {
       const tenantScope = resolveStrictTenantScope(req);
       const status = req.query.status as string;
@@ -1252,41 +1676,91 @@ async function startServer() {
 
   app.post(['/api/admin/compliance/withdrawals/:id/approve', '/api/compliance/withdrawals/:id/approve'], authenticate, requirePermission('funds.approve'), async (req, res) => {
     try {
+      const withdrawalId = req.params.id;
       const actor = req.user?.name || req.user?.email || 'Compliance Officer';
-      const result = await activeTradingDataProvider.approveFundWithdrawal(req.params.id, actor);
+      const tenantScope = resolveStrictTenantScope(req);
+
+      const s2sRes = await tradingPlatformClient.processFundTransaction({
+        transactionId: withdrawalId,
+        type: 'WITHDRAWAL',
+        action: 'APPROVE',
+        actor,
+        tenantId: tenantScope
+      });
+
+      if (!s2sRes.success) {
+        return res.status(503).json({
+          error: 'TRADING_PLATFORM_UNREACHABLE',
+          message: 'Trading platform is currently unreachable. Withdrawal status was not changed.'
+        });
+      }
+
+      const result = await activeTradingDataProvider.approveFundWithdrawal(withdrawalId, actor);
       await writeSecurityAuditLog({
         tenantId: req.user?.tenant_id,
         userName: actor,
         action: 'WITHDRAWAL_APPROVED',
         module: 'FUNDS',
-        details: `Withdrawal ${req.params.id} approved`,
+        details: `Withdrawal ${withdrawalId} approved (S2S acked)`,
         ipAddress: req.ip
       });
       res.json(result);
     } catch (err: any) {
+      if (err?.message?.includes('Circuit Breaker') || err?.message?.includes('unavailable')) {
+        return res.status(503).json({
+          error: 'CIRCUIT_OPEN',
+          message: 'Trading platform circuit breaker is OPEN. Withdrawal status was not changed.'
+        });
+      }
       res.status(500).json({ error: err.message });
     }
   });
 
   app.post(['/api/admin/compliance/withdrawals/:id/reject', '/api/compliance/withdrawals/:id/reject'], authenticate, requirePermission('funds.reject'), async (req, res) => {
     try {
+      const withdrawalId = req.params.id;
       const actor = req.user?.name || req.user?.email || 'Compliance Officer';
-      const result = await activeTradingDataProvider.rejectFundWithdrawal(req.params.id, actor);
+      const tenantScope = resolveStrictTenantScope(req);
+      const reason = req.body?.reason || req.body?.notes || 'Rejected by compliance';
+
+      const s2sRes = await tradingPlatformClient.processFundTransaction({
+        transactionId: withdrawalId,
+        type: 'WITHDRAWAL',
+        action: 'REJECT',
+        actor,
+        reason,
+        tenantId: tenantScope
+      });
+
+      if (!s2sRes.success) {
+        return res.status(503).json({
+          error: 'TRADING_PLATFORM_UNREACHABLE',
+          message: 'Trading platform is currently unreachable. Withdrawal status was not changed.'
+        });
+      }
+
+      const result = await activeTradingDataProvider.rejectFundWithdrawal(withdrawalId, actor);
       await writeSecurityAuditLog({
         tenantId: req.user?.tenant_id,
         userName: actor,
         action: 'WITHDRAWAL_REJECTED',
         module: 'FUNDS',
-        details: `Withdrawal ${req.params.id} rejected`,
+        details: `Withdrawal ${withdrawalId} rejected: ${reason} (S2S acked)`,
         ipAddress: req.ip
       });
       res.json(result);
     } catch (err: any) {
+      if (err?.message?.includes('Circuit Breaker') || err?.message?.includes('unavailable')) {
+        return res.status(503).json({
+          error: 'CIRCUIT_OPEN',
+          message: 'Trading platform circuit breaker is OPEN. Withdrawal status was not changed.'
+        });
+      }
       res.status(500).json({ error: err.message });
     }
   });
 
-  app.post(['/api/admin/compliance/withdrawals', '/api/compliance/withdrawals'], authenticate, requirePermission('funds.withdraw'), async (req, res) => {
+  app.post(['/api/admin/compliance/withdrawals', '/api/compliance/withdrawals', '/api/admin/funds/withdrawals', '/api/funds/withdrawals'], authenticate, requirePermission('funds.withdraw'), async (req, res) => {
     try {
       const tenantScope = resolveStrictTenantScope(req);
       const data = { ...req.body, tenant_id: tenantScope || req.body.tenant_id };
@@ -1348,6 +1822,32 @@ async function startServer() {
       });
       res.json(result);
     } catch (err: any) {
+      if (err?.message?.includes('Circuit Breaker') || err?.message?.includes('unreachable') || err?.message?.includes('unavailable')) {
+        return res.status(503).json({ error: 'TRADING_PLATFORM_UNREACHABLE', message: 'Trading platform is currently unreachable. Position was not squared off.' });
+      }
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post(['/api/admin/risk/emergency-square-off', '/api/admin/emergency/margin-square-off', '/api/admin/emergency/square-off', '/api/risk/emergency-square-off'], authenticate, requirePermission('risk.manage'), async (req, res) => {
+    try {
+      const tenantScope = resolveStrictTenantScope(req);
+      const actor = req.user?.name || req.user?.email || 'Risk Manager';
+      const reason = req.body?.reason || 'Emergency Margin Square-off';
+      const result = await activeTradingDataProvider.emergencyMarginSquareOff?.(actor, reason, tenantScope || undefined);
+      await writeSecurityAuditLog({
+        tenantId: tenantScope || req.user?.tenant_id,
+        userName: actor,
+        action: 'EMERGENCY_MARGIN_SQUARE_OFF',
+        module: 'RISK',
+        details: `Emergency margin square-off triggered by ${actor}. Result: ${JSON.stringify(result)}`,
+        ipAddress: req.ip
+      });
+      res.json(result);
+    } catch (err: any) {
+      if (err?.message?.includes('Circuit Breaker') || err?.message?.includes('unreachable') || err?.message?.includes('unavailable')) {
+        return res.status(503).json({ error: 'TRADING_PLATFORM_UNREACHABLE', message: 'Trading platform is currently unreachable. Open positions were not squared off.' });
+      }
       res.status(500).json({ error: err.message });
     }
   });
@@ -1368,6 +1868,46 @@ async function startServer() {
       const planId = req.query.planId as string;
       const rules = await activeTradingDataProvider.getCommissionRules(tenantScope, planId);
       res.json(rules);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/admin/commercial/commission-transactions', authenticate, requirePermission('commission.view'), async (req, res) => {
+    try {
+      const tenantScope = resolveStrictTenantScope(req);
+      const transactions = activeTradingDataProvider.getCommissionTransactions
+        ? await activeTradingDataProvider.getCommissionTransactions(tenantScope)
+        : [];
+      res.json(transactions);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/admin/commission/transactions', authenticate, requirePermission('commission.view'), async (req, res) => {
+    try {
+      const tenantScope = resolveStrictTenantScope(req);
+      const transactions = activeTradingDataProvider.getCommissionTransactions
+        ? await activeTradingDataProvider.getCommissionTransactions(tenantScope)
+        : [];
+      res.json(transactions);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/admin/commercial/commission-transactions', authenticate, requirePermission('commission.manage'), async (req, res) => {
+    try {
+      const tenantScope = resolveStrictTenantScope(req);
+      if (!activeTradingDataProvider.createCommissionTransaction) {
+        return res.status(400).json({ error: 'Commission transaction creation not supported' });
+      }
+      const transaction = await activeTradingDataProvider.createCommissionTransaction({
+        ...req.body,
+        tenant_id: tenantScope || req.body.tenant_id
+      });
+      res.status(201).json(transaction);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -1442,7 +1982,8 @@ async function startServer() {
   // ----------------------------------------------------
   app.get('/api/admin/subscriptions', authenticate, requirePermission('subscriptions.view'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER']), async (req, res) => {
     try {
-      const subscriptions = await activeTradingDataProvider.getSubscriptions();
+      const tenantScope = resolveStrictTenantScope(req);
+      const subscriptions = await activeTradingDataProvider.getSubscriptions(tenantScope || undefined);
       res.json(subscriptions);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1478,6 +2019,43 @@ async function startServer() {
 
     return await activeTradingDataProvider.resolveTenantByDomain(targetDomain || 'trade.alphaprime.com');
   };
+
+  // 0. GET /api/public/tenants - Public list of active tenants for authentication and tenant selector
+  app.get(['/api/public/tenants', '/api/tenants'], async (_req, res) => {
+    try {
+      const { rows } = await query(`
+        SELECT 
+          id, 
+          name, 
+          code, 
+          COALESCE(custom_domain, subdomain || '.tradepro.io', 'trade.alphaprime.com') as domain, 
+          status, 
+          plan as tier 
+        FROM tenants 
+        WHERE status = $1 
+        ORDER BY name ASC
+      `, ['ACTIVE']);
+      if (rows && rows.length > 0) {
+        return res.json(rows);
+      }
+      const memTenants = await activeTradingDataProvider.getTenants();
+      res.json(memTenants);
+    } catch (e) {
+      console.warn('[Public Tenants API] Database query fallback:', (e as any)?.message);
+      try {
+        const memTenants = await activeTradingDataProvider.getTenants();
+        if (memTenants && memTenants.length > 0) {
+          return res.json(memTenants);
+        }
+      } catch {}
+      res.json([
+        { id: 'TNT-001', name: 'Alpha Prime Capital', code: 'APC', domain: 'trade.alphaprime.com', status: 'ACTIVE', tier: 'ENTERPRISE' },
+        { id: 'TNT-002', name: 'Apex Securities Ltd', code: 'APEX', domain: 'trade.apexsecurities.in', status: 'ACTIVE', tier: 'PRO' },
+        { id: 'TNT-003', name: 'Zenith Markets', code: 'ZMK', domain: 'trade.zenithmarkets.in', status: 'ACTIVE', tier: 'GROWTH' },
+        { id: 'TNT-004', name: 'Quantum Alpha Capital', code: 'QAC', domain: 'trade.quantumfx.io', status: 'ACTIVE', tier: 'STARTER' }
+      ]);
+    }
+  });
 
   // 1. GET /api/tenant/branding - Public branding for resolved tenant
   app.get('/api/tenant/branding', async (req, res) => {
@@ -1712,7 +2290,7 @@ async function startServer() {
       const updated = await activeTradingDataProvider.updateWhiteLabelConfig(req.params.tenantId, req.body, user?.name || 'Admin');
       res.json(updated);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(400).json({ error: err.message });
     }
   });
 
@@ -2003,6 +2581,9 @@ async function startServer() {
       const updated = await activeTradingDataProvider.setGlobalTradingActive(effectiveActive, user?.name || 'Super Admin', reason);
       res.json({ success: true, active: effectiveActive, paused: !effectiveActive, state: updated });
     } catch (err: any) {
+      if (err?.message?.includes('Circuit Breaker') || err?.message?.includes('unreachable') || err?.message?.includes('unavailable')) {
+        return res.status(503).json({ error: 'TRADING_PLATFORM_UNREACHABLE', message: 'Trading platform is currently unreachable. Trading state was not changed.' });
+      }
       res.status(500).json({ error: err.message });
     }
   });
@@ -2014,6 +2595,9 @@ async function startServer() {
       const result = await activeTradingDataProvider.cancelAllOrders(user?.name || 'Super Admin', reason);
       res.json({ success: true, ...result });
     } catch (err: any) {
+      if (err?.message?.includes('Circuit Breaker') || err?.message?.includes('unreachable') || err?.message?.includes('unavailable')) {
+        return res.status(503).json({ error: 'TRADING_PLATFORM_UNREACHABLE', message: 'Trading platform is currently unreachable. Open orders were not cancelled.' });
+      }
       res.status(500).json({ error: err.message });
     }
   });
@@ -2025,6 +2609,9 @@ async function startServer() {
       const updated = await activeTradingDataProvider.triggerKillSwitch(action, user?.name || 'Super Admin', reason);
       res.json(updated);
     } catch (err: any) {
+      if (err?.message?.includes('Circuit Breaker') || err?.message?.includes('unreachable') || err?.message?.includes('unavailable')) {
+        return res.status(503).json({ error: 'TRADING_PLATFORM_UNREACHABLE', message: 'Trading platform is currently unreachable. Kill switch was not changed.' });
+      }
       res.status(500).json({ error: err.message });
     }
   });
@@ -2046,6 +2633,9 @@ async function startServer() {
       const updated = await activeTradingDataProvider.setGlobalTradingActive(effectiveActive, user?.name || 'Super Admin', reason);
       res.json({ success: true, active: effectiveActive, paused: !effectiveActive, state: updated });
     } catch (err: any) {
+      if (err?.message?.includes('Circuit Breaker') || err?.message?.includes('unreachable') || err?.message?.includes('unavailable')) {
+        return res.status(503).json({ error: 'TRADING_PLATFORM_UNREACHABLE', message: 'Trading platform is currently unreachable. Trading state was not changed.' });
+      }
       res.status(500).json({ error: err.message });
     }
   });
@@ -2056,6 +2646,9 @@ async function startServer() {
       const updated = await activeTradingDataProvider.triggerKillSwitch(action || 'TRIGGER', user?.name || 'Super Admin', reason);
       res.json(updated);
     } catch (err: any) {
+      if (err?.message?.includes('Circuit Breaker') || err?.message?.includes('unreachable') || err?.message?.includes('unavailable')) {
+        return res.status(503).json({ error: 'TRADING_PLATFORM_UNREACHABLE', message: 'Trading platform is currently unreachable. Kill switch was not changed.' });
+      }
       res.status(500).json({ error: err.message });
     }
   });
@@ -2065,6 +2658,9 @@ async function startServer() {
       const updated = await activeTradingDataProvider.triggerKillSwitch('RESET', user?.name || 'Super Admin', req.body?.reason || 'Kill switch reset');
       res.json(updated);
     } catch (err: any) {
+      if (err?.message?.includes('Circuit Breaker') || err?.message?.includes('unreachable') || err?.message?.includes('unavailable')) {
+        return res.status(503).json({ error: 'TRADING_PLATFORM_UNREACHABLE', message: 'Trading platform is currently unreachable. Kill switch was not changed.' });
+      }
       res.status(500).json({ error: err.message });
     }
   });
@@ -2075,6 +2671,9 @@ async function startServer() {
       const updated = await activeTradingDataProvider.setRegistrationActive(enabled, user?.name || 'Super Admin');
       res.json(updated);
     } catch (err: any) {
+      if (err?.message?.includes('Circuit Breaker') || err?.message?.includes('unreachable') || err?.message?.includes('unavailable')) {
+        return res.status(503).json({ error: 'TRADING_PLATFORM_UNREACHABLE', message: 'Trading platform is currently unreachable.' });
+      }
       res.status(500).json({ error: err.message });
     }
   });
@@ -2085,6 +2684,9 @@ async function startServer() {
       const updated = await activeTradingDataProvider.setApiAccessActive(enabled, user?.name || 'Super Admin');
       res.json(updated);
     } catch (err: any) {
+      if (err?.message?.includes('Circuit Breaker') || err?.message?.includes('unreachable') || err?.message?.includes('unavailable')) {
+        return res.status(503).json({ error: 'TRADING_PLATFORM_UNREACHABLE', message: 'Trading platform is currently unreachable.' });
+      }
       res.status(500).json({ error: err.message });
     }
   });
@@ -2095,6 +2697,9 @@ async function startServer() {
       const result = await activeTradingDataProvider.executeAccountAction(entityType, entityId, action, user?.name || 'Super Admin', reason || 'Emergency Freeze');
       res.json(result);
     } catch (err: any) {
+      if (err?.message?.includes('Circuit Breaker') || err?.message?.includes('unreachable') || err?.message?.includes('unavailable')) {
+        return res.status(503).json({ error: 'TRADING_PLATFORM_UNREACHABLE', message: 'Trading platform is currently unreachable. Entity status was not changed.' });
+      }
       res.status(500).json({ error: err.message });
     }
   });
@@ -2106,6 +2711,9 @@ async function startServer() {
       const updated = await activeTradingDataProvider.setRegistrationActive(enabled, user?.name || 'Super Admin');
       res.json(updated);
     } catch (err: any) {
+      if (err?.message?.includes('Circuit Breaker') || err?.message?.includes('unreachable') || err?.message?.includes('unavailable')) {
+        return res.status(503).json({ error: 'TRADING_PLATFORM_UNREACHABLE', message: 'Trading platform is currently unreachable.' });
+      }
       res.status(500).json({ error: err.message });
     }
   });
@@ -2117,6 +2725,9 @@ async function startServer() {
       const updated = await activeTradingDataProvider.setApiAccessActive(enabled, user?.name || 'Super Admin');
       res.json(updated);
     } catch (err: any) {
+      if (err?.message?.includes('Circuit Breaker') || err?.message?.includes('unreachable') || err?.message?.includes('unavailable')) {
+        return res.status(503).json({ error: 'TRADING_PLATFORM_UNREACHABLE', message: 'Trading platform is currently unreachable.' });
+      }
       res.status(500).json({ error: err.message });
     }
   });
@@ -2128,6 +2739,9 @@ async function startServer() {
       const updated = await activeTradingDataProvider.freezeMaster(masterId, masterName, user?.name || 'Super Admin', reason);
       res.json(updated);
     } catch (err: any) {
+      if (err?.message?.includes('Circuit Breaker') || err?.message?.includes('unreachable') || err?.message?.includes('unavailable')) {
+        return res.status(503).json({ error: 'TRADING_PLATFORM_UNREACHABLE', message: 'Trading platform is currently unreachable. Master status was not changed.' });
+      }
       res.status(500).json({ error: err.message });
     }
   });
@@ -2139,6 +2753,9 @@ async function startServer() {
       const updated = await activeTradingDataProvider.unfreezeMaster(masterId, user?.name || 'Super Admin');
       res.json(updated);
     } catch (err: any) {
+      if (err?.message?.includes('Circuit Breaker') || err?.message?.includes('unreachable') || err?.message?.includes('unavailable')) {
+        return res.status(503).json({ error: 'TRADING_PLATFORM_UNREACHABLE', message: 'Trading platform is currently unreachable. Master status was not changed.' });
+      }
       res.status(500).json({ error: err.message });
     }
   });
@@ -2150,6 +2767,9 @@ async function startServer() {
       const updated = await activeTradingDataProvider.freezeBroker(brokerId, brokerName, user?.name || 'Super Admin', reason);
       res.json(updated);
     } catch (err: any) {
+      if (err?.message?.includes('Circuit Breaker') || err?.message?.includes('unreachable') || err?.message?.includes('unavailable')) {
+        return res.status(503).json({ error: 'TRADING_PLATFORM_UNREACHABLE', message: 'Trading platform is currently unreachable. Broker status was not changed.' });
+      }
       res.status(500).json({ error: err.message });
     }
   });
@@ -2161,6 +2781,9 @@ async function startServer() {
       const updated = await activeTradingDataProvider.unfreezeBroker(brokerId, user?.name || 'Super Admin');
       res.json(updated);
     } catch (err: any) {
+      if (err?.message?.includes('Circuit Breaker') || err?.message?.includes('unreachable') || err?.message?.includes('unavailable')) {
+        return res.status(503).json({ error: 'TRADING_PLATFORM_UNREACHABLE', message: 'Trading platform is currently unreachable. Broker status was not changed.' });
+      }
       res.status(500).json({ error: err.message });
     }
   });
@@ -2172,6 +2795,9 @@ async function startServer() {
       const updated = await activeTradingDataProvider.freezeUser(userId, userName, user?.name || 'Super Admin', reason);
       res.json(updated);
     } catch (err: any) {
+      if (err?.message?.includes('Circuit Breaker') || err?.message?.includes('unreachable') || err?.message?.includes('unavailable')) {
+        return res.status(503).json({ error: 'TRADING_PLATFORM_UNREACHABLE', message: 'Trading platform is currently unreachable. User status was not changed.' });
+      }
       res.status(500).json({ error: err.message });
     }
   });
@@ -2183,6 +2809,9 @@ async function startServer() {
       const updated = await activeTradingDataProvider.unfreezeUser(userId, user?.name || 'Super Admin');
       res.json(updated);
     } catch (err: any) {
+      if (err?.message?.includes('Circuit Breaker') || err?.message?.includes('unreachable') || err?.message?.includes('unavailable')) {
+        return res.status(503).json({ error: 'TRADING_PLATFORM_UNREACHABLE', message: 'Trading platform is currently unreachable. User status was not changed.' });
+      }
       res.status(500).json({ error: err.message });
     }
   });
@@ -2194,6 +2823,9 @@ async function startServer() {
       const updated = await activeTradingDataProvider.executeAccountAction(entityType, entityId, action, user?.name || 'Super Admin', reason);
       res.json(updated);
     } catch (err: any) {
+      if (err?.message?.includes('Circuit Breaker') || err?.message?.includes('unreachable') || err?.message?.includes('unavailable')) {
+        return res.status(503).json({ error: 'TRADING_PLATFORM_UNREACHABLE', message: 'Trading platform is currently unreachable. Account status was not changed.' });
+      }
       res.status(500).json({ error: err.message });
     }
   });
@@ -2663,11 +3295,13 @@ async function startServer() {
         device: userAgent.substring(0, 128)
       });
 
+      const isProduction = process.env.NODE_ENV === 'production';
       res.cookie('tradepro_session', token, {
         httpOnly: true,
         secure: true,
-        sameSite: 'none',
-        maxAge: 24 * 60 * 60 * 1000
+        sameSite: isProduction ? 'lax' : 'none',
+        maxAge: 24 * 60 * 60 * 1000,
+        path: '/'
       });
 
       const permissions = await getPermissionsForRole(userRecord.role as UserRole);

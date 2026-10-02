@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import pg from 'pg';
-import { PGlite } from '@electric-sql/pglite';
+import type { PGlite } from '@electric-sql/pglite';
 
 const { Pool } = pg;
 
@@ -42,6 +42,11 @@ let remoteFailed = false;
 export function getDbConfig(): DbConfig {
   const connectionString = process.env.DATABASE_URL;
   const isProduction = process.env.NODE_ENV === 'production';
+
+  if (isProduction && !connectionString) {
+    throw new Error('DATABASE_URL environment variable is required in production.');
+  }
+
   const requiresSsl = connectionString?.includes('sslmode=require') || isProduction;
 
   return {
@@ -54,6 +59,9 @@ export function getDbConfig(): DbConfig {
 }
 
 export function isUsingRemotePostgres(): boolean {
+  if (process.env.NODE_ENV === 'production') {
+    return true;
+  }
   if (remoteFailed) return false;
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) return false;
@@ -70,7 +78,7 @@ export function getPool(customPool?: pg.Pool): pg.Pool {
 
   const config = getDbConfig();
   if (!config.connectionString) {
-    throw new Error('DATABASE_URL is not defined.');
+    throw new Error('DATABASE_URL environment variable is required to connect to PostgreSQL.');
   }
 
   globalPool = new Pool({
@@ -93,18 +101,23 @@ export function setGlobalPool(pool: pg.Pool | null): void {
 }
 
 export async function getEmbeddedDb(): Promise<PGlite> {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('DATABASE_URL environment variable is required in production. Embedded PGlite fallback is disabled in production.');
+  }
+
   if (embeddedPglite && isEmbeddedInitialized) return embeddedPglite;
   if (embeddedInitPromise) return embeddedInitPromise;
 
   embeddedInitPromise = (async () => {
     if (!embeddedPglite) {
+      const { PGlite: PGliteCtor } = await import('@electric-sql/pglite');
       try {
-        embeddedPglite = new PGlite();
-        await embeddedPglite.waitReady;
+        embeddedPglite = new PGliteCtor() as unknown as PGlite;
+        await (embeddedPglite as any).waitReady;
       } catch (err: any) {
         console.error('[PostgreSQL Engine] PGlite init error:', err?.message);
-        embeddedPglite = new PGlite();
-        await embeddedPglite.waitReady;
+        embeddedPglite = new PGliteCtor() as unknown as PGlite;
+        await (embeddedPglite as any).waitReady;
       }
     }
 
@@ -115,7 +128,7 @@ export async function getEmbeddedDb(): Promise<PGlite> {
       for (const migrationFile of migrationFiles) {
         try {
           const sql = fs.readFileSync(migrationFile, 'utf-8');
-          await embeddedPglite.exec(sql);
+          await (embeddedPglite as any).exec(sql);
           console.log(`[PostgreSQL Engine] Migration executed: ${path.basename(migrationFile)}`);
         } catch (migErr: any) {
           console.warn(`[PostgreSQL Engine] Migration warning (${path.basename(migrationFile)}):`, migErr?.message);
@@ -124,7 +137,7 @@ export async function getEmbeddedDb(): Promise<PGlite> {
       console.log('[PostgreSQL Engine] Schema initialized successfully.');
 
       try {
-        const countRes = await embeddedPglite.query('SELECT count(*) as count FROM tenants');
+        const countRes = await (embeddedPglite as any).query('SELECT count(*) as count FROM tenants');
         if (parseInt((countRes.rows[0] as any)?.count || '0', 10) === 0) {
           const { seedDatabase } = await import('./seed.ts');
           await seedDatabase();
@@ -134,14 +147,16 @@ export async function getEmbeddedDb(): Promise<PGlite> {
       }
     }
 
-    return embeddedPglite;
+    return embeddedPglite!;
   })();
 
   return embeddedInitPromise;
 }
 
 export async function testConnection(pool?: pg.Pool): Promise<boolean> {
-  if (isUsingRemotePostgres()) {
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  if (isProduction || isUsingRemotePostgres()) {
     try {
       const activePool = pool || getPool();
       const client = await activePool.connect();
@@ -153,6 +168,10 @@ export async function testConnection(pool?: pg.Pool): Promise<boolean> {
         client.release();
       }
     } catch (err: any) {
+      if (isProduction) {
+        console.error('[PostgreSQL Production Error] Connection failed:', err.message);
+        throw err;
+      }
       console.warn('[PostgreSQL Remote] Connection failed in testConnection, falling back to embedded engine:', err.message);
       remoteFailed = true;
     }
@@ -173,7 +192,7 @@ export async function closePool(): Promise<void> {
   if (embeddedPglite) {
     try {
       await Promise.race([
-        embeddedPglite.close(),
+        (embeddedPglite as any).close(),
         new Promise((resolve) => setTimeout(resolve, 300))
       ]);
     } catch {
@@ -195,46 +214,47 @@ export async function query<T = any>(
   customPool?: pg.Pool
 ): Promise<pg.QueryResult<T>> {
   const start = Date.now();
-  try {
-    if (isUsingRemotePostgres() || customPool) {
-      try {
-        const pool = getPool(customPool);
-        const res = await pool.query<T>(text, params);
-        const duration = Date.now() - start;
-        if (process.env.DEBUG_SQL === 'true') {
-          console.log(`[Remote SQL ${duration}ms]: ${text.slice(0, 100)}`);
-        }
-        return res;
-      } catch (remoteErr: any) {
-        if (!customPool && (remoteErr.code === 'ECONNREFUSED' || remoteErr.code === 'ENOTFOUND' || remoteErr.code === 'ETIMEDOUT' || remoteErr.message?.includes('timeout') || remoteErr.message?.includes('Connection terminated'))) {
-          console.warn('[PostgreSQL Remote] Query failed with connection error, falling back to embedded engine:', remoteErr.message);
-          remoteFailed = true;
-        } else {
-          throw remoteErr;
-        }
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  if (isProduction || isUsingRemotePostgres() || customPool) {
+    try {
+      const pool = getPool(customPool);
+      const res = await pool.query<T>(text, params);
+      const duration = Date.now() - start;
+      if (process.env.DEBUG_SQL === 'true') {
+        console.log(`[Remote SQL ${duration}ms]: ${text.slice(0, 100)}`);
+      }
+      return res;
+    } catch (remoteErr: any) {
+      if (isProduction) {
+        console.error(`[PostgreSQL Query Error in Production]: ${remoteErr.message}`, {
+          query: text.slice(0, 200),
+          params: params ? params.slice(0, 10) : []
+        });
+        throw remoteErr;
+      }
+      if (!customPool && (remoteErr.code === 'ECONNREFUSED' || remoteErr.code === 'ENOTFOUND' || remoteErr.code === 'ETIMEDOUT' || remoteErr.message?.includes('timeout') || remoteErr.message?.includes('Connection terminated'))) {
+        console.warn('[PostgreSQL Remote] Query failed with connection error, falling back to embedded engine:', remoteErr.message);
+        remoteFailed = true;
+      } else {
+        throw remoteErr;
       }
     }
-
-    const db = await getEmbeddedDb();
-    const res = await db.query<T>(text, params);
-    const duration = Date.now() - start;
-    if (process.env.DEBUG_SQL === 'true') {
-      console.log(`[Embedded SQL ${duration}ms]: ${text.slice(0, 100)}`);
-    }
-    return {
-      rows: res.rows,
-      command: 'SELECT',
-      rowCount: res.rows.length,
-      oid: 0,
-      fields: (res.fields || []) as any[]
-    };
-  } catch (err: any) {
-    console.error(`[PostgreSQL Query Error]: ${err.message}`, {
-      query: text.slice(0, 200),
-      params: params ? params.slice(0, 10) : []
-    });
-    throw err;
   }
+
+  const db = await getEmbeddedDb();
+  const res = await db.query(text, params);
+  const duration = Date.now() - start;
+  if (process.env.DEBUG_SQL === 'true') {
+    console.log(`[Embedded SQL ${duration}ms]: ${text.slice(0, 100)}`);
+  }
+  return {
+    rows: res.rows as T[],
+    command: 'SELECT',
+    rowCount: res.rows.length,
+    oid: 0,
+    fields: (res.fields || []) as any[]
+  };
 }
 
 /**
@@ -244,7 +264,9 @@ export async function withTransaction<T>(
   callback: (client: { query: (text: string, params?: any[]) => Promise<any> }) => Promise<T>,
   customPool?: pg.Pool
 ): Promise<T> {
-  if (isUsingRemotePostgres() || customPool) {
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  if (isProduction || isUsingRemotePostgres() || customPool) {
     try {
       const pool = getPool(customPool);
       const client = await pool.connect();
@@ -260,6 +282,9 @@ export async function withTransaction<T>(
         client.release();
       }
     } catch (remoteErr: any) {
+      if (isProduction) {
+        throw remoteErr;
+      }
       if (!customPool && (remoteErr.code === 'ECONNREFUSED' || remoteErr.code === 'ENOTFOUND' || remoteErr.code === 'ETIMEDOUT' || remoteErr.message?.includes('timeout'))) {
         console.warn('[PostgreSQL Remote] Transaction connection failed, falling back to embedded engine:', remoteErr.message);
         remoteFailed = true;
@@ -280,3 +305,4 @@ export async function withTransaction<T>(
     throw err;
   }
 }
+

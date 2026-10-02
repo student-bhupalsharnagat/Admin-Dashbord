@@ -57,21 +57,25 @@ export interface Tenant {
   name: string;
   code: string;
   status: EntityStatus;
-  plan: PlanType;
-  admin_name: string;
-  admin_email: string;
-  admin_phone: string;
-  domain: string;
-  support_email: string;
-  total_users: number;
-  active_users: number;
-  trading_volume: string;
-  trading_volume_raw: number;
-  pl: string;
-  pl_raw: number;
-  margin: string;
-  commission: string;
-  created_at: string;
+  plan?: PlanType;
+  tier?: string;
+  clients?: number;
+  turnover?: string;
+  created?: string;
+  admin_name?: string;
+  admin_email?: string;
+  admin_phone?: string;
+  domain?: string;
+  support_email?: string;
+  total_users?: number;
+  active_users?: number;
+  trading_volume?: string;
+  trading_volume_raw?: number;
+  pl?: string;
+  pl_raw?: number;
+  margin?: string;
+  commission?: string;
+  created_at?: string;
   notes?: string;
 }
 
@@ -208,6 +212,7 @@ export interface KYCRecord {
 }
 
 export interface FundDepositItem {
+  id?: string;
   txnId: string;
   client: string;
   amount: string;
@@ -219,6 +224,7 @@ export interface FundDepositItem {
 }
 
 export interface FundWithdrawalItem {
+  id?: string;
   txnId: string;
   client: string;
   amount: string;
@@ -242,45 +248,130 @@ export interface LedgerRowItem {
 }
 
 export interface DashboardKPIs {
-  total_masters: {
-    value: number;
-    badge: string;
-    subtitle: string;
-  };
-  total_brokers: {
-    value: number;
-    badge: string;
-    subtitle: string;
-  };
-  total_clients: {
-    value: number;
-    badge: string;
-    subtitle: string;
-  };
-  commission_earned: {
-    value: string;
-    badge: string;
-    subtitle: string;
-  };
-  todays_turnover: {
-    value: string;
-    badge: string;
-    subtitle: string;
-  };
-  total_pl: {
-    value: string;
-    badge: string;
-    subtitle: string;
-  };
-  pending_kyc: {
-    value: number;
+  total_masters?: {
+    value?: number | string;
     badge?: string;
-    subtitle: string;
+    subtitle?: string;
   };
-  open_tickets: {
-    value: number;
+  total_brokers?: {
+    value?: number | string;
     badge?: string;
-    subtitle: string;
+    subtitle?: string;
+  };
+  total_clients?: {
+    value?: number | string;
+    badge?: string;
+    subtitle?: string;
+  };
+  commission_earned?: {
+    value?: string | number;
+    raw?: number;
+    badge?: string;
+    subtitle?: string;
+  };
+  todays_turnover?: {
+    value?: string | number;
+    raw?: number;
+    badge?: string;
+    subtitle?: string;
+  };
+  total_turnover?: {
+    value?: string | number;
+    raw?: number;
+    badge?: string;
+    subtitle?: string;
+  };
+  total_pl?: {
+    value?: string | number;
+    raw?: number;
+    badge?: string;
+    subtitle?: string;
+  };
+  net_pl?: {
+    value?: string | number;
+    raw?: number;
+    badge?: string;
+    subtitle?: string;
+  };
+  pending_kyc?: {
+    value?: number | string;
+    badge?: string;
+    subtitle?: string;
+  };
+  open_tickets?: {
+    value?: number | string;
+    badge?: string;
+    subtitle?: string;
+  };
+  total_sub_brokers?: {
+    value?: number | string;
+    badge?: string;
+    subtitle?: string;
+  };
+  active_clients?: {
+    value?: number | string;
+    badge?: string;
+    subtitle?: string;
+  };
+  pending_deposits?: {
+    value?: number | string;
+    amount?: number | string;
+    formatted_amount?: string;
+    badge?: string;
+    subtitle?: string;
+  };
+  pending_withdrawals?: {
+    value?: number | string;
+    amount?: number | string;
+    formatted_amount?: string;
+    badge?: string;
+    subtitle?: string;
+  };
+  open_positions?: {
+    value?: number | string;
+    badge?: string;
+    subtitle?: string;
+  };
+  pending_orders?: {
+    value?: number | string;
+    badge?: string;
+    subtitle?: string;
+  };
+  trading_volume?: {
+    value?: string | number;
+    raw?: number;
+    badge?: string;
+    subtitle?: string;
+  };
+  used_margin?: {
+    value?: string | number;
+    raw?: number;
+    badge?: string;
+    subtitle?: string;
+  };
+  available_margin?: {
+    value?: string | number;
+    raw?: number;
+    badge?: string;
+    subtitle?: string;
+  };
+  equity?: {
+    value?: string | number;
+    raw?: number;
+    badge?: string;
+    subtitle?: string;
+  };
+  realized_pl?: {
+    value?: string | number;
+    raw?: number;
+    badge?: string;
+    subtitle?: string;
+  };
+  unrealized_pl?: {
+    value?: string | number;
+    raw?: number;
+    badge?: string;
+    subtitle?: string;
   };
 }
 
@@ -468,6 +559,7 @@ export interface DashboardData {
   volumeCommission: VolumeCommissionChartPoint[];
   clientGrowth: ClientGrowthChartPoint[];
   dailyPL: DailyPLPoint[];
+  dailyPLBadge?: string;
   recentTrades: Trade[];
   pendingKYC: KYCRecord[];
   tenants: Tenant[];

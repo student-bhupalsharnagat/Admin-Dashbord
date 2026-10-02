@@ -30,7 +30,12 @@ import { NavigationTab } from '../components/layout/AdminSidebar';
 
 export interface DashboardViewProps {
   kpis?: DashboardKPIs | null;
+<<<<<<< HEAD
   clients?: any[];
+=======
+  hasError?: boolean;
+  errorMessage?: string;
+>>>>>>> 3eb279a3a987a5596e31a324551957d91f2feb92
   volumeCommissionData?: any;
   clientGrowthData?: any;
   dailyPLData?: any;
@@ -47,20 +52,28 @@ export interface DashboardViewProps {
   onRefresh?: () => Promise<void> | void;
 }
 
-const DEFAULT_FALLBACK_KPIS: DashboardKPIs = {
-  total_masters: { value: 5, badge: '+2 new', subtitle: 'Across all regions' },
-  total_brokers: { value: 43, badge: '+5 new', subtitle: '38 active' },
-  total_clients: { value: 3073, badge: '↑ 12.3%', subtitle: '1,360 KYC approved' },
-  commission_earned: { value: '862K', badge: '↑ 11.4%', subtitle: 'Today' },
-  todays_turnover: { value: '48.2M', badge: '↑ 9.8%', subtitle: 'Today' },
-  total_pl: { value: '8.44M', badge: '↑ 22.1%', subtitle: 'Unrealized + Realized' },
-  pending_kyc: { value: 2, subtitle: 'Requires review' },
-  open_tickets: { value: 4, subtitle: '2 high priority' }
+const DEFAULT_UNAVAILABLE_KPIS: DashboardKPIs = {
+  total_masters: { value: '—', badge: 'Offline', subtitle: 'Telemetry unavailable' },
+  total_brokers: { value: '—', badge: 'Offline', subtitle: 'Telemetry unavailable' },
+  total_sub_brokers: { value: '—', badge: 'Offline', subtitle: 'Telemetry unavailable' },
+  total_clients: { value: '—', badge: 'Offline', subtitle: 'Telemetry unavailable' },
+  commission_earned: { value: '—', badge: 'Offline', subtitle: 'Telemetry unavailable' },
+  todays_turnover: { value: '—', badge: 'Offline', subtitle: 'Telemetry unavailable' },
+  total_turnover: { value: '—', badge: 'Offline', subtitle: 'Telemetry unavailable' },
+  total_pl: { value: '—', badge: 'Offline', subtitle: 'Telemetry unavailable' },
+  net_pl: { value: '—', badge: 'Offline', subtitle: 'Telemetry unavailable' },
+  pending_kyc: { value: 0, subtitle: 'Telemetry unavailable' },
+  open_tickets: { value: 0, subtitle: 'Telemetry unavailable' }
 };
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
   kpis,
+<<<<<<< HEAD
   clients,
+=======
+  hasError,
+  errorMessage,
+>>>>>>> 3eb279a3a987a5596e31a324551957d91f2feb92
   volumeCommissionData,
   clientGrowthData,
   dailyPLData,
@@ -81,7 +94,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const currencySymbol = currency === 'USD' ? '$' : '₹';
-  const activeKpis = kpis || DEFAULT_FALLBACK_KPIS;
+  const activeKpis = kpis !== null && kpis !== undefined ? kpis : DEFAULT_UNAVAILABLE_KPIS;
+  const isUnavailable = kpis === null || hasError;
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
@@ -98,24 +112,49 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   return (
     <div className="space-y-4 sm:space-y-5">
+      {/* Error Alert State if Dashboard API failed */}
+      {isUnavailable && (
+        <div className="bg-red-950/40 border border-red-900/60 rounded-xl px-4 py-3 flex items-center justify-between text-xs text-red-200 shadow-sm animate-in fade-in">
+          <div className="flex items-center gap-2.5">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+            </span>
+            <div>
+              <span className="font-bold text-red-100">Live Telemetry Unavailable: </span>
+              <span className="text-red-300">
+                {errorMessage || 'Unable to connect to PostgreSQL live telemetry. Financial KPIs and projections are safely suppressed to prevent displaying inaccurate figures.'}
+              </span>
+            </div>
+          </div>
+          {onRefresh && (
+            <button
+              onClick={handleRefresh}
+              className="px-3 py-1 bg-red-900/60 hover:bg-red-800 text-white rounded-lg font-medium transition-colors cursor-pointer shrink-0 ml-3"
+            >
+              Retry
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Dashboard Subheader Controls */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-[#0b1325] border border-[#16233d] rounded-xl px-4 py-3 shadow-sm">
         <div className="flex items-center gap-2.5">
           <span className="relative flex h-2.5 w-2.5">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+            <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${isUnavailable ? 'bg-red-400' : 'bg-emerald-400'} opacity-75`}></span>
+            <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${isUnavailable ? 'bg-red-500' : 'bg-emerald-500'}`}></span>
           </span>
           <div>
             <div className="flex items-center gap-2">
               <h2 className="text-sm font-bold text-white tracking-tight">Admin Overview</h2>
-              {kpis ? (
+              {!isUnavailable ? (
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-semibold font-mono">
                   LIVE 12ms
                 </span>
               ) : (
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 font-semibold font-mono flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
-                  SYNCING TELEMETRY
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-500/10 text-red-400 border border-red-500/20 font-semibold font-mono flex items-center gap-1">
+                  UNAVAILABLE
                 </span>
               )}
             </div>
@@ -183,8 +222,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 sm:gap-4">
         <KPICard
           title="TOTAL MASTERS"
-          value={activeKpis.total_masters?.value ?? 5}
-          subtitle="+2 this month"
+          value={activeKpis.total_masters?.value ?? 0}
+          subtitle={activeKpis.total_masters?.subtitle || 'Across all regions'}
           icon={Crown}
           iconColor="text-blue-400"
           iconBg="bg-blue-950/60"
@@ -193,8 +232,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         <KPICard
           title="TOTAL BROKERS"
-          value={activeKpis.total_brokers?.value ?? 43}
-          subtitle="+8 this month"
+          value={activeKpis.total_brokers?.value ?? 0}
+          subtitle={activeKpis.total_brokers?.subtitle || 'Active brokers'}
           icon={Building2}
           iconColor="text-purple-400"
           iconBg="bg-purple-950/60"
@@ -203,8 +242,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         <KPICard
           title="SUB-BROKERS"
-          value={127}
-          subtitle="+21 this month"
+          value={activeKpis.total_sub_brokers?.value ?? 0}
+          subtitle={activeKpis.total_sub_brokers?.subtitle || 'Sub-Brokers'}
           icon={Network}
           iconColor="text-cyan-400"
           iconBg="bg-cyan-950/60"
@@ -213,8 +252,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         <KPICard
           title="TOTAL CLIENTS"
-          value={typeof activeKpis.total_clients?.value === 'number' ? activeKpis.total_clients.value.toLocaleString() : (activeKpis.total_clients?.value ?? '3,073')}
-          subtitle="+104 this month"
+          value={typeof activeKpis.total_clients?.value === 'number' ? activeKpis.total_clients.value.toLocaleString() : (activeKpis.total_clients?.value ?? '0')}
+          subtitle={activeKpis.total_clients?.subtitle || 'Registered accounts'}
           icon={Users}
           iconColor="text-emerald-400"
           iconBg="bg-emerald-950/60"
@@ -225,9 +264,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       {/* Row 2: Financial Metrics (4 cards) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 sm:gap-4">
         <KPICard
-          title="TRADING VOLUME"
-          value={`${currencySymbol}172.6M`}
-          subtitle="+14.2% vs last month"
+          title="TODAY'S TURNOVER"
+          value={activeKpis.todays_turnover?.value || '₹0'}
+          subtitle={activeKpis.todays_turnover?.subtitle || 'Today'}
           icon={TrendingUp}
           iconColor="text-amber-400"
           iconBg="bg-amber-950/60"
@@ -236,28 +275,28 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         <KPICard
           title="TOTAL TURNOVER"
-          value={activeKpis.todays_turnover?.value ? `${activeKpis.todays_turnover.value}` : `${currencySymbol}48.2M`}
-          subtitle="+9.8% vs last month"
+          value={activeKpis.total_turnover?.value || activeKpis.todays_turnover?.value || '₹0'}
+          subtitle={activeKpis.total_turnover?.subtitle || 'Total Executed'}
           icon={BarChart3}
           iconColor="text-blue-400"
           iconBg="bg-blue-950/60"
-          onClick={() => onNavigateTab('orders-trades')}
+          onClick={() => onNavigateTab('trades')}
         />
 
         <KPICard
           title="NET P&L"
-          value={activeKpis.total_pl?.value ? `${activeKpis.total_pl.value}` : `${currencySymbol}8.44M`}
-          subtitle="+22.1% vs last month"
+          value={activeKpis.net_pl?.value || activeKpis.total_pl?.value || '₹0'}
+          subtitle={activeKpis.net_pl?.subtitle || activeKpis.total_pl?.subtitle || 'Unrealized + Realized'}
           icon={DollarSign}
           iconColor="text-emerald-400"
           iconBg="bg-emerald-950/60"
-          onClick={() => onNavigateTab('orders-trades')}
+          onClick={() => onNavigateTab('trades')}
         />
 
         <KPICard
           title="COMMISSION EARNED"
-          value={activeKpis.commission_earned?.value ? `${activeKpis.commission_earned.value}` : `${currencySymbol}862K`}
-          subtitle="+11.4% vs last month"
+          value={activeKpis.commission_earned?.value ? `${activeKpis.commission_earned.value}` : '₹0'}
+          subtitle={activeKpis.commission_earned?.subtitle || 'Actual rules'}
           icon={Coins}
           iconColor="text-purple-400"
           iconBg="bg-purple-950/60"
@@ -267,10 +306,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
       {/* Row 3: Pending Status Strip */}
       <PendingAlertsStrip
-        pendingKYC={activeKpis.pending_kyc?.value ?? 1}
-        pendingDeposits={3}
-        pendingWithdrawals={1}
-        openTickets={activeKpis.open_tickets?.value ?? 2}
+        pendingKYC={Number(activeKpis.pending_kyc?.value) || 0}
+        pendingDeposits={Number(activeKpis.pending_deposits?.value) || 0}
+        pendingWithdrawals={Number(activeKpis.pending_withdrawals?.value) || 0}
+        openTickets={Number(activeKpis.open_tickets?.value) || 0}
         onNavigateKYC={() => onNavigateTab('kyc')}
         onNavigateDeposits={() => {
           if (onNavigateFunds) {
@@ -292,7 +331,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       {/* Row 4: Trading Volume & Revenue + Asset Allocation Donut Chart */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2">
-          <TradingVolumeRevenueChart />
+          <TradingVolumeRevenueChart data={volumeCommissionData} />
         </div>
         <div className="lg:col-span-1">
           <AssetAllocationDonutChart />

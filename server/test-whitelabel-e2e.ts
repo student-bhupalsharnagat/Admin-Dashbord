@@ -264,6 +264,30 @@ async function runTests() {
   }
   console.log('✓ Rollback verified 100% on Trading Platform!');
 
+  // Step 13: Test Empty/Invalid Brand Name Rejection
+  console.log('\n[TEST 13] Validate Empty/Invalid Brand Name Rejection');
+  const invalidBrandRes = await request(`http://localhost:3000/api/admin/white-label/${tenantA.id}`, {
+    method: 'PUT',
+    headers: authHeaders,
+    body: { brand_name: '   ' }
+  });
+  if (invalidBrandRes.status !== 400) {
+    throw new Error(`Expected empty brand name to be rejected with 400, got ${invalidBrandRes.status}`);
+  }
+  console.log('✓ Empty brand name successfully rejected with status:', invalidBrandRes.status);
+
+  // Step 14: Test Idempotent Duplicate/Replayed Publish Events
+  console.log('\n[TEST 14] Test Duplicate/Replayed Publish Idempotence');
+  const replayedPublishRes = await request(`http://localhost:3000/api/admin/white-label/${tenantA.id}/publish`, {
+    method: 'POST',
+    headers: authHeaders,
+    body: { reason: 'Idempotent replayed publish test' }
+  });
+  if (replayedPublishRes.status !== 200) {
+    throw new Error('Replayed publish failed: ' + JSON.stringify(replayedPublishRes.body));
+  }
+  console.log('✓ Replayed publish succeeded idempotently with version:', replayedPublishRes.body.version);
+
   console.log('\n===============================================================');
   console.log('ALL WHITE LABEL INTEGRATION & MULTI-TENANT TESTS PASSED (100%)');
   console.log('===============================================================');

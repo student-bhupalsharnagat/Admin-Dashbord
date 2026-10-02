@@ -331,3 +331,48 @@ html.dark, html.dark body, [data-theme="dark"], [data-theme="dark"] body {
   color: #0f172a !important;
   box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.08) !important;
 }
+
+/* =========================================================
+   SAFE AREA & MOBILE RESPONSIVE ENHANCEMENTS (<768px)
+   ========================================================= */
+:root {
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+}
+
+.safe-top {
+  padding-top: var(--sat);
+}
+
+.safe-bottom {
+  padding-bottom: var(--sab);
+}
+
+.safe-left {
+  padding-left: var(--sal);
+}
+
+.safe-right {
+  padding-right: var(--sar);
+}
+
+.safe-area-inset {
+  padding-top: var(--sat);
+  padding-bottom: var(--sab);
+  padding-left: var(--sal);
+  padding-right: var(--sar);
+}
+
+/* Ensure mobile interactive controls meet minimum touch target of 40px */
+@media (max-width: 767.98px) {
+  button, 
+  a[role="button"], 
+  input[type="button"], 
+  input[type="submit"], 
+  select {
+    min-height: 40px;
+  }
+}
+

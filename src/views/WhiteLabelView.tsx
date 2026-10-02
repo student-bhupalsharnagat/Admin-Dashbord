@@ -1349,7 +1349,7 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
               </div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
+                <table className="w-full text-left text-xs min-w-[650px]">
                   <thead>
                     <tr className="border-b border-[#142038] text-slate-400 text-[11px]">
                       <th className="p-3">Timestamp</th>

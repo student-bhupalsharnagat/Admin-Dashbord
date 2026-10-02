@@ -170,35 +170,26 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ onNotify, currentUser 
   const [selectedMaster, setSelectedMaster] = useState<string>('All Masters');
   const [selectedBroker, setSelectedBroker] = useState<string>('All Brokers');
   const [isGenerating, setIsGenerating] = useState(false);
-  const [mastersList, setMastersList] = useState<string[]>([
-    'Apex Capital Group (MST-001)',
-    'Zenith Prime (MST-002)',
-    'Global Equity Partners (MST-003)'
-  ]);
-  const [brokersList, setBrokersList] = useState<string[]>([
-    'Ryan Chen (BRK-102)',
-    'David Miller (BRK-103)',
-    'Sarah Jenkins (BRK-104)',
-    'Michael Chang (BRK-105)'
-  ]);
+  const [mastersList, setMastersList] = useState<string[]>([]);
+  const [brokersList, setBrokersList] = useState<string[]>([]);
 
   useEffect(() => {
     fetch('/api/admin/masters')
-      .then(res => res.ok ? res.json() : null)
+      .then(res => res.ok ? res.json() : [])
       .then(data => {
         if (Array.isArray(data) && data.length > 0) {
-          const names = data.map((m: any) => `${m.name} (${m.code || m.id})`);
-          setMastersList(Array.from(new Set([...names, 'Apex Capital Group (MST-001)'])));
+          const names = data.map((m: any) => `${m.name || m.trading_name || m.username || 'Master'} (${m.code || m.id})`);
+          setMastersList(Array.from(new Set(names)));
         }
       })
       .catch(() => {});
 
     fetch('/api/admin/brokers')
-      .then(res => res.ok ? res.json() : null)
+      .then(res => res.ok ? res.json() : [])
       .then(data => {
         if (Array.isArray(data) && data.length > 0) {
-          const names = data.map((b: any) => `${b.name} (${b.code || b.id})`);
-          setBrokersList(Array.from(new Set([...names, 'Ryan Chen (BRK-102)'])));
+          const names = data.map((b: any) => `${b.name || b.trading_name || b.username || 'Broker'} (${b.code || b.id})`);
+          setBrokersList(Array.from(new Set(names)));
         }
       })
       .catch(() => {});
@@ -206,7 +197,6 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ onNotify, currentUser 
 
   const handleOpenModal = (report: ReportCardConfig) => {
     setSelectedReport(report);
-    // Default to current month or empty
     const now = new Date();
     const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
     const today = now.toISOString().split('T')[0];
@@ -220,49 +210,189 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ onNotify, currentUser 
     }
   };
 
-  const generateReportCSVData = (report: ReportCardConfig) => {
-    const headers = report.defaultFields.join(',');
-    let sampleRows = '';
-    if (report.id === 'pl-report') {
-      sampleRows = [
-        'CLT001,Alexander Hunt,"₹12,450.00","₹3,200.00","₹15,650.00","₹14,850.00","₹800.00"',
-        'CLT002,Sophia Lee,"-₹4,120.00","₹1,150.00","-₹2,970.00","-₹3,420.00","₹450.00"',
-        'CLT003,Nathan Brooks,"₹8,900.00","₹0.00","₹8,900.00","₹8,450.00","₹450.00"',
-        'CLT004,Maya Patel,"₹22,100.00","₹5,400.00","₹27,500.00","₹25,950.00","₹1,550.00"',
-        'CLT005,Isabella Torres,"₹6,300.00","-₹850.00","₹5,450.00","₹5,100.00","₹350.00"'
-      ].join('\n');
-    } else if (report.id === 'turnover-report') {
-      sampleRows = [
-        '2024-04-15,NIFTY24APR22500CE,14500,"₹3,26,25,000.00","₹2,450.00","₹1,85,00,000.00"',
-        '2024-04-15,BANKNIFTY24APR48000PE,8200,"₹3,93,60,000.00","₹3,150.00","₹2,10,00,000.00"',
-        '2024-04-15,RELIANCE-EQ,4500,"₹1,32,75,000.00","₹1,120.00","₹85,00,000.00"',
-        '2024-04-15,TCS-EQ,2100,"₹81,90,000.00","₹720.00","₹55,00,000.00"'
-      ].join('\n');
-    } else if (report.id === 'commission-report') {
-      sampleRows = [
-        'Apex Capital Group,Ryan Chen,Tom Anderson,"₹45,000.00","40% / 40% / 20%","₹18,000.00"',
-        'Apex Capital Group,David Miller,Sarah Jenkins,"₹28,500.00","50% / 50%","₹14,250.00"',
-        'Zenith Prime,Michael Chang,Alex Rivera,"₹62,100.00","35% / 45% / 20%","₹21,735.00"'
-      ].join('\n');
-    } else {
-      sampleRows = [
-        `REC-101,Sample Entity 1,Category A,100,Active,₹45,200.00,${dateFrom || '2024-04-15'}`,
-        `REC-102,Sample Entity 2,Category B,250,Active,₹82,400.00,${dateTo || '2024-04-15'}`,
-        `REC-103,Sample Entity 3,Category A,75,Pending,₹18,900.00,${dateFrom || '2024-04-14'}`
-      ].join('\n');
+  const fetchLiveReportRows = async (report: ReportCardConfig): Promise<string[]> => {
+    try {
+      if (report.id === 'pl-report') {
+        const res = await fetch('/api/admin/clients');
+        if (!res.ok) return [];
+        const clients = await res.json();
+        if (!Array.isArray(clients) || clients.length === 0) return [];
+        return clients.map((c: any) => {
+          const code = c.code || c.id || '';
+          const name = (c.name || 'Client').replace(/"/g, '""');
+          const realized = `₹${Number(c.realized_pl || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+          const unrealized = `₹${Number(c.unrealized_pl || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+          const total = `₹${(Number(c.realized_pl || 0) + Number(c.unrealized_pl || 0)).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+          const avail = `₹${Number(c.available_margin || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+          const used = `₹${Number(c.used_margin || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+          return `${code},"${name}","${realized}","${unrealized}","${total}","${avail}","${used}"`;
+        });
+      }
+
+      if (report.id === 'turnover-report' || report.id === 'trade-book-report') {
+        const res = await fetch('/api/admin/trades');
+        if (!res.ok) return [];
+        const trades = await res.json();
+        if (!Array.isArray(trades) || trades.length === 0) return [];
+        return trades.map((t: any) => {
+          const time = t.executed_at || t.timestamp || new Date().toISOString();
+          const symbol = t.symbol || '';
+          const qty = t.quantity || t.qty || 0;
+          const price = Number(t.price || 0);
+          const turnover = `₹${(qty * price).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+          const side = t.side || '';
+          const client = t.client_id || t.clientId || '';
+          if (report.id === 'turnover-report') {
+            return `${time.split('T')[0]},${symbol},${qty},"${turnover}","₹${(price).toFixed(2)}",${client}`;
+          }
+          return `${t.id || ''},${t.order_id || ''},${client},${symbol},${side},${qty},"₹${price.toFixed(2)}",${time}`;
+        });
+      }
+
+      if (report.id === 'order-book-report') {
+        const res = await fetch('/api/admin/orders');
+        if (!res.ok) return [];
+        const orders = await res.json();
+        if (!Array.isArray(orders) || orders.length === 0) return [];
+        return orders.map((o: any) => {
+          const id = o.id || o.order_id || '';
+          const client = o.client_id || o.clientId || '';
+          const symbol = o.symbol || '';
+          const side = o.side || '';
+          const qty = o.quantity || o.qty || 0;
+          const price = `₹${Number(o.price || 0).toFixed(2)}`;
+          const status = o.status || '';
+          const time = o.created_at || new Date().toISOString();
+          return `${id},${client},${symbol},${o.type || 'LIMIT'},${side},${qty},"${price}",${status},${time}`;
+        });
+      }
+
+      if (report.id === 'position-book-report') {
+        const res = await fetch('/api/admin/positions');
+        if (!res.ok) return [];
+        const pos = await res.json();
+        if (!Array.isArray(pos) || pos.length === 0) return [];
+        return pos.map((p: any) => {
+          const client = p.client_id || p.clientId || '';
+          const symbol = p.symbol || '';
+          const netQty = p.net_quantity || p.quantity || 0;
+          const buyAvg = `₹${Number(p.buy_average || p.buy_price || 0).toFixed(2)}`;
+          const sellAvg = `₹${Number(p.sell_average || p.sell_price || 0).toFixed(2)}`;
+          const ltp = `₹${Number(p.ltp || p.current_price || 0).toFixed(2)}`;
+          const pl = `₹${Number(p.unrealized_pl || p.pnl || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+          return `${client},${symbol},${netQty},"${buyAvg}","${sellAvg}","${ltp}","${pl}"`;
+        });
+      }
+
+      if (report.id === 'deposit-report') {
+        const res = await fetch('/api/admin/funds/deposits');
+        if (!res.ok) return [];
+        const deps = await res.json();
+        if (!Array.isArray(deps) || deps.length === 0) return [];
+        return deps.map((d: any) => {
+          const id = d.id || '';
+          const name = (d.client_name || d.client_id || '').replace(/"/g, '""');
+          const amt = `₹${Number(d.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+          const gateway = d.payment_gateway || d.method || 'UPI/IMPS';
+          const ref = d.bank_reference || d.reference_no || '';
+          const status = d.status || '';
+          const date = d.created_at || '';
+          return `${id},"${name}","${amt}",${gateway},${ref},${status},${date}`;
+        });
+      }
+
+      if (report.id === 'withdrawal-report') {
+        const res = await fetch('/api/admin/funds/withdrawals');
+        if (!res.ok) return [];
+        const wds = await res.json();
+        if (!Array.isArray(wds) || wds.length === 0) return [];
+        return wds.map((w: any) => {
+          const id = w.id || '';
+          const name = (w.client_name || w.client_id || '').replace(/"/g, '""');
+          const acc = w.account_number || w.bank_account || '';
+          const reqAmt = `₹${Number(w.requested_amount || w.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+          const appAmt = `₹${Number(w.approved_amount || w.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+          const status = w.status || '';
+          const date = w.processed_at || w.created_at || '';
+          return `${id},"${name}",${acc},"${reqAmt}","${appAmt}",${status},${date}`;
+        });
+      }
+
+      if (report.id === 'client-report') {
+        const res = await fetch('/api/admin/clients');
+        if (!res.ok) return [];
+        const clients = await res.json();
+        if (!Array.isArray(clients) || clients.length === 0) return [];
+        return clients.map((c: any) => {
+          const code = c.code || c.id || '';
+          const name = (c.name || '').replace(/"/g, '""');
+          const email = c.email || '';
+          const phone = c.phone || '';
+          const broker = c.broker_id || c.broker_name || '';
+          const kyc = c.kyc_status || 'VERIFIED';
+          const status = c.status || 'ACTIVE';
+          const joined = c.created_at || '';
+          return `${code},"${name}",${email},${phone},${broker},${kyc},${status},${joined}`;
+        });
+      }
+
+      if (report.id === 'broker-report') {
+        const res = await fetch('/api/admin/brokers');
+        if (!res.ok) return [];
+        const brokers = await res.json();
+        if (!Array.isArray(brokers) || brokers.length === 0) return [];
+        return brokers.map((b: any) => {
+          const code = b.code || b.id || '';
+          const name = (b.name || b.username || '').replace(/"/g, '""');
+          const master = b.master_id || b.master_name || '';
+          const subBrokers = b.sub_brokers_count || 0;
+          const activeClients = b.active_clients_count || 0;
+          const vol = `₹${Number(b.total_volume || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+          const status = b.status || 'ACTIVE';
+          return `${code},"${name}",${master},${subBrokers},${activeClients},"${vol}",${status}`;
+        });
+      }
+
+      if (report.id === 'commission-report') {
+        const res = await fetch('/api/admin/commissions');
+        if (!res.ok) return [];
+        const coms = await res.json();
+        if (!Array.isArray(coms) || coms.length === 0) return [];
+        return coms.map((cm: any) => {
+          const master = (cm.master_name || cm.master_id || '').replace(/"/g, '""');
+          const broker = (cm.broker_name || cm.broker_id || '').replace(/"/g, '""');
+          const client = (cm.client_name || cm.client_id || '').replace(/"/g, '""');
+          const gross = `₹${Number(cm.gross_amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+          const split = cm.split_ratio || '100%';
+          const net = `₹${Number(cm.net_payout || cm.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+          return `"${master}","${broker}","${client}","${gross}","${split}","${net}"`;
+        });
+      }
+
+      // Default fallback
+      const res = await fetch('/api/admin/clients');
+      if (!res.ok) return [];
+      const data = await res.json();
+      if (!Array.isArray(data) || data.length === 0) return [];
+      return data.map((item: any, i: number) => {
+        return `REC-${101 + i},"${(item.name || item.id || '').replace(/"/g, '""')}",Category A,1,Active,"₹${Number(item.available_margin || 0).toLocaleString('en-IN')}",${item.created_at || dateFrom || ''}`;
+      });
+    } catch {
+      return [];
     }
-    return `${headers}\n${sampleRows}`;
   };
 
-  const handleExportCSV = () => {
+  const handleExportCSV = async () => {
     if (!selectedReport) return;
     setIsGenerating(true);
 
-    setTimeout(() => {
-      const csvContent = `data:text/csv;charset=utf-8,${generateReportCSVData(selectedReport)}`;
-      const encodedUri = encodeURI(csvContent);
+    try {
+      const rows = await fetchLiveReportRows(selectedReport);
+      const headers = selectedReport.defaultFields.join(',');
+      const csvData = `${headers}\n${rows.join('\n')}`;
+      const csvContent = `data:text/csv;charset=utf-8,${encodeURIComponent(csvData)}`;
       const link = document.createElement('a');
-      link.setAttribute('href', encodedUri);
+      link.setAttribute('href', csvContent);
       link.setAttribute('download', `${selectedReport.id}_${dateFrom || 'from'}_${dateTo || 'to'}.csv`);
       document.body.appendChild(link);
       link.click();
@@ -271,15 +401,18 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ onNotify, currentUser 
       setIsGenerating(false);
       setSelectedReport(null);
       onNotify?.(`${selectedReport.title} CSV exported successfully.`, 'success');
-    }, 500);
+    } catch {
+      setIsGenerating(false);
+      onNotify?.(`Failed to export ${selectedReport.title}.`, 'warning');
+    }
   };
 
-  const handleExportPDF = () => {
+  const handleExportPDF = async () => {
     if (!selectedReport) return;
     setIsGenerating(true);
 
-    setTimeout(() => {
-      // Trigger browser print/pdf generation for report summary
+    try {
+      const rows = await fetchLiveReportRows(selectedReport);
       const printWindow = window.open('', '_blank');
       if (printWindow) {
         printWindow.document.write(`
@@ -310,9 +443,9 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ onNotify, currentUser 
                   <tr>${selectedReport.defaultFields.map(f => `<th>${f}</th>`).join('')}</tr>
                 </thead>
                 <tbody>
-                  ${generateReportCSVData(selectedReport).split('\n').slice(1).map(row => `
+                  ${rows.length > 0 ? rows.map(row => `
                     <tr>${row.split(',').map(c => `<td>${c.replace(/"/g, '')}</td>`).join('')}</tr>
-                  `).join('')}
+                  `).join('') : `<tr><td colspan="${selectedReport.defaultFields.length}" style="text-align: center; color: #94a3b8; padding: 24px;">No records found for the selected criteria</td></tr>`}
                 </tbody>
               </table>
               <script>window.print();</script>
@@ -324,28 +457,15 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ onNotify, currentUser 
       setIsGenerating(false);
       setSelectedReport(null);
       onNotify?.(`${selectedReport.title} PDF ready for export.`, 'success');
-    }, 500);
+    } catch {
+      setIsGenerating(false);
+      onNotify?.(`Failed to generate ${selectedReport.title} PDF.`, 'warning');
+    }
   };
 
-  const handleGenerateReport = () => {
+  const handleGenerateReport = async () => {
     if (!selectedReport) return;
-    setIsGenerating(true);
-
-    setTimeout(() => {
-      // Automatic download as standard CSV
-      const csvContent = `data:text/csv;charset=utf-8,${generateReportCSVData(selectedReport)}`;
-      const encodedUri = encodeURI(csvContent);
-      const link = document.createElement('a');
-      link.setAttribute('href', encodedUri);
-      link.setAttribute('download', `${selectedReport.id}_${dateFrom || 'all'}_${dateTo || 'all'}.csv`);
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-
-      setIsGenerating(false);
-      setSelectedReport(null);
-      onNotify?.(`${selectedReport.title} generated successfully for ${selectedMaster} / ${selectedBroker}!`, 'success');
-    }, 600);
+    await handleExportCSV();
   };
 
   return (

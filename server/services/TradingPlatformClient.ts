@@ -84,6 +84,7 @@ export class TradingPlatformClient {
   // HMAC-SHA256 SIGNATURE GENERATION & VERIFICATION
   // ----------------------------------------------------
 
+<<<<<<< HEAD
   public generateSignature(timestamp: string | number, method: string, path: string, bodyString: string): string {
     const payload = `${timestamp}:${method.toUpperCase()}:${path}:${bodyString}`;
     return crypto.createHmac('sha256', this.secret).update(payload).digest('hex');
@@ -95,6 +96,120 @@ export class TradingPlatformClient {
     return crypto.createHmac('sha256', this.secret).update(payload, 'utf8').digest('hex');
   }
 
+=======
+  private nonceReplayStore = new Map<string, number>();
+
+  /**
+   * S2S Protocol Signature:
+   * timestamp = epoch ms string (or provided ts)
+   * payload = `${ts}.${METHOD}.${pathWithoutQuery}.${rawBody}`
+   * HMAC-SHA256 hex with INTERNAL_COMMUNICATION_SECRET
+   */
+  public generateSignature(timestamp: string, method: string, path: string, bodyString: string): string {
+    const pathWithoutQuery = path.split('?')[0];
+    const payload = `${timestamp}.${method.toUpperCase()}.${pathWithoutQuery}.${bodyString || ''}`;
+    return crypto.createHmac('sha256', this.secret).update(payload).digest('hex');
+  }
+
+  /**
+   * Legacy colon-separated signature generation for backward compatibility with white-label routes
+   */
+  public generateLegacySignature(timestamp: string, method: string, path: string, bodyString: string): string {
+    const payload = `${timestamp}:${method.toUpperCase()}:${path}:${bodyString || ''}`;
+    return crypto.createHmac('sha256', this.secret).update(payload).digest('hex');
+  }
+
+  /**
+   * S2S Inbound Verification for Trading Platform Event and Control Routes:
+   * - Rejects Bearer JWT
+   * - Validates X-Internal-Signature (or X-Signature-SHA256) with constant-time compare
+   * - Max age 30s
+   * - Nonce replay store with 5min TTL
+   */
+  public verifyInternalS2S(
+    headers: Record<string, string | string[] | undefined>,
+    method: string,
+    path: string,
+    rawBody: string
+  ): { valid: boolean; statusCode?: number; reason?: string } {
+    const getHeader = (name: string): string => {
+      const val = headers[name.toLowerCase()] || headers[name];
+      if (Array.isArray(val)) return val[0] || '';
+      return val || '';
+    };
+
+    // 1. Reject Bearer JWT on these routes
+    const authHeader = getHeader('authorization');
+    if (authHeader && authHeader.toLowerCase().startsWith('bearer')) {
+      return { valid: false, statusCode: 401, reason: 'Bearer token not accepted on S2S routes' };
+    }
+
+    // 2. Extract headers
+    const signature = getHeader('x-internal-signature') || getHeader('x-signature-sha256') || getHeader('x-hmac-signature');
+    const timestamp = getHeader('x-internal-timestamp') || getHeader('x-timestamp');
+    const nonce = getHeader('x-internal-nonce') || getHeader('x-nonce');
+
+    if (!signature || !timestamp) {
+      return { valid: false, statusCode: 401, reason: 'Missing S2S signature or timestamp header' };
+    }
+
+    // 3. Max age 30s
+    const reqTime = isNaN(Number(timestamp)) ? new Date(timestamp).getTime() : Number(timestamp);
+    if (isNaN(reqTime)) {
+      return { valid: false, statusCode: 401, reason: 'Invalid timestamp format' };
+    }
+
+    const now = Date.now();
+    const ageMs = Math.abs(now - reqTime);
+    if (ageMs > 30000) {
+      return {
+        valid: false,
+        statusCode: 401,
+        reason: `Timestamp outside acceptable window (${Math.round(ageMs / 1000)}s drift, max age 30s)`
+      };
+    }
+
+    // 4. Nonce replay store (Map w/ TTL 5min)
+    if (nonce) {
+      const expiry = this.nonceReplayStore.get(nonce);
+      if (expiry && expiry > now) {
+        return { valid: false, statusCode: 401, reason: 'Nonce already used (replay attack)' };
+      }
+      this.nonceReplayStore.set(nonce, now + 5 * 60 * 1000);
+
+      // Clean up expired nonces
+      if (this.nonceReplayStore.size > 10000) {
+        for (const [k, exp] of this.nonceReplayStore.entries()) {
+          if (now > exp) {
+            this.nonceReplayStore.delete(k);
+          }
+        }
+      }
+    }
+
+    // 5. Signature verification: payload = `${ts}.${METHOD}.${pathWithoutQuery}.${rawBody}`; HMAC-SHA256 hex
+    const pathWithoutQuery = path.split('?')[0];
+    const payload = `${timestamp}.${method.toUpperCase()}.${pathWithoutQuery}.${rawBody || ''}`;
+    const expectedSignature = crypto.createHmac('sha256', this.secret).update(payload).digest('hex');
+
+    try {
+      const sigBuf = Buffer.from(signature, 'hex');
+      const expBuf = Buffer.from(expectedSignature, 'hex');
+      if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+        return { valid: false, statusCode: 401, reason: 'HMAC signature mismatch' };
+      }
+    } catch {
+      return { valid: false, statusCode: 401, reason: 'Signature evaluation failed' };
+    }
+
+    return { valid: true };
+  }
+
+  /**
+   * Accepted ONLY for white-label inbound routes:
+   * Keeps legacy colon-separated X-Signature-SHA256 verification (with fallback to new format).
+   */
+>>>>>>> 3eb279a3a987a5596e31a324551957d91f2feb92
   public verifyInboundSignature(
     signature: string,
     timestamp: string,
@@ -112,8 +227,12 @@ export class TradingPlatformClient {
     }
 
     // Replay attack protection: verify timestamp freshness
+<<<<<<< HEAD
     const numericTime = Number(timestamp);
     const requestTime = !isNaN(numericTime) && numericTime > 1000000000 ? numericTime : new Date(timestamp).getTime();
+=======
+    const requestTime = isNaN(Number(timestamp)) ? new Date(timestamp).getTime() : Number(timestamp);
+>>>>>>> 3eb279a3a987a5596e31a324551957d91f2feb92
     if (isNaN(requestTime)) {
       if (process.env.NODE_ENV !== 'production') return { valid: true };
       return { valid: false, reason: 'Invalid timestamp format' };
@@ -127,6 +246,7 @@ export class TradingPlatformClient {
       };
     }
 
+<<<<<<< HEAD
     // Evaluate against both canonical dot format and colon format
     const expectedDot = this.generateDotSignature(timestamp, method, path, bodyString);
     const expectedColon = this.generateSignature(timestamp, method, path, bodyString);
@@ -148,9 +268,33 @@ export class TradingPlatformClient {
     } catch {
       if (process.env.NODE_ENV !== 'production') return { valid: true };
       return { valid: false, reason: 'Signature evaluation failed' };
+=======
+    // Check legacy colon-separated signature
+    const expectedLegacy = this.generateLegacySignature(timestamp, method, path, bodyString);
+    try {
+      const sigBuf = Buffer.from(signature, 'hex');
+      const expectedBuf = Buffer.from(expectedLegacy, 'hex');
+      if (sigBuf.length === expectedBuf.length && crypto.timingSafeEqual(sigBuf, expectedBuf)) {
+        return { valid: true };
+      }
+    } catch {
+      // ignore
+>>>>>>> 3eb279a3a987a5596e31a324551957d91f2feb92
     }
 
-    return { valid: true };
+    // Fallback: check new dot-separated signature format
+    const expectedNew = this.generateSignature(timestamp, method, path, bodyString);
+    try {
+      const sigBuf = Buffer.from(signature, 'hex');
+      const expectedBuf = Buffer.from(expectedNew, 'hex');
+      if (sigBuf.length === expectedBuf.length && crypto.timingSafeEqual(sigBuf, expectedBuf)) {
+        return { valid: true };
+      }
+    } catch {
+      // ignore
+    }
+
+    return { valid: false, reason: 'HMAC signature mismatch' };
   }
 
   // ----------------------------------------------------
@@ -244,27 +388,39 @@ export class TradingPlatformClient {
     this.checkCircuitBreaker();
 
     const correlationId = options.correlationId || `req_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
-    const timestamp = new Date().toISOString();
+    const timestamp = Date.now().toString(); // epoch ms string
+    const nonce = crypto.randomUUID(); // uuid
     const timeoutMs = options.timeoutMs || this.defaultTimeoutMs;
     const maxRetries = options.retries !== undefined ? options.retries : 2;
 
+    const pathWithoutQuery = options.path.split('?')[0];
     const bodyString = options.body ? JSON.stringify(options.body) : '';
+<<<<<<< HEAD
     const signature = this.generateSignature(timestamp, options.method, options.path, bodyString);
     const dotSignature = this.generateDotSignature(timestamp, options.method, options.path, bodyString);
     const nonce = crypto.randomUUID();
     const effectiveTenantId = options.tenantId || 'vertex-default';
+=======
+    const signature = this.generateSignature(timestamp, options.method, pathWithoutQuery, bodyString);
+>>>>>>> 3eb279a3a987a5596e31a324551957d91f2feb92
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'Accept': 'application/json',
+<<<<<<< HEAD
       'X-Internal-Timestamp': String(Date.now()),
       'X-Internal-Signature': dotSignature,
       'X-Internal-Nonce': nonce,
       'X-Tenant-ID': effectiveTenantId,
+=======
+      'X-Internal-Timestamp': timestamp,
+      'X-Internal-Nonce': nonce,
+      'X-Internal-Signature': signature,
+      'X-Correlation-ID': correlationId,
+>>>>>>> 3eb279a3a987a5596e31a324551957d91f2feb92
       'X-Signature-SHA256': signature,
       'X-HMAC-Signature': signature,
       'X-Timestamp': timestamp,
-      'X-Correlation-ID': correlationId,
       'X-Request-ID': correlationId,
       ...(options.idempotencyKey ? { 'X-Idempotency-Key': options.idempotencyKey } : {}),
       ...(options.headers || {})
@@ -402,7 +558,29 @@ export class TradingPlatformClient {
   // ----------------------------------------------------
 
   /**
-   * 1. Synchronize Tenant Governance Configuration
+   * Outbound reverse mapping:
+   * Maps Admin tenantId -> Trading Platform's trading_tenant_id.
+   * Fallback to env TRADING_TENANT_ID or the admin tenantId.
+   */
+  public async resolveOutboundTenantId(adminTenantId?: string): Promise<string | undefined> {
+    if (!adminTenantId) return undefined;
+    try {
+      const { query } = await import('../db/connection.ts');
+      const { rows } = await query<{ trading_tenant_id: string | null }>(
+        'SELECT trading_tenant_id FROM tenants WHERE id = $1 LIMIT 1',
+        [adminTenantId]
+      );
+      if (rows.length > 0 && rows[0].trading_tenant_id) {
+        return rows[0].trading_tenant_id;
+      }
+    } catch {
+      // In case DB is not yet available or testing standalone
+    }
+    return process.env.TRADING_TENANT_ID || adminTenantId;
+  }
+
+  /**
+   * 1. Synchronize Tenant Governance Configuration (tenant sync -> POST /api/internal/v1/tenant/sync)
    */
   public async syncTenantConfig(
     tenantId: string,
@@ -423,12 +601,14 @@ export class TradingPlatformClient {
     },
     options?: { actor?: string; correlationId?: string; reason?: string }
   ): Promise<S2SResponse> {
+    const outboundTenantId = await this.resolveOutboundTenantId(tenantId);
     return this.request({
       method: 'POST',
-      path: `/api/internal/v1/tenants/${tenantId}/sync`,
-      tenantId,
+      path: '/api/internal/v1/tenant/sync',
+      tenantId: outboundTenantId,
       body: {
-        tenantId,
+        tenantId: outboundTenantId,
+        adminTenantId: tenantId,
         ...payload,
         syncedBy: options?.actor || 'CentralAdmin',
         syncedAt: new Date().toISOString()
@@ -447,12 +627,14 @@ export class TradingPlatformClient {
     version: number,
     options?: { actor?: string; correlationId?: string }
   ): Promise<S2SResponse> {
+    const outboundTenantId = await this.resolveOutboundTenantId(tenantId);
     return this.request({
       method: 'POST',
-      path: `/api/internal/v1/white-label/${tenantId}/sync`,
-      tenantId,
+      path: `/api/internal/v1/white-label/${outboundTenantId || tenantId}/sync`,
+      tenantId: outboundTenantId,
       body: {
-        tenantId,
+        tenantId: outboundTenantId,
+        adminTenantId: tenantId,
         version,
         branding: config,
         publishedBy: options?.actor || 'CentralAdmin',
@@ -464,7 +646,7 @@ export class TradingPlatformClient {
   }
 
   /**
-   * 3. Emergency Controls: Trading State
+   * 3. Emergency Controls: Trading Halt (/emergency/trading-halt)
    */
   public async sendEmergencyTrading(
     active: boolean,
@@ -473,18 +655,19 @@ export class TradingPlatformClient {
     tenantId?: string,
     correlationId?: string
   ): Promise<S2SResponse> {
+    const outboundTenantId = await this.resolveOutboundTenantId(tenantId);
     return this.request({
       method: 'POST',
-      path: '/api/internal/v1/emergency/trading',
-      tenantId,
-      body: { active, actor, reason: reason || 'Emergency trading action', tenantId },
+      path: '/emergency/trading-halt',
+      tenantId: outboundTenantId,
+      body: { active, halt: !active, actor, reason: reason || 'Emergency trading action', tenantId: outboundTenantId },
       idempotencyKey: `emg_trade_${Date.now()}_${active}`,
       correlationId
     });
   }
 
   /**
-   * 4. Emergency Controls: Kill-Switch
+   * 4. Emergency Controls: Kill-Switch (/emergency/killswitch)
    */
   public async sendEmergencyKillSwitch(
     action: 'TRIGGER' | 'RESET',
@@ -493,11 +676,12 @@ export class TradingPlatformClient {
     tenantId?: string,
     correlationId?: string
   ): Promise<S2SResponse> {
+    const outboundTenantId = await this.resolveOutboundTenantId(tenantId);
     return this.request({
       method: 'POST',
-      path: '/api/internal/v1/emergency/kill-switch',
-      tenantId,
-      body: { action, actor, reason: reason || 'Emergency kill-switch action', tenantId },
+      path: '/emergency/killswitch',
+      tenantId: outboundTenantId,
+      body: { action, actor, reason: reason || 'Emergency kill-switch action', tenantId: outboundTenantId },
       idempotencyKey: `emg_kill_${action}_${Date.now()}`,
       correlationId
     });
@@ -512,11 +696,12 @@ export class TradingPlatformClient {
     tenantId?: string,
     correlationId?: string
   ): Promise<S2SResponse> {
+    const outboundTenantId = await this.resolveOutboundTenantId(tenantId);
     return this.request({
       method: 'POST',
       path: '/api/internal/v1/emergency/registrations',
-      tenantId,
-      body: { enabled, actor, tenantId },
+      tenantId: outboundTenantId,
+      body: { enabled, actor, tenantId: outboundTenantId },
       idempotencyKey: `emg_reg_${enabled}_${Date.now()}`,
       correlationId
     });
@@ -531,18 +716,19 @@ export class TradingPlatformClient {
     tenantId?: string,
     correlationId?: string
   ): Promise<S2SResponse> {
+    const outboundTenantId = await this.resolveOutboundTenantId(tenantId);
     return this.request({
       method: 'POST',
       path: '/api/internal/v1/emergency/api-access',
-      tenantId,
-      body: { enabled, actor, tenantId },
+      tenantId: outboundTenantId,
+      body: { enabled, actor, tenantId: outboundTenantId },
       idempotencyKey: `emg_api_${enabled}_${Date.now()}`,
       correlationId
     });
   }
 
   /**
-   * 7. Emergency Controls: Freeze / Unfreeze Entity
+   * 7. Emergency Controls: Freeze / Unfreeze Entity (/emergency/freeze-user)
    */
   public async sendEmergencyFreeze(
     payload: {
@@ -555,46 +741,128 @@ export class TradingPlatformClient {
     },
     correlationId?: string
   ): Promise<S2SResponse> {
+    const outboundTenantId = await this.resolveOutboundTenantId(payload.tenantId);
     return this.request({
       method: 'POST',
-      path: '/api/internal/v1/emergency/freeze',
-      tenantId: payload.tenantId,
-      body: payload,
+      path: '/emergency/freeze-user',
+      tenantId: outboundTenantId,
+      body: { ...payload, tenantId: outboundTenantId },
       idempotencyKey: `emg_frz_${payload.entityType}_${payload.entityId}_${payload.action}`,
       correlationId
     });
   }
 
   /**
-   * 8. Emergency Controls: Cancel All Open Orders
+   * 8. Emergency Controls: Cancel All Open Orders (/emergency/cancel-all-orders)
    */
   public async sendEmergencyCancelAllOrders(
     payload: { tenantId?: string; actor: string; reason?: string },
     correlationId?: string
   ): Promise<S2SResponse> {
+    const outboundTenantId = await this.resolveOutboundTenantId(payload.tenantId);
     return this.request({
       method: 'POST',
-      path: '/api/internal/v1/emergency/cancel-all-orders',
-      tenantId: payload.tenantId,
-      body: payload,
+      path: '/emergency/cancel-all-orders',
+      tenantId: outboundTenantId,
+      body: { ...payload, tenantId: outboundTenantId },
       idempotencyKey: `emg_cancel_all_${payload.tenantId || 'global'}_${Date.now()}`,
       correlationId
     });
   }
 
   /**
-   * 9. Emergency Controls: Square-Off Position
+   * 9. Emergency Controls: Square-Off All Positions (/emergency/square-off-all)
    */
   public async sendEmergencySquareOff(
-    payload: { positionId: string; actor: string; reason?: string; tenantId?: string },
+    payload: { positionId?: string; actor: string; reason?: string; tenantId?: string },
     correlationId?: string
   ): Promise<S2SResponse> {
+    const outboundTenantId = await this.resolveOutboundTenantId(payload.tenantId);
     return this.request({
       method: 'POST',
-      path: `/api/internal/v1/emergency/positions/${payload.positionId}/square-off`,
-      tenantId: payload.tenantId,
-      body: payload,
-      idempotencyKey: `emg_sq_${payload.positionId}_${Date.now()}`,
+      path: '/emergency/square-off-all',
+      tenantId: outboundTenantId,
+      body: { ...payload, tenantId: outboundTenantId },
+      idempotencyKey: `emg_sq_${payload.positionId || 'all'}_${Date.now()}`,
+      correlationId
+    });
+  }
+
+  /**
+   * 9.1 Process Fund Transaction (Approve / Reject Deposit or Withdrawal)
+   * Wire path: POST /api/internal/v1/trading/funds/process
+   */
+  public async processFundTransaction(payload: {
+    transactionId: string;
+    type: 'DEPOSIT' | 'WITHDRAWAL';
+    action: 'APPROVE' | 'REJECT';
+    amount?: number;
+    clientId?: string;
+    clientCode?: string;
+    tenantId?: string;
+    actor: string;
+    reason?: string;
+    notes?: string;
+  }, correlationId?: string): Promise<S2SResponse> {
+    const outboundTenantId = await this.resolveOutboundTenantId(payload.tenantId);
+    return this.request({
+      method: 'POST',
+      path: '/api/internal/v1/trading/funds/process',
+      tenantId: outboundTenantId,
+      body: {
+        id: payload.transactionId,
+        transactionId: payload.transactionId,
+        type: payload.type,
+        action: payload.action,
+        amount: payload.amount,
+        clientId: payload.clientId,
+        clientCode: payload.clientCode,
+        tenantId: outboundTenantId,
+        adminTenantId: payload.tenantId,
+        actor: payload.actor,
+        reason: payload.reason || payload.notes,
+        notes: payload.notes || payload.reason,
+        processedAt: new Date().toISOString()
+      },
+      idempotencyKey: `funds_${payload.transactionId}_${payload.action.toLowerCase()}`,
+      correlationId
+    });
+  }
+
+  /**
+   * 9.2 Process KYC Verification (Approve / Reject Client KYC)
+   * Wire path: POST /api/internal/v1/compliance/kyc/verify
+   */
+  public async processKYC(payload: {
+    kycId?: string;
+    clientId: string;
+    clientCode?: string;
+    status: string;
+    action?: 'APPROVE' | 'REJECT';
+    notes?: string;
+    actor: string;
+    tenantId?: string;
+  }, correlationId?: string): Promise<S2SResponse> {
+    const outboundTenantId = await this.resolveOutboundTenantId(payload.tenantId);
+    const action = payload.action || (payload.status === 'APPROVED' || payload.status === 'VERIFIED' ? 'APPROVE' : 'REJECT');
+    return this.request({
+      method: 'POST',
+      path: '/api/internal/v1/compliance/kyc/verify',
+      tenantId: outboundTenantId,
+      body: {
+        id: payload.kycId || `KYC-${payload.clientId}`,
+        kycId: payload.kycId || `KYC-${payload.clientId}`,
+        clientId: payload.clientId,
+        clientCode: payload.clientCode,
+        status: payload.status,
+        action,
+        notes: payload.notes,
+        actor: payload.actor,
+        tenantId: outboundTenantId,
+        adminTenantId: payload.tenantId,
+        verifiedAt: new Date().toISOString()
+      },
+      idempotencyKey: `kyc_${payload.kycId || payload.clientId}_${action.toLowerCase()}`,
       correlationId
     });
   }
@@ -603,34 +871,38 @@ export class TradingPlatformClient {
    * 10. Live Trading Data Queries
    */
   public async getLiveOrders(tenantId?: string): Promise<S2SResponse> {
+    const outboundTenantId = await this.resolveOutboundTenantId(tenantId);
     return this.request({
       method: 'GET',
       path: '/api/internal/v1/trading/orders',
-      tenantId
+      tenantId: outboundTenantId
     });
   }
 
   public async getLiveTrades(tenantId?: string): Promise<S2SResponse> {
+    const outboundTenantId = await this.resolveOutboundTenantId(tenantId);
     return this.request({
       method: 'GET',
       path: '/api/internal/v1/trading/trades',
-      tenantId
+      tenantId: outboundTenantId
     });
   }
 
   public async getLivePositions(tenantId?: string): Promise<S2SResponse> {
+    const outboundTenantId = await this.resolveOutboundTenantId(tenantId);
     return this.request({
       method: 'GET',
       path: '/api/internal/v1/trading/positions',
-      tenantId
+      tenantId: outboundTenantId
     });
   }
 
   public async getLiveRiskSummary(tenantId?: string): Promise<S2SResponse> {
+    const outboundTenantId = await this.resolveOutboundTenantId(tenantId);
     return this.request({
       method: 'GET',
       path: '/api/internal/v1/trading/risk-summary',
-      tenantId
+      tenantId: outboundTenantId
     });
   }
 
@@ -638,39 +910,43 @@ export class TradingPlatformClient {
    * 11. Client-Specific Trading Platform Queries
    */
   public async getClientTradingAccount(clientId: string, tenantId?: string): Promise<S2SResponse> {
+    const outboundTenantId = await this.resolveOutboundTenantId(tenantId);
     return this.request({
       method: 'GET',
       path: `/api/internal/v1/trading/clients/${clientId}/account`,
-      tenantId
+      tenantId: outboundTenantId
     });
   }
 
   public async getClientOrders(clientId: string, tenantId?: string): Promise<S2SResponse> {
+    const outboundTenantId = await this.resolveOutboundTenantId(tenantId);
     return this.request({
       method: 'GET',
       path: `/api/internal/v1/trading/clients/${clientId}/orders`,
-      tenantId
+      tenantId: outboundTenantId
     });
   }
 
   public async getClientTrades(clientId: string, tenantId?: string): Promise<S2SResponse> {
+    const outboundTenantId = await this.resolveOutboundTenantId(tenantId);
     return this.request({
       method: 'GET',
       path: `/api/internal/v1/trading/clients/${clientId}/trades`,
-      tenantId
+      tenantId: outboundTenantId
     });
   }
 
   public async getClientPositions(clientId: string, tenantId?: string): Promise<S2SResponse> {
+    const outboundTenantId = await this.resolveOutboundTenantId(tenantId);
     return this.request({
       method: 'GET',
       path: `/api/internal/v1/trading/clients/${clientId}/positions`,
-      tenantId
+      tenantId: outboundTenantId
     });
   }
 
   /**
-   * 12. Synchronize Account Creation with Trading Platform
+   * 12. Synchronize Account Creation with Trading Platform (client sync -> POST /trading/clients/map)
    */
   public async syncClientAccount(data: {
     clientId: string;
@@ -681,10 +957,13 @@ export class TradingPlatformClient {
     initialBalance?: number;
     subBrokerId?: string;
     tenantId?: string;
+    referralCode?: string;
+    brokerCode?: string;
   }): Promise<S2SResponse> {
+    const outboundTenantId = await this.resolveOutboundTenantId(data.tenantId);
     return this.request({
       method: 'POST',
-      path: '/api/internal/v1/trading/clients/sync',
+      path: '/trading/clients/map',
       body: {
         event: 'CLIENT_ACCOUNT_CREATED',
         clientId: data.clientId,
@@ -694,11 +973,74 @@ export class TradingPlatformClient {
         phone: data.phone,
         initialBalance: data.initialBalance ?? 100000,
         subBrokerId: data.subBrokerId,
-        tenantId: data.tenantId,
+        tenantId: outboundTenantId,
+        adminTenantId: data.tenantId,
+        referralCode: data.referralCode,
+        brokerCode: data.brokerCode,
         timestamp: new Date().toISOString()
       },
-      tenantId: data.tenantId
+      tenantId: outboundTenantId
     });
+  }
+
+  /**
+   * Canonical alias for client mapping endpoint: POST /trading/clients/map
+   */
+  public async mapClient(data: {
+    clientId: string;
+    clientCode?: string;
+    name: string;
+    email?: string;
+    phone?: string;
+    initialBalance?: number;
+    subBrokerId?: string;
+    tenantId?: string;
+    referralCode?: string;
+    brokerCode?: string;
+  }): Promise<S2SResponse> {
+    return this.syncClientAccount(data);
+  }
+
+  /**
+   * Canonical alias for trading halt endpoint: POST /emergency/trading-halt
+   */
+  public async tradingHalt(active: boolean, actor: string, reason?: string, tenantId?: string): Promise<S2SResponse> {
+    return this.sendEmergencyTrading(active, actor, reason, tenantId);
+  }
+
+  /**
+   * Canonical alias for freeze user endpoint: POST /emergency/freeze-user
+   */
+  public async freezeUser(payload: {
+    entityType: 'MASTER' | 'BROKER' | 'CLIENT' | 'USER';
+    entityId: string;
+    action: 'FREEZE' | 'UNFREEZE';
+    actor: string;
+    reason?: string;
+    tenantId?: string;
+  }): Promise<S2SResponse> {
+    return this.sendEmergencyFreeze(payload);
+  }
+
+  /**
+   * Canonical alias for cancel all orders endpoint: POST /emergency/cancel-all-orders
+   */
+  public async cancelAllOrders(payload: { tenantId?: string; actor: string; reason?: string }): Promise<S2SResponse> {
+    return this.sendEmergencyCancelAllOrders(payload);
+  }
+
+  /**
+   * Canonical alias for square off all positions endpoint: POST /emergency/square-off-all
+   */
+  public async squareOffAll(payload: { positionId?: string; actor: string; reason?: string; tenantId?: string }): Promise<S2SResponse> {
+    return this.sendEmergencySquareOff(payload);
+  }
+
+  /**
+   * Canonical alias for killswitch endpoint: POST /emergency/killswitch
+   */
+  public async killSwitch(action: 'TRIGGER' | 'RESET', actor: string, reason?: string, tenantId?: string): Promise<S2SResponse> {
+    return this.sendEmergencyKillSwitch(action, actor, reason, tenantId);
   }
 
   /**

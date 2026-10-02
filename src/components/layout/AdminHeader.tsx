@@ -89,14 +89,14 @@ export const AdminHeader: React.FC<AdminHeaderProps> = ({
   const activeTenant = tenants.find(t => t.id === selectedTenantId);
 
   return (
-    <header className="h-16 bg-[#090f1e] border-b border-[#152038] px-3 sm:px-6 flex items-center justify-between sticky top-0 z-30 select-none shrink-0">
+    <header className="h-16 bg-[#090f1e] border-b border-[#152038] px-3 sm:px-6 flex items-center justify-between sticky top-0 z-30 select-none shrink-0 safe-top">
       {/* Left side: Mobile Hamburger + Breadcrumbs */}
       <div className="flex items-center gap-2 sm:gap-3 min-w-0">
         {/* Mobile Hamburger Button */}
         {onOpenMobileMenu && (
           <button
             onClick={onOpenMobileMenu}
-            className="lg:hidden p-2 -ml-1 rounded-lg text-slate-400 hover:text-white hover:bg-[#111b33] transition-colors shrink-0"
+            className="md:hidden p-2 -ml-1 rounded-lg text-slate-400 hover:text-white hover:bg-[#111b33] transition-colors shrink-0 min-h-[40px] min-w-[40px] flex items-center justify-center cursor-pointer"
             title="Open Navigation Menu"
             aria-label="Open Navigation Menu"
           >
