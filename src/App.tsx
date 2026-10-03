@@ -758,39 +758,23 @@ export default function App() {
 
   // Helper to open Trading Platform with optional client context
   const handleOpenTradingPlatform = useCallback((clientData?: any) => {
+    const MAIN_TRADING_PLATFORM_URL = 'https://trading-platform-3-1v13.onrender.com';
     if (clientData) {
-      const normalizedClient = {
-        id: clientData.id || 'CLI-001',
-        userId: clientData.client_code || clientData.userId || clientData.id || 'CLI-001',
-        fullName: clientData.name || clientData.fullName || 'Client Trader',
-        name: clientData.name || clientData.fullName || 'Client Trader',
-        email: clientData.email || 'trader@tradematrix.io',
-        phone: clientData.phone || '+91 98000 00000',
-        balance: clientData.balance || '₹25,400',
-        pl: clientData.pl || clientData.netPl || '+₹0',
-        netPl: clientData.netPl || clientData.pl || '+₹0',
-        tenantId: clientData.tenantId || clientData.tenant_id || selectedTenantScope || 'TNT-001',
-        tenantName: clientData.tenantName || clientData.tenant_name || 'Alpha Prime Capital',
-        kyc: clientData.kyc || clientData.kyc_status || 'APPROVED',
-        status: clientData.account || clientData.status || 'ACTIVE'
-      };
-      setActiveTradingClient(normalizedClient);
-      const clientTenantId = normalizedClient.tenantId;
-      const matchedTenant = tenants.find(t => t.id === clientTenantId || t.name === normalizedClient.tenantName);
-      if (matchedTenant?.domain) {
-        setActiveTradingDomain(matchedTenant.domain);
-      }
-      if (clientTenantId && clientTenantId !== 'GLOBAL') {
-        setSelectedTenantScope(clientTenantId);
-      }
+      const clientId = clientData.client_code || clientData.userId || clientData.id || '';
+      const clientName = clientData.name || clientData.fullName || '';
+      const clientBalance = clientData.balance || '';
+      const clientEmail = clientData.email || '';
+      const queryParams = new URLSearchParams();
+      if (clientId) queryParams.set('client_id', clientId);
+      if (clientName) queryParams.set('name', clientName);
+      if (clientBalance) queryParams.set('balance', clientBalance);
+      if (clientEmail) queryParams.set('email', clientEmail);
+      const url = `${MAIN_TRADING_PLATFORM_URL}${queryParams.toString() ? '?' + queryParams.toString() : ''}`;
+      window.open(url, '_blank', 'noopener,noreferrer');
     } else {
-      setActiveTradingClient(null);
-      const currentTenant = tenants.find(t => t.id === selectedTenantScope);
-      const domain = currentTenant?.domain || (selectedTenantScope === 'ten-02' ? 'trade.zenithmarkets.in' : selectedTenantScope === 'ten-03' ? 'trade.quantumfx.io' : 'trade.alphaprime.com');
-      setActiveTradingDomain(domain);
+      window.open(MAIN_TRADING_PLATFORM_URL, '_blank', 'noopener,noreferrer');
     }
-    setAppMode('trading-platform');
-  }, [selectedTenantScope, tenants]);
+  }, []);
 
   // Check URL params on initial load for deep linking to trading platform
   useEffect(() => {
