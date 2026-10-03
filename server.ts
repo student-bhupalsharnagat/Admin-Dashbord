@@ -82,18 +82,13 @@ async function startServer() {
   // Handles all event types: client.registered, trade.executed, order.created, deposits, etc.
   // ----------------------------------------------------
   app.post([
-<<<<<<< HEAD
     '/api/internal/v1/events/:eventType',
     '/api/internal/v1/events/*',
-    '/api/internal/events',
-    '/api/events/trading-platform',
-    '/api/events'
-=======
     '/api/internal/v1/events/:slug',
     '/api/internal/v1/events',
     '/api/internal/events',
-    '/api/events/trading-platform'
->>>>>>> 3eb279a3a987a5596e31a324551957d91f2feb92
+    '/api/events/trading-platform',
+    '/api/events'
   ], async (req, res) => {
     try {
       // Reject Bearer JWT on these S2S routes
@@ -154,7 +149,6 @@ async function startServer() {
     }
   });
 
-<<<<<<< HEAD
   // Real-time Active Users API Endpoint
   app.get('/api/admin/active-users', authenticate, (req, res) => {
     try {
@@ -170,7 +164,8 @@ async function startServer() {
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
-=======
+  });
+
   // Fallback guard to ensure /api/internal/v1/events* never returns 404
   app.all(['/api/internal/v1/events/:slug', '/api/internal/v1/events*'], (req, res) => {
     if (req.method !== 'POST') {
@@ -183,7 +178,6 @@ async function startServer() {
       error: 'BAD_REQUEST',
       message: 'Invalid S2S event ingestion request'
     });
->>>>>>> 3eb279a3a987a5596e31a324551957d91f2feb92
   });
 
   // ----------------------------------------------------

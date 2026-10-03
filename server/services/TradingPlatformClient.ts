@@ -84,19 +84,6 @@ export class TradingPlatformClient {
   // HMAC-SHA256 SIGNATURE GENERATION & VERIFICATION
   // ----------------------------------------------------
 
-<<<<<<< HEAD
-  public generateSignature(timestamp: string | number, method: string, path: string, bodyString: string): string {
-    const payload = `${timestamp}:${method.toUpperCase()}:${path}:${bodyString}`;
-    return crypto.createHmac('sha256', this.secret).update(payload).digest('hex');
-  }
-
-  public generateDotSignature(timestamp: string | number, method: string, path: string, bodyString: string): string {
-    const normalizedPath = path.split('?')[0];
-    const payload = `${timestamp}.${method.toUpperCase()}.${normalizedPath}.${bodyString}`;
-    return crypto.createHmac('sha256', this.secret).update(payload, 'utf8').digest('hex');
-  }
-
-=======
   private nonceReplayStore = new Map<string, number>();
 
   /**
@@ -209,32 +196,21 @@ export class TradingPlatformClient {
    * Accepted ONLY for white-label inbound routes:
    * Keeps legacy colon-separated X-Signature-SHA256 verification (with fallback to new format).
    */
->>>>>>> 3eb279a3a987a5596e31a324551957d91f2feb92
   public verifyInboundSignature(
     signature: string,
     timestamp: string,
     method: string,
     path: string,
     bodyString: string,
-    maxDriftMs: number = 600000 // 10 minutes replay protection window
+    maxDriftMs: number = 300000 // 5 minutes replay protection window
   ): { valid: boolean; reason?: string } {
     if (!signature || !timestamp) {
-      // In dev mode allow if no signature header provided
-      if (process.env.NODE_ENV !== 'production') {
-        return { valid: true };
-      }
       return { valid: false, reason: 'Missing signature or timestamp' };
     }
 
     // Replay attack protection: verify timestamp freshness
-<<<<<<< HEAD
-    const numericTime = Number(timestamp);
-    const requestTime = !isNaN(numericTime) && numericTime > 1000000000 ? numericTime : new Date(timestamp).getTime();
-=======
     const requestTime = isNaN(Number(timestamp)) ? new Date(timestamp).getTime() : Number(timestamp);
->>>>>>> 3eb279a3a987a5596e31a324551957d91f2feb92
     if (isNaN(requestTime)) {
-      if (process.env.NODE_ENV !== 'production') return { valid: true };
       return { valid: false, reason: 'Invalid timestamp format' };
     }
 
@@ -246,29 +222,6 @@ export class TradingPlatformClient {
       };
     }
 
-<<<<<<< HEAD
-    // Evaluate against both canonical dot format and colon format
-    const expectedDot = this.generateDotSignature(timestamp, method, path, bodyString);
-    const expectedColon = this.generateSignature(timestamp, method, path, bodyString);
-
-    try {
-      const sigBuf = Buffer.from(signature, 'hex');
-      const dotBuf = Buffer.from(expectedDot, 'hex');
-      const colonBuf = Buffer.from(expectedColon, 'hex');
-
-      const matchesDot = sigBuf.length === dotBuf.length && crypto.timingSafeEqual(sigBuf, dotBuf);
-      const matchesColon = sigBuf.length === colonBuf.length && crypto.timingSafeEqual(sigBuf, colonBuf);
-
-      if (!matchesDot && !matchesColon) {
-        if (process.env.NODE_ENV !== 'production') {
-          return { valid: true };
-        }
-        return { valid: false, reason: 'HMAC signature mismatch' };
-      }
-    } catch {
-      if (process.env.NODE_ENV !== 'production') return { valid: true };
-      return { valid: false, reason: 'Signature evaluation failed' };
-=======
     // Check legacy colon-separated signature
     const expectedLegacy = this.generateLegacySignature(timestamp, method, path, bodyString);
     try {
@@ -279,7 +232,6 @@ export class TradingPlatformClient {
       }
     } catch {
       // ignore
->>>>>>> 3eb279a3a987a5596e31a324551957d91f2feb92
     }
 
     // Fallback: check new dot-separated signature format
@@ -395,33 +347,20 @@ export class TradingPlatformClient {
 
     const pathWithoutQuery = options.path.split('?')[0];
     const bodyString = options.body ? JSON.stringify(options.body) : '';
-<<<<<<< HEAD
-    const signature = this.generateSignature(timestamp, options.method, options.path, bodyString);
-    const dotSignature = this.generateDotSignature(timestamp, options.method, options.path, bodyString);
-    const nonce = crypto.randomUUID();
-    const effectiveTenantId = options.tenantId || 'vertex-default';
-=======
     const signature = this.generateSignature(timestamp, options.method, pathWithoutQuery, bodyString);
->>>>>>> 3eb279a3a987a5596e31a324551957d91f2feb92
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'Accept': 'application/json',
-<<<<<<< HEAD
-      'X-Internal-Timestamp': String(Date.now()),
-      'X-Internal-Signature': dotSignature,
-      'X-Internal-Nonce': nonce,
-      'X-Tenant-ID': effectiveTenantId,
-=======
       'X-Internal-Timestamp': timestamp,
       'X-Internal-Nonce': nonce,
       'X-Internal-Signature': signature,
       'X-Correlation-ID': correlationId,
->>>>>>> 3eb279a3a987a5596e31a324551957d91f2feb92
       'X-Signature-SHA256': signature,
       'X-HMAC-Signature': signature,
       'X-Timestamp': timestamp,
       'X-Request-ID': correlationId,
+      ...(options.tenantId ? { 'X-Tenant-ID': options.tenantId } : {}),
       ...(options.idempotencyKey ? { 'X-Idempotency-Key': options.idempotencyKey } : {}),
       ...(options.headers || {})
     };

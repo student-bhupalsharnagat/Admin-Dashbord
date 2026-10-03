@@ -294,17 +294,6 @@ export default function App() {
           clientGrowth: data.clientGrowth || data.charts?.clientGrowth || [],
           dailyPL: Array.isArray(data.dailyPL)
             ? data.dailyPL
-<<<<<<< HEAD
-            : (data.charts?.dailyPL?.data || prev.dailyPL),
-          recentTrades: data.recentTrades || prev.recentTrades,
-          pendingKYC: data.pendingKYC || prev.pendingKYC,
-          tenants: data.tenants || prev.tenants
-        }));
-        if (data.tenants && data.tenants.length) setTenants(data.tenants);
-        if (data.recentTrades && data.recentTrades.length) setRecentTrades(data.recentTrades);
-        if (data.pendingKYC && data.pendingKYC.length) setPendingKYC(data.pendingKYC);
-        if (data.activeUsersCount !== undefined) setActiveUsersCount(Number(data.activeUsersCount));
-=======
             : (data.charts?.dailyPL?.data || []),
           recentTrades: data.recentTrades || [],
           pendingKYC: data.pendingKYC || [],
@@ -313,6 +302,7 @@ export default function App() {
         if (data.tenants && Array.isArray(data.tenants)) setTenants(data.tenants);
         if (data.recentTrades && Array.isArray(data.recentTrades)) setRecentTrades(data.recentTrades);
         if (data.pendingKYC && Array.isArray(data.pendingKYC)) setPendingKYC(data.pendingKYC);
+        if (data.activeUsersCount !== undefined) setActiveUsersCount(Number(data.activeUsersCount));
       } else {
         if (res.status === 401 || res.status === 403) {
           setDashboardError(null);
@@ -320,7 +310,6 @@ export default function App() {
           setDashboardError('Failed to fetch dashboard live telemetry from PostgreSQL');
         }
         setDashboardData(prev => ({ ...prev, kpis: null }));
->>>>>>> 3eb279a3a987a5596e31a324551957d91f2feb92
       }
     } catch (err: any) {
       if (err.name === 'AbortError') return;
@@ -967,14 +956,10 @@ export default function App() {
               {/* Dashboard View */}
               {activeTab === 'dashboard' && (
                 <DashboardView
-<<<<<<< HEAD
                   kpis={dashboardData?.kpis || null}
                   clients={clients}
-=======
-                  kpis={dashboardData?.kpis}
                   hasError={!!dashboardError}
                   errorMessage={dashboardError || undefined}
->>>>>>> 3eb279a3a987a5596e31a324551957d91f2feb92
                   volumeCommissionData={dashboardData?.volumeCommission || []}
                   clientGrowthData={dashboardData?.clientGrowth || []}
                   dailyPLData={dashboardData?.dailyPL || []}
@@ -1072,13 +1057,10 @@ export default function App() {
                   onToggleStatus={handleToggleEntityStatus}
                   onNotify={showToast}
                   onOpenTradingPlatform={handleOpenTradingPlatform}
-<<<<<<< HEAD
-=======
                   onRefresh={async () => {
                     await loadHierarchyData();
                     await loadDashboardData();
                   }}
->>>>>>> 3eb279a3a987a5596e31a324551957d91f2feb92
                 />
               )}
 

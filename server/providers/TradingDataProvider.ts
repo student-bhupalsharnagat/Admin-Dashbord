@@ -1667,13 +1667,8 @@ export class MockTradingDataProvider implements ITradingDataProvider {
       tradingAccount: {
         accountNumber: `TRD-${client.id}`,
         dematNumber: `IN300128-${client.id}`,
-<<<<<<< HEAD
         tradingPlatformUrl: `https://trading-platform-3-1v13.onrender.com?client_id=${encodeURIComponent(client.id)}&name=${encodeURIComponent(client.name)}&balance=${balance}`,
         mainPlatformLink: 'https://trading-platform-3-1v13.onrender.com',
-=======
-        tradingPlatformUrl: `/?mode=trading&client_id=${encodeURIComponent(client.id)}&name=${encodeURIComponent(client.name)}&balance=${balance}`,
-        mainPlatformLink: `/?mode=trading&client_id=${encodeURIComponent(client.id)}`,
->>>>>>> 3eb279a3a987a5596e31a324551957d91f2feb92
         currency: 'INR',
         balance: `₹${balance.toLocaleString('en-IN')}`,
         rawBalance: balance,

@@ -1287,11 +1287,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       if (!isNaN(num)) realizedPL += num;
     }
 
-<<<<<<< HEAD
     const tradingPlatformWebUrl = `https://trading-platform-3-1v13.onrender.com?client_id=${encodeURIComponent(cleanId)}&client_code=${encodeURIComponent(clientCode)}&name=${encodeURIComponent(clientName)}&balance=${rawBalance}`;
-=======
-    const tradingPlatformWebUrl = `/?mode=trading&client_id=${encodeURIComponent(cleanId)}&client_code=${encodeURIComponent(clientCode)}&name=${encodeURIComponent(clientName)}&balance=${rawBalance}`;
->>>>>>> 3eb279a3a987a5596e31a324551957d91f2feb92
 
     return {
       client: {
@@ -1316,11 +1312,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         accountNumber: `TRD-${cleanId}`,
         dematNumber: `IN300128-${cleanId}`,
         tradingPlatformUrl: tradingPlatformWebUrl,
-<<<<<<< HEAD
         mainPlatformLink: 'https://trading-platform-3-1v13.onrender.com',
-=======
-        mainPlatformLink: `/?mode=trading&client_id=${encodeURIComponent(cleanId)}`,
->>>>>>> 3eb279a3a987a5596e31a324551957d91f2feb92
         currency: 'INR',
         balance: `₹${rawBalance.toLocaleString('en-IN')}`,
         rawBalance,

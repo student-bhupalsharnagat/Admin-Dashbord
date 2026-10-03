@@ -32,20 +32,8 @@ export function validateAndLoadConfig(): AppConfig {
 
   // Production security & readiness check (warn instead of crashing)
   if (isProduction) {
-<<<<<<< HEAD
     if (!process.env.JWT_SECRET) {
       console.warn('[NOTICE] JWT_SECRET not explicitly set in environment. Using default secure key.');
-=======
-    if (process.env.ALLOWED_ORIGINS === '*' || allowedOrigins.includes('*') || rawOrigins === '*') {
-      const errorMsg = '[Configuration Error] ALLOWED_ORIGINS cannot be "*" in production. Explicit trusted origins are required.';
-      console.error(errorMsg);
-      throw new Error(errorMsg);
-    }
-
-    const missing: string[] = [];
-    if (!jwtSecret || jwtSecret.length < 32) {
-      missing.push('JWT_SECRET (must be at least 32 characters)');
->>>>>>> 3eb279a3a987a5596e31a324551957d91f2feb92
     }
     if (!process.env.INTERNAL_COMMUNICATION_SECRET) {
       console.warn('[NOTICE] INTERNAL_COMMUNICATION_SECRET not set. Using default S2S secret.');

@@ -30,12 +30,9 @@ import { NavigationTab } from '../components/layout/AdminSidebar';
 
 export interface DashboardViewProps {
   kpis?: DashboardKPIs | null;
-<<<<<<< HEAD
   clients?: any[];
-=======
   hasError?: boolean;
   errorMessage?: string;
->>>>>>> 3eb279a3a987a5596e31a324551957d91f2feb92
   volumeCommissionData?: any;
   clientGrowthData?: any;
   dailyPLData?: any;
@@ -68,12 +65,9 @@ const DEFAULT_UNAVAILABLE_KPIS: DashboardKPIs = {
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
   kpis,
-<<<<<<< HEAD
   clients,
-=======
   hasError,
   errorMessage,
->>>>>>> 3eb279a3a987a5596e31a324551957d91f2feb92
   volumeCommissionData,
   clientGrowthData,
   dailyPLData,
