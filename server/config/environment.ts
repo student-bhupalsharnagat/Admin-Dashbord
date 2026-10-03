@@ -20,8 +20,8 @@ export function validateAndLoadConfig(): AppConfig {
   const isProduction = process.env.NODE_ENV === 'production';
   const isTest = process.env.NODE_ENV === 'test';
 
-  const jwtSecret = process.env.JWT_SECRET || 'tradematrix-prod-jwt-secret-key-32chars-min-2026';
-  const internalSecret = process.env.INTERNAL_COMMUNICATION_SECRET || 'tradematrix-s2s-hmac-secret-32chars-min-2026';
+  const jwtSecret = process.env.JWT_SECRET || 'Jt9#vQ7!mX2akL8SzP4&nR6*fhgjg8eerrnm';
+  const internalSecret = process.env.INTERNAL_COMMUNICATION_SECRET || 'Tr@dingS2S#2026!Kp8$Xm4&Qr7r7484';
   const tradingPlatformBaseUrl = process.env.TRADING_PLATFORM_BASE_URL || 'https://trading-platform-3-1v13.onrender.com';
   const tradingPlatformTimeoutMs = parseInt(process.env.TRADING_PLATFORM_TIMEOUT_MS || '5000', 10);
   const databaseUrl = process.env.DATABASE_URL || '';

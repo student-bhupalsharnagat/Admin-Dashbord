@@ -70,6 +70,10 @@ export class TradingPlatformClient {
     lastErrorMessage: null
   };
 
+  // Clock offset to prevent timestamp expiration errors due to client-server time drift
+  public clockOffsetMs: number = 0;
+  private lastClockSync: number = 0;
+
   constructor(
     baseUrl: string = appConfig.tradingPlatformBaseUrl,
     secret: string = appConfig.internalCommunicationSecret,
@@ -78,6 +82,38 @@ export class TradingPlatformClient {
     this.baseUrl = baseUrl.replace(/\/$/, '');
     this.secret = secret;
     this.defaultTimeoutMs = defaultTimeoutMs;
+  }
+
+  public getBaseUrl(): string {
+    return this.baseUrl;
+  }
+
+  /**
+   * Auto-sync clock drift between local machine and remote Trading Platform.
+   * Prevents 401 UNAUTHORIZED timestamp expiration rejections.
+   */
+  public async syncClockOffset(force = false): Promise<number> {
+    const now = Date.now();
+    if (!force && this.lastClockSync && (now - this.lastClockSync < 60000)) {
+      return this.clockOffsetMs;
+    }
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 3000);
+      const res = await fetch(`${this.baseUrl}/health`, { signal: controller.signal });
+      clearTimeout(timeout);
+      const dateHeader = res.headers.get('date');
+      if (dateHeader) {
+        const remoteTime = new Date(dateHeader).getTime();
+        if (!isNaN(remoteTime)) {
+          this.clockOffsetMs = remoteTime - Date.now();
+          this.lastClockSync = Date.now();
+        }
+      }
+    } catch {
+      // Keep previous offset if health ping fails
+    }
+    return this.clockOffsetMs;
   }
 
   // ----------------------------------------------------
@@ -140,7 +176,7 @@ export class TradingPlatformClient {
       return { valid: false, statusCode: 401, reason: 'Missing S2S signature or timestamp header' };
     }
 
-    // 3. Max age 30s
+    // 3. Max age 5 minutes (300,000ms) to accommodate cloud deployment network and cold-start latency
     const reqTime = isNaN(Number(timestamp)) ? new Date(timestamp).getTime() : Number(timestamp);
     if (isNaN(reqTime)) {
       return { valid: false, statusCode: 401, reason: 'Invalid timestamp format' };
@@ -148,11 +184,11 @@ export class TradingPlatformClient {
 
     const now = Date.now();
     const ageMs = Math.abs(now - reqTime);
-    if (ageMs > 30000) {
+    if (ageMs > 300000) {
       return {
         valid: false,
         statusCode: 401,
-        reason: `Timestamp outside acceptable window (${Math.round(ageMs / 1000)}s drift, max age 30s)`
+        reason: `Timestamp outside acceptable window (${Math.round(ageMs / 1000)}s drift, max age 300s)`
       };
     }
 
@@ -339,8 +375,12 @@ export class TradingPlatformClient {
     this.metrics.totalRequests++;
     this.checkCircuitBreaker();
 
+    if (this.clockOffsetMs === 0) {
+      await this.syncClockOffset().catch(() => {});
+    }
+
     const correlationId = options.correlationId || `req_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
-    const timestamp = Date.now().toString(); // epoch ms string
+    const timestamp = (Date.now() + this.clockOffsetMs).toString(); // calibrated epoch ms string
     const nonce = crypto.randomUUID(); // uuid
     const timeoutMs = options.timeoutMs || this.defaultTimeoutMs;
     const maxRetries = options.retries !== undefined ? options.retries : 2;
@@ -841,6 +881,20 @@ export class TradingPlatformClient {
     return this.request({
       method: 'GET',
       path: '/api/internal/v1/trading/risk-summary',
+      tenantId: outboundTenantId
+    });
+  }
+
+  public async getLiveClients(tenantId?: string, options?: { page?: number; limit?: number; search?: string }): Promise<S2SResponse> {
+    const outboundTenantId = await this.resolveOutboundTenantId(tenantId);
+    const queryParams = new URLSearchParams();
+    if (options?.page) queryParams.set('page', String(options.page));
+    if (options?.limit) queryParams.set('limit', String(options.limit));
+    if (options?.search) queryParams.set('search', options.search);
+    const q = queryParams.toString() ? `?${queryParams.toString()}` : '';
+    return this.request({
+      method: 'GET',
+      path: `/api/internal/v1/trading/clients${q}`,
       tenantId: outboundTenantId
     });
   }

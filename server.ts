@@ -46,6 +46,9 @@ async function startServer() {
   try {
     const { testConnection } = await import('./server/db/connection.ts');
     await testConnection();
+    await runMigrations().catch(e => console.warn('[Migration Notice]', e.message));
+    await seedDatabase().catch(e => console.warn('[Seed Notice]', e.message));
+    await seedAuthAndRbac().catch(e => console.warn('[Auth Seed Notice]', e.message));
   } catch (err: any) {
     console.warn('[Server] Initial database readiness check:', err?.message);
   }
@@ -500,6 +503,35 @@ async function startServer() {
       });
     }
   });
+
+  // Fast Live Sync endpoint for UI and manual trigger
+  app.post(['/api/admin/integration/sync', '/api/admin/sync'], async (req: any, res: any) => {
+    try {
+      const tenantId = req.body?.tenantId || (req.user as any)?.tenantId || 'TNT-001';
+      const counts = await eventHandler.backfillFromTradingPlatform(tenantId);
+      res.json({
+        success: true,
+        message: 'Live synchronization from Trading Platform completed.',
+        synced: counts,
+        timestamp: new Date().toISOString()
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        error: 'SYNC_FAILED',
+        message: err.message
+      });
+    }
+  });
+
+  // Background Auto-Sync Worker with Trading Platform (every 15s)
+  setInterval(async () => {
+    try {
+      await eventHandler.backfillFromTradingPlatform();
+    } catch {
+      // safe background poll failure ignore
+    }
+  }, 15000);
 
   // ----------------------------------------------------
   // CENTRAL AUTHENTICATION & JWT APIS (Phase 4 Production)
