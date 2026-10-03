@@ -581,6 +581,33 @@ export class TradingPlatformClient {
     options?: { actor?: string; correlationId?: string; reason?: string }
   ): Promise<S2SResponse> {
     const outboundTenantId = await this.resolveOutboundTenantId(tenantId);
+
+    // 1. Dispatch platform feature flags to /api/internal/v1/platform/config
+    await this.request({
+      method: 'POST',
+      path: '/api/internal/v1/platform/config',
+      tenantId: outboundTenantId,
+      body: {
+        tenantId: outboundTenantId,
+        config: {
+          trading_enabled: payload.trading_enabled,
+          registration_enabled: payload.registration_enabled,
+          api_enabled: payload.api_enabled,
+          support_enabled: payload.support_enabled ?? true,
+          notifications_enabled: payload.notifications_enabled ?? true,
+          deposit_enabled: true,
+          withdrawal_enabled: true,
+          options_trading_enabled: true,
+          max_leverage: 50,
+          maintenance_mode: payload.maintenance_mode ?? false,
+          maintenance_message: payload.maintenance_message || 'Platform is operational'
+        }
+      },
+      idempotencyKey: `plt_cfg_${tenantId}_${Date.now()}`,
+      correlationId: options?.correlationId
+    }).catch(() => null);
+
+    // 2. Dispatch tenant governance configuration to /api/internal/v1/tenant/sync
     return this.request({
       method: 'POST',
       path: '/api/internal/v1/tenant/sync',
@@ -589,10 +616,14 @@ export class TradingPlatformClient {
         tenantId: outboundTenantId,
         adminTenantId: tenantId,
         ...payload,
+        tradingEnabled: payload.trading_enabled,
+        registrationEnabled: payload.registration_enabled,
+        apiEnabled: payload.api_enabled,
+        maintenanceMode: payload.maintenance_mode,
         syncedBy: options?.actor || 'CentralAdmin',
         syncedAt: new Date().toISOString()
       },
-      idempotencyKey: `sync_${tenantId}_v${payload.config_version}`,
+      idempotencyKey: `sync_${tenantId}_v${payload.config_version || 1}`,
       correlationId: options?.correlationId
     });
   }
@@ -607,6 +638,67 @@ export class TradingPlatformClient {
     options?: { actor?: string; correlationId?: string }
   ): Promise<S2SResponse> {
     const outboundTenantId = await this.resolveOutboundTenantId(tenantId);
+
+    const brandingPayload = {
+      brandName: config.brand_name || config.brandName,
+      shortName: config.short_name || config.shortName,
+      tagline: config.tagline,
+      logoUrl: config.logo_url || config.logoUrl,
+      faviconUrl: config.favicon_url || config.faviconUrl || '/favicon.ico',
+      primaryColor: config.primary_color || config.primaryColor,
+      secondaryColor: config.secondary_color || config.secondaryColor,
+      accentColor: config.accent_color || config.accentColor,
+      backgroundColor: config.background_color || config.backgroundColor,
+      surfaceColor: config.surface_color || config.surfaceColor,
+      textColor: config.text_color || config.textColor,
+      supportEmail: config.support_email || config.supportEmail,
+      supportPhone: config.support_phone || config.supportPhone,
+      footerText: config.footer_text || config.footerText
+    };
+
+    // 1. Primary wire path on Trading Platform: POST /api/internal/v1/tenant/branding
+    const res = await this.request({
+      method: 'POST',
+      path: '/api/internal/v1/tenant/branding',
+      tenantId: outboundTenantId,
+      body: {
+        tenantId: outboundTenantId,
+        adminTenantId: tenantId,
+        version,
+        branding: brandingPayload,
+        publishedBy: options?.actor || 'CentralAdmin',
+        publishedAt: new Date().toISOString()
+      },
+      idempotencyKey: `wl_${tenantId}_v${version}`,
+      correlationId: options?.correlationId
+    });
+
+    if (res.success) {
+      return res;
+    }
+
+    // 2. Secondary fallback wire path: POST /api/internal/v1/tenant/sync
+    const syncRes = await this.request({
+      method: 'POST',
+      path: '/api/internal/v1/tenant/sync',
+      tenantId: outboundTenantId,
+      body: {
+        tenantId: outboundTenantId,
+        brandingVersion: version,
+        brandName: brandingPayload.brandName,
+        shortName: brandingPayload.shortName,
+        logoUrl: brandingPayload.logoUrl,
+        primaryColor: brandingPayload.primaryColor
+      },
+      idempotencyKey: `wl_sync_${tenantId}_v${version}`,
+      correlationId: options?.correlationId
+    });
+
+    if (syncRes.success) {
+      return syncRes;
+    }
+
+    // 3. Fallback wire path: POST /api/internal/v1/white-label/:tenantId/sync
     return this.request({
       method: 'POST',
       path: `/api/internal/v1/white-label/${outboundTenantId || tenantId}/sync`,
@@ -619,7 +711,7 @@ export class TradingPlatformClient {
         publishedBy: options?.actor || 'CentralAdmin',
         publishedAt: new Date().toISOString()
       },
-      idempotencyKey: `wl_${tenantId}_v${version}`,
+      idempotencyKey: `wl_fallback_${tenantId}_v${version}`,
       correlationId: options?.correlationId
     });
   }

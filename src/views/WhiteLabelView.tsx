@@ -414,6 +414,18 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
 
   const primaryDomain = domains.find(d => d.is_primary)?.domain || branding?.custom_domain || 'trade.alphaprime.com';
 
+  const handleLaunchPlatform = () => {
+    if (onLaunchTradingPlatform) {
+      onLaunchTradingPlatform(primaryDomain, selectedTenantId);
+    } else {
+      const targetUrl =
+        primaryDomain && primaryDomain !== 'trade.alphaprime.com' && !primaryDomain.includes('example.com')
+          ? (primaryDomain.startsWith('http') ? primaryDomain : `https://${primaryDomain}`)
+          : 'https://trading-platform-3-1v13.onrender.com';
+      window.open(targetUrl, '_blank', 'noopener,noreferrer');
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Top Header: Title, Tenant Selector, and Primary Actions */}
@@ -455,16 +467,14 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
             <ChevronDown size={14} className="absolute right-2.5 top-2.5 text-slate-400 pointer-events-none" />
           </div>
 
-          {onLaunchTradingPlatform && (
-            <button
-              onClick={() => onLaunchTradingPlatform(primaryDomain, selectedTenantId)}
-              className="px-3.5 py-2 rounded-lg bg-[#142345] hover:bg-[#1a2f5c] border border-blue-500/30 text-blue-400 font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
-              title="Launch Tenant Trading Platform in Terminal mode"
-            >
-              <ExternalLink size={13} />
-              <span>Launch Platform</span>
-            </button>
-          )}
+          <button
+            onClick={handleLaunchPlatform}
+            className="px-3.5 py-2 rounded-lg bg-[#142345] hover:bg-[#1a2f5c] border border-blue-500/30 text-blue-400 font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+            title="Launch Tenant Trading Platform"
+          >
+            <ExternalLink size={13} />
+            <span>Launch Platform</span>
+          </button>
 
           <button
             onClick={handleSaveDraft}
@@ -899,15 +909,13 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
                 <span>Live Preview: {branding?.brand_name || 'Trading Desk'}</span>
               </span>
 
-              {onLaunchTradingPlatform && (
-                <button
-                  onClick={() => onLaunchTradingPlatform(primaryDomain, selectedTenantId)}
-                  className="text-xs text-blue-400 hover:text-blue-300 font-semibold flex items-center gap-1 cursor-pointer"
-                >
-                  <span>Open Full Platform</span>
-                  <ExternalLink size={12} />
-                </button>
-              )}
+              <button
+                onClick={handleLaunchPlatform}
+                className="text-xs text-blue-400 hover:text-blue-300 font-semibold flex items-center gap-1 cursor-pointer"
+              >
+                <span>Open Full Platform</span>
+                <ExternalLink size={12} />
+              </button>
             </div>
 
             {/* Simulated Desktop Preview Frame */}

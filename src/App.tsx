@@ -1112,9 +1112,11 @@ export default function App() {
                   onNotify={showToast}
                   selectedTenantScope={selectedTenantScope}
                   onLaunchTradingPlatform={(domain, tenantId) => {
-                    if (tenantId) setSelectedTenantScope(tenantId);
-                    if (domain) setActiveTradingDomain(domain);
-                    setAppMode('trading-platform');
+                    const targetUrl =
+                      domain && domain !== 'trade.alphaprime.com' && !domain.includes('example.com')
+                        ? (domain.startsWith('http') ? domain : `https://${domain}`)
+                        : 'https://trading-platform-3-1v13.onrender.com';
+                    window.open(targetUrl, '_blank', 'noopener,noreferrer');
                   }}
                 />
               )}

@@ -2326,6 +2326,26 @@ async function startServer() {
       const user = (req as any).user;
       const reason = req.body.reason || 'Admin published branding';
       const published = await activeTradingDataProvider.publishWhiteLabelConfig(req.params.tenantId, user?.name || 'Admin', reason);
+
+      // Also ensure current platform controls are pushed to Trading Platform
+      try {
+        const platConfig = await activeTradingDataProvider.getTenantPlatformConfig(req.params.tenantId);
+        if (platConfig) {
+          await tradingPlatformClient.syncTenantConfig(req.params.tenantId, {
+            status: 'ACTIVE',
+            trading_enabled: platConfig.trading_enabled,
+            registration_enabled: platConfig.registration_enabled,
+            api_enabled: platConfig.api_enabled,
+            support_enabled: platConfig.support_enabled,
+            notifications_enabled: platConfig.notifications_enabled,
+            maintenance_mode: platConfig.maintenance_mode,
+            maintenance_message: platConfig.maintenance_message
+          }, { actor: user?.name || 'Admin', reason: 'Published via White-Label' });
+        }
+      } catch (syncErr: any) {
+        console.warn('[WhiteLabelPublish] Platform config sync notice:', syncErr.message);
+      }
+
       res.json(published);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
