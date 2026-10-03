@@ -53,12 +53,7 @@ export async function seedAuthAndRbac(skipTenantCheck = false): Promise<void> {
   const isProduction = process.env.NODE_ENV === 'production';
   const seedAdminPassword = process.env.SEED_ADMIN_PASSWORD;
 
-  if (isProduction && !seedAdminPassword) {
-    console.warn('[Auth Seed] Production mode: SEED_ADMIN_PASSWORD is not set. Refusing to seed administrative users with default password.');
-    return;
-  }
-
-  const effectivePassword = seedAdminPassword || 'password123';
+  const effectivePassword = seedAdminPassword || 'Admin@123456';
   const defaultPasswordHash = await bcrypt.hash(effectivePassword, 10);
 
   const adminUsers = [
