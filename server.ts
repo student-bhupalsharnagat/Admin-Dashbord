@@ -71,6 +71,23 @@ async function startServer() {
     next();
   });
 
+  // CORS middleware for User/Broker Panel and authorized clients
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (origin) {
+      if (!appConfig.isProduction || appConfig.allowedOrigins.includes(origin) || appConfig.allowedOrigins.includes('*')) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, X-Tenant-Id, X-Signature-SHA256, X-HMAC-Signature, X-Timestamp, X-Idempotency-Key');
+      }
+    }
+    if (req.method === 'OPTIONS') {
+      return res.sendStatus(204);
+    }
+    next();
+  });
+
   // Request logger
   app.use((req, res, next) => {
     if (req.path.startsWith('/api/')) {
@@ -3298,6 +3315,12 @@ async function startServer() {
 
   // 1-Click Demo Login Endpoint
   app.post('/api/auth/demo', async (req, res) => {
+    if (process.env.NODE_ENV === 'production') {
+      return res.status(403).json({
+        error: 'FORBIDDEN',
+        message: 'Demo login is disabled in production environment.'
+      });
+    }
     try {
       const { role = 'CLIENT' } = req.body;
       const isClient = role === 'CLIENT';

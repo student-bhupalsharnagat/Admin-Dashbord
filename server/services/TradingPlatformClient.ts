@@ -88,13 +88,17 @@ export class TradingPlatformClient {
     return this.baseUrl;
   }
 
+  public setBaseUrl(url: string): void {
+    this.baseUrl = url.replace(/\/$/, '');
+  }
+
   /**
    * Auto-sync clock drift between local machine and remote Trading Platform.
    * Prevents 401 UNAUTHORIZED timestamp expiration rejections.
    */
   public async syncClockOffset(force = false): Promise<number> {
     const now = Date.now();
-    if (!force && this.lastClockSync && (now - this.lastClockSync < 60000)) {
+    if (!force && this.lastClockSync && (now - this.lastClockSync < 30000)) {
       return this.clockOffsetMs;
     }
     try {
@@ -102,9 +106,10 @@ export class TradingPlatformClient {
       const timeout = setTimeout(() => controller.abort(), 3000);
       const res = await fetch(`${this.baseUrl}/health`, { signal: controller.signal });
       clearTimeout(timeout);
-      const dateHeader = res.headers.get('date');
-      if (dateHeader) {
-        const remoteTime = new Date(dateHeader).getTime();
+      const body = await res.json().catch(() => ({}));
+      const remoteTimeStr = body?.timestamp || res.headers.get('date');
+      if (remoteTimeStr) {
+        const remoteTime = new Date(remoteTimeStr).getTime();
         if (!isNaN(remoteTime)) {
           this.clockOffsetMs = remoteTime - Date.now();
           this.lastClockSync = Date.now();
@@ -258,28 +263,38 @@ export class TradingPlatformClient {
       };
     }
 
+    const pathVariants = [path];
+    const pathWithoutQuery = path.split('?')[0];
+    if (pathWithoutQuery !== path) {
+      pathVariants.push(pathWithoutQuery);
+    }
+
     // Check legacy colon-separated signature
-    const expectedLegacy = this.generateLegacySignature(timestamp, method, path, bodyString);
-    try {
-      const sigBuf = Buffer.from(signature, 'hex');
-      const expectedBuf = Buffer.from(expectedLegacy, 'hex');
-      if (sigBuf.length === expectedBuf.length && crypto.timingSafeEqual(sigBuf, expectedBuf)) {
-        return { valid: true };
+    for (const p of pathVariants) {
+      const expectedLegacy = this.generateLegacySignature(timestamp, method, p, bodyString);
+      try {
+        const sigBuf = Buffer.from(signature, 'hex');
+        const expectedBuf = Buffer.from(expectedLegacy, 'hex');
+        if (sigBuf.length === expectedBuf.length && crypto.timingSafeEqual(sigBuf, expectedBuf)) {
+          return { valid: true };
+        }
+      } catch {
+        // ignore
       }
-    } catch {
-      // ignore
     }
 
     // Fallback: check new dot-separated signature format
-    const expectedNew = this.generateSignature(timestamp, method, path, bodyString);
-    try {
-      const sigBuf = Buffer.from(signature, 'hex');
-      const expectedBuf = Buffer.from(expectedNew, 'hex');
-      if (sigBuf.length === expectedBuf.length && crypto.timingSafeEqual(sigBuf, expectedBuf)) {
-        return { valid: true };
+    for (const p of pathVariants) {
+      const expectedNew = this.generateSignature(timestamp, method, p, bodyString);
+      try {
+        const sigBuf = Buffer.from(signature, 'hex');
+        const expectedBuf = Buffer.from(expectedNew, 'hex');
+        if (sigBuf.length === expectedBuf.length && crypto.timingSafeEqual(sigBuf, expectedBuf)) {
+          return { valid: true };
+        }
+      } catch {
+        // ignore
       }
-    } catch {
-      // ignore
     }
 
     return { valid: false, reason: 'HMAC signature mismatch' };
@@ -375,7 +390,7 @@ export class TradingPlatformClient {
     this.metrics.totalRequests++;
     this.checkCircuitBreaker();
 
-    if (this.clockOffsetMs === 0) {
+    if (this.clockOffsetMs === 0 || !this.lastClockSync || (Date.now() - this.lastClockSync > 30000)) {
       await this.syncClockOffset().catch(() => {});
     }
 
@@ -489,6 +504,52 @@ export class TradingPlatformClient {
           }
         }
 
+        // Bidirectional fallback for emergency routes: /emergency/* <-> /api/internal/v1/emergency/*
+        let emergencyFallbackPath: string | null = null;
+        let emergencyFallbackBody = bodyString;
+        if (response.status === 404 && options.path.startsWith('/emergency/')) {
+          emergencyFallbackPath = `/api/internal/v1${options.path}`;
+          const parsed = options.body && typeof options.body === 'object' ? { ...options.body } : {};
+          if (!parsed.scope) {
+            parsed.scope = parsed.positionId ? 'USER' : 'TENANT';
+          }
+          emergencyFallbackBody = JSON.stringify(parsed);
+        } else if (response.status === 404 && options.path.startsWith('/api/internal/v1/emergency/')) {
+          emergencyFallbackPath = options.path.replace('/api/internal/v1', '');
+        }
+
+        if (emergencyFallbackPath) {
+          const fallbackSig = this.generateSignature(timestamp, options.method, emergencyFallbackPath, emergencyFallbackBody);
+          const fallbackHeaders = {
+            ...headers,
+            'X-Signature-SHA256': fallbackSig,
+            'X-HMAC-Signature': fallbackSig,
+            'X-Internal-Signature': fallbackSig
+          };
+          try {
+            const fallbackRes = await fetch(`${this.baseUrl}${emergencyFallbackPath}`, {
+              method: options.method,
+              headers: fallbackHeaders,
+              body: ['POST', 'PUT', 'PATCH'].includes(options.method) ? emergencyFallbackBody : undefined,
+              signal: controller.signal
+            });
+            if (fallbackRes.ok) {
+              const data = (await fallbackRes.json().catch(() => ({}))) as T;
+              this.recordSuccess();
+              return {
+                success: true,
+                statusCode: fallbackRes.status,
+                data,
+                correlationId,
+                latencyMs: Date.now() - startTime,
+                fromFallback: true
+              };
+            }
+          } catch {
+            // Ignore fallback network error and proceed
+          }
+        }
+
         // 4xx errors are client errors (do not retry, record as rejection)
         if (response.status >= 400 && response.status < 500) {
           const errBody = await response.json().catch(() => ({}));
@@ -549,13 +610,22 @@ export class TradingPlatformClient {
         'SELECT trading_tenant_id FROM tenants WHERE id = $1 LIMIT 1',
         [adminTenantId]
       );
-      if (rows.length > 0 && rows[0].trading_tenant_id) {
-        return rows[0].trading_tenant_id;
+      if (rows.length > 0) {
+        if (rows[0].trading_tenant_id) {
+          return rows[0].trading_tenant_id;
+        }
+        if (adminTenantId === 'TNT-001' || adminTenantId === 'default') {
+          return process.env.TRADING_TENANT_ID || 'vertex-default';
+        }
+        return adminTenantId;
       }
     } catch {
       // In case DB is not yet available or testing standalone
     }
-    return process.env.TRADING_TENANT_ID || adminTenantId;
+    if (adminTenantId === 'TNT-001' || adminTenantId === 'default') {
+      return process.env.TRADING_TENANT_ID || 'vertex-default';
+    }
+    return adminTenantId;
   }
 
   /**
@@ -827,7 +897,7 @@ export class TradingPlatformClient {
    * 8. Emergency Controls: Cancel All Open Orders (/emergency/cancel-all-orders)
    */
   public async sendEmergencyCancelAllOrders(
-    payload: { tenantId?: string; actor: string; reason?: string },
+    payload: { tenantId?: string; actor: string; reason?: string; scope?: string },
     correlationId?: string
   ): Promise<S2SResponse> {
     const outboundTenantId = await this.resolveOutboundTenantId(payload.tenantId);
@@ -835,7 +905,7 @@ export class TradingPlatformClient {
       method: 'POST',
       path: '/emergency/cancel-all-orders',
       tenantId: outboundTenantId,
-      body: { ...payload, tenantId: outboundTenantId },
+      body: { ...payload, scope: payload.scope || 'TENANT', tenantId: outboundTenantId },
       idempotencyKey: `emg_cancel_all_${payload.tenantId || 'global'}_${Date.now()}`,
       correlationId
     });
@@ -845,7 +915,7 @@ export class TradingPlatformClient {
    * 9. Emergency Controls: Square-Off All Positions (/emergency/square-off-all)
    */
   public async sendEmergencySquareOff(
-    payload: { positionId?: string; actor: string; reason?: string; tenantId?: string },
+    payload: { positionId?: string; actor: string; reason?: string; tenantId?: string; scope?: string },
     correlationId?: string
   ): Promise<S2SResponse> {
     const outboundTenantId = await this.resolveOutboundTenantId(payload.tenantId);
@@ -853,7 +923,7 @@ export class TradingPlatformClient {
       method: 'POST',
       path: '/emergency/square-off-all',
       tenantId: outboundTenantId,
-      body: { ...payload, tenantId: outboundTenantId },
+      body: { ...payload, scope: payload.scope || (payload.positionId ? 'USER' : 'TENANT'), tenantId: outboundTenantId },
       idempotencyKey: `emg_sq_${payload.positionId || 'all'}_${Date.now()}`,
       correlationId
     });

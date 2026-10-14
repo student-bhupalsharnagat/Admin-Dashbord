@@ -58,11 +58,11 @@ async function runLiveFixesTests() {
   try {
     // 0. Ensure test tenants exist
     await query(`
-      INSERT INTO tenants (id, name, code, subdomain, custom_domain, status, plan, owner_name, owner_email, created_at)
+      INSERT INTO tenants (id, name, code, subdomain, custom_domain, status, plan, owner_name, owner_email, created_at, trading_tenant_id)
       VALUES 
-        ($1, 'Alpha Test Tenant', 'ATTA', 'alpha-test-sub', 'trade.alphatest.com', 'ACTIVE', 'ENTERPRISE', 'Alpha Owner', 'owner@alpha.com', CURRENT_TIMESTAMP),
-        ($2, 'Beta Test Tenant', 'BETA', 'beta-test-sub', 'trade.betatest.com', 'ACTIVE', 'PRO', 'Beta Owner', 'owner@beta.com', CURRENT_TIMESTAMP)
-      ON CONFLICT (id) DO NOTHING
+        ($1, 'Alpha Test Tenant', 'ATTA', 'alpha-test-sub', 'trade.alphatest.com', 'ACTIVE', 'ENTERPRISE', 'Alpha Owner', 'owner@alpha.com', CURRENT_TIMESTAMP, 'vertex-default'),
+        ($2, 'Beta Test Tenant', 'BETA', 'beta-test-sub', 'trade.betatest.com', 'ACTIVE', 'PRO', 'Beta Owner', 'owner@beta.com', CURRENT_TIMESTAMP, NULL)
+      ON CONFLICT (id) DO UPDATE SET trading_tenant_id = EXCLUDED.trading_tenant_id
     `, [tenantA, tenantB]);
 
     // -------------------------------------------------------------------------

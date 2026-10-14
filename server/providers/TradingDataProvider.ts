@@ -4564,6 +4564,9 @@ export class ExternalTradingDataProvider extends MockTradingDataProvider {
 }
 
 export function createActiveTradingDataProvider(): ITradingDataProvider {
+  if (process.env.NODE_ENV === 'production' && process.env.USE_MOCK_DATA === 'true') {
+    throw new Error('USE_MOCK_DATA=true is strictly prohibited in production mode. Real PostgreSQL TradingDataProvider is required.');
+  }
   if (process.env.USE_MOCK_DATA === 'true') {
     console.log('[DataProvider] Using MockTradingDataProvider (USE_MOCK_DATA=true)');
     return new MockTradingDataProvider();

@@ -28,6 +28,9 @@ async function runPhase5JbTests() {
   // 1. Ensure database is initialized with migrations and seeds
   await testConnection();
 
+  const originalBaseUrl = tradingPlatformClient.getBaseUrl();
+  tradingPlatformClient.setBaseUrl('http://localhost:3001');
+
   // 2. Start lightweight mock Trading Platform HTTP server on port 3001
   const receivedMockRequests: Array<{ method?: string; url?: string; headers: http.IncomingHttpHeaders; body: any }> = [];
   const mockTradingPlatform = http.createServer((req, res) => {
@@ -289,6 +292,9 @@ async function runPhase5JbTests() {
     console.error('\n❌ FATAL TEST ERROR:', err);
     process.exit(1);
   } finally {
+    if (originalBaseUrl) {
+      tradingPlatformClient.setBaseUrl(originalBaseUrl);
+    }
     mockTradingPlatform.close();
   }
 }

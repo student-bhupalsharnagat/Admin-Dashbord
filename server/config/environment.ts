@@ -2,6 +2,7 @@
  * Server Configuration & Environment Validation
  * Strictly validates required secrets and endpoints for production readiness.
  */
+import 'dotenv/config';
 
 export interface AppConfig {
   databaseUrl: string;
@@ -30,20 +31,19 @@ export function validateAndLoadConfig(): AppConfig {
   const allowedOrigins = rawOrigins.split(',').map(s => s.trim()).filter(Boolean);
   const port = parseInt(process.env.PORT || '3000', 10);
 
-  // Production security & readiness check (warn instead of crashing)
+  // Production security & readiness validation
   if (isProduction) {
-    if (!process.env.JWT_SECRET) {
-      console.warn('[NOTICE] JWT_SECRET not explicitly set in environment. Using default secure key.');
+    if (rawOrigins === '*' || allowedOrigins.includes('*')) {
+      throw new Error('ALLOWED_ORIGINS cannot be "*" in production mode. Explicit allowed origins are required.');
     }
-    if (!process.env.INTERNAL_COMMUNICATION_SECRET) {
-      console.warn('[NOTICE] INTERNAL_COMMUNICATION_SECRET not set. Using default S2S secret.');
+    if (!databaseUrl) {
+      throw new Error('DATABASE_URL environment variable is required in production.');
     }
-    if (!databaseUrl && !process.env.USE_EMBEDDED_DB) {
-      process.env.USE_EMBEDDED_DB = 'true';
-      console.log('[Database] No external DATABASE_URL provided. Automatically initializing high-performance embedded database.');
+    if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
+      throw new Error('JWT_SECRET environment variable is required in production (minimum 32 characters).');
     }
-    if (!process.env.TRADING_PLATFORM_BASE_URL) {
-      console.log('[Trading Platform] Connected to default live platform: https://trading-platform-3-1v13.onrender.com');
+    if (!process.env.INTERNAL_COMMUNICATION_SECRET || process.env.INTERNAL_COMMUNICATION_SECRET.length < 32) {
+      throw new Error('INTERNAL_COMMUNICATION_SECRET environment variable is required in production (minimum 32 characters).');
     }
   }
 
