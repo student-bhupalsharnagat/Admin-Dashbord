@@ -6,10 +6,20 @@ import type { PGlite } from '@electric-sql/pglite';
 const { Pool } = pg;
 
 function getAllMigrationFiles(): string[] {
+  let metaDir = '';
+  try {
+    if (typeof import.meta !== 'undefined' && import.meta.url) {
+      const urlPath = new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+      metaDir = path.join(path.dirname(urlPath), 'migrations');
+    }
+  } catch {}
+
   const dirs = [
     path.join(process.cwd(), 'server', 'db', 'migrations'),
+    metaDir,
     typeof __dirname !== 'undefined' ? path.join(__dirname, 'migrations') : '',
-    typeof __dirname !== 'undefined' ? path.join(__dirname, '..', 'server', 'db', 'migrations') : ''
+    typeof __dirname !== 'undefined' ? path.join(__dirname, '..', 'server', 'db', 'migrations') : '',
+    path.resolve('c:/Users/HP/OneDrive/Desktop/admi panel for antigravity/Admin-Dashbord/server/db/migrations')
   ].filter(Boolean);
 
   for (const d of dirs) {

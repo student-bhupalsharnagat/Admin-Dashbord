@@ -163,6 +163,10 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin, tenants = [] })
         throw new Error(data.message || data.error || 'Authentication failed');
       }
 
+      if (data.token) {
+        localStorage.setItem('auth_token', data.token);
+        sessionStorage.setItem('auth_token', data.token);
+      }
       if (data.user) {
         onLogin(data.user);
       } else {

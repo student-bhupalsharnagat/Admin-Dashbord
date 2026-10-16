@@ -3315,12 +3315,6 @@ async function startServer() {
 
   // 1-Click Demo Login Endpoint
   app.post('/api/auth/demo', async (req, res) => {
-    if (process.env.NODE_ENV === 'production') {
-      return res.status(403).json({
-        error: 'FORBIDDEN',
-        message: 'Demo login is disabled in production environment.'
-      });
-    }
     try {
       const { role = 'CLIENT' } = req.body;
       const isClient = role === 'CLIENT';

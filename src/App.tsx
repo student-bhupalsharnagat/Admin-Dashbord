@@ -371,7 +371,9 @@ export default function App() {
     if (!currentUser) return;
     let eventSource: EventSource | null = null;
     try {
-      eventSource = new EventSource('/api/admin/events/stream');
+      const token = typeof window !== 'undefined' ? (localStorage.getItem('auth_token') || sessionStorage.getItem('auth_token')) : '';
+      const sseUrl = token ? `/api/admin/events/stream?token=${encodeURIComponent(token)}` : '/api/admin/events/stream';
+      eventSource = new EventSource(sseUrl);
       eventSource.onmessage = (e) => {
         try {
           const event = JSON.parse(e.data);

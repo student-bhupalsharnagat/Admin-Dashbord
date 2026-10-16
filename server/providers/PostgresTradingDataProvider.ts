@@ -116,8 +116,52 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     const totalSubBrokersNum = parseInt(subBrokersRes.rows[0]?.count || '0', 10);
     const totalClientsNum = parseInt(clientsRes.rows[0]?.count || '0', 10);
     const activeClientsNum = parseInt(activeClientsRes.rows[0]?.count || '0', 10);
-    const todayVolumeNum = parseFloat(todayVolumeRes.rows[0]?.volume || '0');
-    const totalVolumeNum = parseFloat(totalVolumeRes.rows[0]?.volume || '0');
+    // Incorporate live telemetry from Trading Platform matching engine
+    let liveTradesCount = 0;
+    let liveOrdersCount = 0;
+    let liveTradesVolume = 0;
+    let liveOpenPositionsCount = 0;
+
+    try {
+      const [liveTradesRes, liveOrdersRes, livePositionsRes] = await Promise.all([
+        tradingPlatformClient.getLiveTrades(tenantId).catch(() => ({ success: false, data: [] })),
+        tradingPlatformClient.getLiveOrders(tenantId).catch(() => ({ success: false, data: [] })),
+        tradingPlatformClient.getLivePositions(tenantId).catch(() => ({ success: false, data: [] }))
+      ]);
+
+      let tradesList = Array.isArray(liveTradesRes.data) ? liveTradesRes.data : (Array.isArray(liveTradesRes.data?.trades) ? liveTradesRes.data.trades : []);
+      if (tenantId) {
+        tradesList = tradesList.filter((t: any) => (t.tenant_id || t.tenantId) === tenantId || (tenantId === 'TNT-001' && (t.tenant_id === 'vertex-default' || t.tenantId === 'vertex-default')));
+      }
+      if (tradesList.length > 0) {
+        liveTradesCount = tradesList.length;
+        for (const t of tradesList) {
+          const val = parseFloat(t.execution_value || t.total_value || (parseFloat(t.execution_price || t.price || 0) * parseFloat(t.quantity || 0)) || 0);
+          if (!isNaN(val)) liveTradesVolume += val;
+        }
+      }
+
+      let ordersList = Array.isArray(liveOrdersRes.data) ? liveOrdersRes.data : (Array.isArray(liveOrdersRes.data?.orders) ? liveOrdersRes.data.orders : []);
+      if (tenantId) {
+        ordersList = ordersList.filter((o: any) => (o.tenant_id || o.tenantId) === tenantId || (tenantId === 'TNT-001' && (o.tenant_id === 'vertex-default' || o.tenantId === 'vertex-default')));
+      }
+      if (ordersList.length > 0) {
+        liveOrdersCount = ordersList.filter((o: any) => o.status === 'PENDING' || o.status === 'OPEN').length;
+      }
+
+      let positionsList = Array.isArray(livePositionsRes.data) ? livePositionsRes.data : (Array.isArray(livePositionsRes.data?.positions) ? livePositionsRes.data.positions : []);
+      if (tenantId) {
+        positionsList = positionsList.filter((p: any) => (p.tenant_id || p.tenantId) === tenantId || (tenantId === 'TNT-001' && (p.tenant_id === 'vertex-default' || p.tenantId === 'vertex-default')));
+      }
+      if (positionsList.length > 0) {
+        liveOpenPositionsCount = positionsList.filter((p: any) => p.status === 'OPEN').length;
+      }
+    } catch {
+      // non-fatal live telemetry probe
+    }
+
+    const todayVolumeNum = Math.max(parseFloat(todayVolumeRes.rows[0]?.volume || '0'), liveTradesVolume);
+    const totalVolumeNum = Math.max(parseFloat(totalVolumeRes.rows[0]?.volume || '0'), liveTradesVolume);
     const totalCommissionNum = parseFloat(commissionRes.rows[0]?.total || '0');
     const realizedPlNum = parseFloat(realizedPlRes.rows[0]?.total || '0');
     const unrealizedPlNum = parseFloat(unrealizedPlRes.rows[0]?.total || '0');
@@ -2095,6 +2139,43 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       // Degraded / graceful fallback to local DB records
     }
 
+    try {
+      const liveRes = await tradingPlatformClient.getLivePositions(tenantId);
+      let positionsList = Array.isArray(liveRes.data) ? liveRes.data : (Array.isArray(liveRes.data?.positions) ? liveRes.data.positions : null);
+      if (tenantId && positionsList) {
+        positionsList = positionsList.filter((p: any) => (p.tenant_id || p.tenantId) === tenantId || (tenantId === 'TNT-001' && (p.tenant_id === 'vertex-default' || p.tenantId === 'vertex-default')));
+      }
+      if (liveRes.success && positionsList && positionsList.length > 0) {
+        const seenIds = new Set(dbPositions.map(p => p.id));
+        for (const r of positionsList) {
+          const posId = r.id || r.positionId || `POS-${r.symbol}-${r.side}`;
+          if (!seenIds.has(posId)) {
+            const pnlNum = parseFloat(r.pnl || r.unrealizedPnl || '0');
+            const buyPriceNum = parseFloat(r.buyPrice || r.avgPrice || r.entryPrice || '0');
+            const curPriceNum = parseFloat(r.currentPrice || r.markPrice || buyPriceNum.toString());
+            const qtyNum = parseFloat(r.quantity || r.qty || '1');
+            const marginVal = parseFloat(r.margin || r.marginUsed || '0');
+            dbPositions.push({
+              id: posId,
+              client: r.clientName || r.client_name || r.userId || 'Live Trader',
+              symbol: r.symbol,
+              qty: qtyNum.toLocaleString('en-IN'),
+              avgPrice: buyPriceNum.toLocaleString('en-IN'),
+              currentPrice: curPriceNum.toLocaleString('en-IN'),
+              unrealizedPL: `${pnlNum >= 0 ? '+' : ''}₹${pnlNum.toLocaleString('en-IN')}`,
+              realizedPL: '+₹0',
+              margin: `₹${marginVal.toLocaleString('en-IN')}`,
+              unrealizedPLPositive: pnlNum >= 0,
+              realizedPLPositive: true,
+              status: r.status || 'OPEN'
+            });
+            seenIds.add(posId);
+          }
+        }
+      }
+    } catch (liveErr: any) {
+      // non-fatal
+    }
     return dbPositions;
   }
 

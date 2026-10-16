@@ -14,7 +14,7 @@ declare global {
 }
 
 export async function authenticate(req: Request, res: Response, next: NextFunction) {
-  const token = req.cookies?.tradepro_session || req.headers.authorization?.replace(/^Bearer\s+/i, '');
+  const token = (req.query?.token as string) || req.cookies?.tradepro_session || req.headers.authorization?.replace(/^Bearer\s+/i, '');
 
   if (!token) {
     return res.status(401).json({
