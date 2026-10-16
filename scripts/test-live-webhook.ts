@@ -4,7 +4,7 @@ async function main() {
   const secret = 'Tr@dingS2S#2026!Kp8$Xm4&Qr7r7484';
   
   // Calibrate with server time
-  const healthRes = await fetch('https://admin-dashbord-2.onrender.com/api/health');
+  const healthRes = await fetch('https://admin-dashbord-wxcq.onrender.com/api/health');
   const serverDateStr = healthRes.headers.get('date');
   const serverTime = serverDateStr ? new Date(serverDateStr).getTime() : Date.now();
   const timestamp = serverTime.toString();
@@ -43,7 +43,7 @@ async function main() {
   };
 
   console.log('Sending webhook to live Admin Panel...');
-  const res = await fetch('https://admin-dashbord-2.onrender.com' + path, {
+  const res = await fetch('https://admin-dashbord-wxcq.onrender.com' + path, {
     method,
     headers,
     body: bodyString

@@ -126,7 +126,7 @@ export const ClientDetailView: React.FC<ClientDetailViewProps> = ({
   const [tradingAccountData, setTradingAccountData] = useState<any>({
     accountNumber: `TRD-${client.id || 'CLT001'}`,
     dematNumber: `IN300128-${client.id || 'CLT001'}`,
-    tradingPlatformUrl: 'https://trading-platform-3-1v13.onrender.com',
+    tradingPlatformUrl: 'https://trading-platform-2t6r.onrender.com',
     status: (client.status || 'ACTIVE').toUpperCase(),
     s2sStatus: 'CONNECTED',
     availableMargin: typeof client.balance === 'number' ? `₹${client.balance.toLocaleString('en-IN')}` : (client.balance || '₹0'),
@@ -299,7 +299,7 @@ export const ClientDetailView: React.FC<ClientDetailViewProps> = ({
   ];
 
   const avatarInitial = (clientData.name || 'A').charAt(0).toUpperCase();
-  const LIVE_TRADING_PLATFORM_URL = 'https://trading-platform-3-1v13.onrender.com';
+  const LIVE_TRADING_PLATFORM_URL = 'https://trading-platform-2t6r.onrender.com';
   const tradingPlatformDirectUrl = `${LIVE_TRADING_PLATFORM_URL}?client_id=${encodeURIComponent(clientData.id)}&client_code=${encodeURIComponent(clientData.id)}&name=${encodeURIComponent(clientData.name)}&balance=${encodeURIComponent(clientData.balance)}&email=${encodeURIComponent(clientData.email)}`;
 
   return (
@@ -390,7 +390,7 @@ export const ClientDetailView: React.FC<ClientDetailViewProps> = ({
                 onNotify?.(`Opening live Trading Platform for ${clientData.name}...`, 'info');
               }}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-lg text-xs font-semibold shadow-sm transition-all cursor-pointer"
-              title="Open Live Trading Platform (https://trading-platform-3-1v13.onrender.com)"
+              title="Open Live Trading Platform (https://trading-platform-2t6r.onrender.com)"
             >
               <ExternalLink size={13} />
               <span>Open Trading Platform</span>
@@ -659,7 +659,7 @@ export const ClientDetailView: React.FC<ClientDetailViewProps> = ({
                   onNotify?.(`Opening live Trading Platform for ${clientData.name}...`, 'info');
                 }}
                 className="flex items-center gap-1.5 px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold shadow-md transition-all cursor-pointer"
-                title="Open Live Trading Platform (https://trading-platform-3-1v13.onrender.com)"
+                title="Open Live Trading Platform (https://trading-platform-2t6r.onrender.com)"
               >
                 <ExternalLink size={13} />
                 <span>Open Full Platform</span>
@@ -923,7 +923,7 @@ export const ClientDetailView: React.FC<ClientDetailViewProps> = ({
                 <div className="flex items-center gap-1.5 truncate">
                   <span className="text-[11px] font-mono text-slate-500">Trading Gateway:</span>
                   <span className="font-mono text-blue-300 text-[11px] truncate">
-                    https://trading-platform-3-1v13.onrender.com
+                    https://trading-platform-2t6r.onrender.com
                   </span>
                 </div>
                 <a
@@ -931,7 +931,7 @@ export const ClientDetailView: React.FC<ClientDetailViewProps> = ({
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-blue-400 hover:text-blue-300 flex items-center gap-1 font-semibold text-xs whitespace-nowrap cursor-pointer hover:underline"
-                  title="Open Live Trading Platform (https://trading-platform-3-1v13.onrender.com)"
+                  title="Open Live Trading Platform (https://trading-platform-2t6r.onrender.com)"
                 >
                   <span>Launch Gateway</span>
                   <ArrowUpRight size={13} />

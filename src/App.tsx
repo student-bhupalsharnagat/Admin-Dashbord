@@ -760,7 +760,7 @@ export default function App() {
 
   // Helper to open Trading Platform with optional client context
   const handleOpenTradingPlatform = useCallback((clientData?: any) => {
-    const MAIN_TRADING_PLATFORM_URL = 'https://trading-platform-3-1v13.onrender.com';
+    const MAIN_TRADING_PLATFORM_URL = 'https://trading-platform-2t6r.onrender.com';
     if (clientData) {
       const clientId = clientData.client_code || clientData.userId || clientData.id || '';
       const clientName = clientData.name || clientData.fullName || '';
@@ -1101,7 +1101,7 @@ export default function App() {
                     const targetUrl =
                       domain && domain !== 'trade.alphaprime.com' && !domain.includes('example.com')
                         ? (domain.startsWith('http') ? domain : `https://${domain}`)
-                        : 'https://trading-platform-3-1v13.onrender.com';
+                        : 'https://trading-platform-2t6r.onrender.com';
                     window.open(targetUrl, '_blank', 'noopener,noreferrer');
                   }}
                 />

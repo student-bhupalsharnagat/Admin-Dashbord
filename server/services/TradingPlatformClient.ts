@@ -1277,12 +1277,24 @@ export class TradingPlatformClient {
    * 13. Health & Status
    */
   public async checkHealth(): Promise<S2SResponse> {
-    return this.request({
+    const s2sRes = await this.request({
       method: 'GET',
       path: '/api/internal/v1/health',
-      timeoutMs: 2000,
+      tenantId: 'vertex-default',
+      timeoutMs: 3000,
       retries: 0
     });
+    if (s2sRes.success) return s2sRes;
+
+    try {
+      const res = await fetch(`${this.baseUrl}/health`);
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        return { success: true, statusCode: res.status, data };
+      }
+    } catch {}
+
+    return s2sRes;
   }
 
   public getMetrics(): ClientMetrics {

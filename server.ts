@@ -1505,7 +1505,7 @@ async function startServer() {
   });
 
   app.get('/api/admin/integration/trading-platform-url', authenticate, (_req, res) => {
-    const mainPlatformUrl = process.env.TRADING_PLATFORM_WEB_URL || 'https://trading-platform-3-1v13.onrender.com';
+    const mainPlatformUrl = process.env.TRADING_PLATFORM_WEB_URL || 'https://trading-platform-2t6r.onrender.com';
     res.json({
       webUrl: mainPlatformUrl,
       s2sUrl: process.env.TRADING_PLATFORM_URL || 'http://localhost:3001',

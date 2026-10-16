@@ -3,7 +3,7 @@ import { appConfig } from '../server/config/environment.ts';
 
 async function main() {
   console.log('1. Querying health for exact server date...');
-  const healthRes = await fetch('https://trading-platform-3-1v13.onrender.com/health');
+  const healthRes = await fetch('https://trading-platform-2t6r.onrender.com/health');
   const serverDateStr = healthRes.headers.get('date');
   const serverTime = serverDateStr ? new Date(serverDateStr).getTime() : Date.now();
   console.log('Remote Server Time:', new Date(serverTime).toISOString());
@@ -39,7 +39,7 @@ async function main() {
       'X-Tenant-ID': tenantId
     };
 
-    const res = await fetch(`https://trading-platform-3-1v13.onrender.com${path}`, {
+    const res = await fetch(`https://trading-platform-2t6r.onrender.com${path}`, {
       method,
       headers
     });

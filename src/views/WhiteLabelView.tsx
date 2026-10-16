@@ -421,7 +421,7 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
       const targetUrl =
         primaryDomain && primaryDomain !== 'trade.alphaprime.com' && !primaryDomain.includes('example.com')
           ? (primaryDomain.startsWith('http') ? primaryDomain : `https://${primaryDomain}`)
-          : 'https://trading-platform-3-1v13.onrender.com';
+          : 'https://trading-platform-2t6r.onrender.com';
       window.open(targetUrl, '_blank', 'noopener,noreferrer');
     }
   };
