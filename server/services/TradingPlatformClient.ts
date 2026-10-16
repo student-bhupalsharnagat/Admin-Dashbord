@@ -415,7 +415,7 @@ export class TradingPlatformClient {
       'X-HMAC-Signature': signature,
       'X-Timestamp': timestamp,
       'X-Request-ID': correlationId,
-      ...(options.tenantId ? { 'X-Tenant-ID': options.tenantId } : {}),
+      'X-Tenant-ID': options.tenantId || (await this.resolveOutboundTenantId(options.tenantId)),
       ...(options.idempotencyKey ? { 'X-Idempotency-Key': options.idempotencyKey } : {}),
       ...(options.headers || {})
     };
@@ -602,30 +602,24 @@ export class TradingPlatformClient {
    * Maps Admin tenantId -> Trading Platform's trading_tenant_id.
    * Fallback to env TRADING_TENANT_ID or the admin tenantId.
    */
-  public async resolveOutboundTenantId(adminTenantId?: string): Promise<string | undefined> {
-    if (!adminTenantId) return undefined;
+  public async resolveOutboundTenantId(adminTenantId?: string): Promise<string> {
+    const defaultTradingTenant = process.env.DEFAULT_TENANT_ID || process.env.TRADING_TENANT_ID || 'vertex-default';
+    if (!adminTenantId || adminTenantId === 'ALL_TENANTS' || adminTenantId === 'default' || adminTenantId === 'TNT-001') {
+      return defaultTradingTenant;
+    }
     try {
       const { query } = await import('../db/connection.ts');
       const { rows } = await query<{ trading_tenant_id: string | null }>(
-        'SELECT trading_tenant_id FROM tenants WHERE id = $1 LIMIT 1',
+        'SELECT trading_tenant_id FROM tenants WHERE id = $1::text LIMIT 1',
         [adminTenantId]
       );
-      if (rows.length > 0) {
-        if (rows[0].trading_tenant_id) {
-          return rows[0].trading_tenant_id;
-        }
-        if (adminTenantId === 'TNT-001' || adminTenantId === 'default') {
-          return process.env.TRADING_TENANT_ID || 'vertex-default';
-        }
-        return adminTenantId;
+      if (rows.length > 0 && rows[0].trading_tenant_id) {
+        return rows[0].trading_tenant_id;
       }
     } catch {
       // In case DB is not yet available or testing standalone
     }
-    if (adminTenantId === 'TNT-001' || adminTenantId === 'default') {
-      return process.env.TRADING_TENANT_ID || 'vertex-default';
-    }
-    return adminTenantId;
+    return defaultTradingTenant;
   }
 
   /**
