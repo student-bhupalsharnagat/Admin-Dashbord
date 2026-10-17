@@ -22,12 +22,12 @@ export function validateAndLoadConfig(): AppConfig {
   const isTest = process.env.NODE_ENV === 'test';
 
   const jwtSecret = process.env.JWT_SECRET || 'Jt9#vQ7!mX2akL8SzP4&nR6*fhgjg8eerrnm';
-  const internalSecret = process.env.INTERNAL_COMMUNICATION_SECRET || 'Tr@dingS2S#2026!Kp8$Xm4&Qr7r7484';
-  const tradingPlatformBaseUrl = process.env.TRADING_PLATFORM_BASE_URL || 'https://trading-platform-2t6r.onrender.com';
+  const internalSecret = process.env.INTERNAL_COMMUNICATION_SECRET || process.env.INTERNAL_API_SECRET || process.env.CENTRAL_ADMIN_INTERNAL_SECRET || 'Tr@dingS2S#2026!Kp8$Xm4&Qr7r7484';
+  const tradingPlatformBaseUrl = process.env.TRADING_PLATFORM_BASE_URL || process.env.TRADING_PLATFORM_URL || 'https://trading-platform-2t6r.onrender.com';
   const tradingPlatformTimeoutMs = parseInt(process.env.TRADING_PLATFORM_TIMEOUT_MS || '5000', 10);
   const databaseUrl = process.env.DATABASE_URL || '';
   const redisUrl = process.env.REDIS_URL;
-  const rawOrigins = process.env.ALLOWED_ORIGINS || (isProduction ? '' : '*');
+  const rawOrigins = process.env.ALLOWED_ORIGINS || (isProduction ? 'https://trading-platform-2t6r.onrender.com,https://user-panel-dashbord-ofrt.onrender.com,https://admin-dashbord-wxcq.onrender.com' : '*');
   const allowedOrigins = rawOrigins.split(',').map(s => s.trim()).filter(Boolean);
   const port = parseInt(process.env.PORT || '3000', 10);
 
@@ -42,7 +42,7 @@ export function validateAndLoadConfig(): AppConfig {
     if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
       throw new Error('JWT_SECRET environment variable is required in production (minimum 32 characters).');
     }
-    if (!process.env.INTERNAL_COMMUNICATION_SECRET || process.env.INTERNAL_COMMUNICATION_SECRET.length < 32) {
+    if ((!process.env.INTERNAL_COMMUNICATION_SECRET && !process.env.INTERNAL_API_SECRET) || internalSecret.length < 32) {
       throw new Error('INTERNAL_COMMUNICATION_SECRET environment variable is required in production (minimum 32 characters).');
     }
   }

@@ -75,11 +75,15 @@ async function startServer() {
   app.use((req, res, next) => {
     const origin = req.headers.origin;
     if (origin) {
-      if (!appConfig.isProduction || appConfig.allowedOrigins.includes(origin) || appConfig.allowedOrigins.includes('*')) {
+      const originLower = origin.toLowerCase();
+      const isRenderDomain = originLower.endsWith('.onrender.com');
+      const isAllowedOrigin = !appConfig.isProduction || appConfig.allowedOrigins.includes(origin) || appConfig.allowedOrigins.includes(originLower) || appConfig.allowedOrigins.includes('*') || isRenderDomain;
+      if (isAllowedOrigin) {
         res.setHeader('Access-Control-Allow-Origin', origin);
         res.setHeader('Access-Control-Allow-Credentials', 'true');
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, X-Tenant-Id, X-Signature-SHA256, X-HMAC-Signature, X-Timestamp, X-Idempotency-Key');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, X-Tenant-Id, X-Signature-SHA256, X-HMAC-Signature, X-Timestamp, X-Idempotency-Key, X-Internal-Timestamp, X-Internal-Nonce, X-Internal-Signature, X-Correlation-ID');
+        res.setHeader('Access-Control-Expose-Headers', 'X-Tenant-Id, X-Correlation-ID');
       }
     }
     if (req.method === 'OPTIONS') {
