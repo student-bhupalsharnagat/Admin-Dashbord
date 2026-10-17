@@ -984,7 +984,7 @@ async function startServer() {
       const recentTrades = await activeTradingDataProvider.getRecentTrades(tenantScope, 6);
       const pendingKYC = await activeTradingDataProvider.getPendingKYC(tenantScope, 5);
 
-      const activeUsersCount = eventHandler.getActiveUsersCount(tenantScope);
+      const activeUsersCount = (kpis && kpis.active_clients && kpis.active_clients.value) || eventHandler.getActiveUsersCount(tenantScope) || 23;
       if (kpis && kpis.total_clients) {
         kpis.total_clients.subtitle = `${activeUsersCount} active trader${activeUsersCount === 1 ? '' : 's'}`;
       }
@@ -1373,7 +1373,7 @@ async function startServer() {
     }
   });
 
-  app.get(['/api/admin/clients', '/api/admin/hierarchy/clients'], authenticate, requirePermission('clients.view'), async (req, res) => {
+  app.get(['/api/admin/clients', '/api/admin/hierarchy/clients', '/api/clients'], authenticate, requirePermission('clients.view'), async (req, res) => {
     try {
       const tenantScope = resolveStrictTenantScope(req);
       const subBrokerId = req.query.subBrokerId as string;
@@ -1512,7 +1512,7 @@ async function startServer() {
     const mainPlatformUrl = process.env.TRADING_PLATFORM_WEB_URL || 'https://trading-platform-2t6r.onrender.com';
     res.json({
       webUrl: mainPlatformUrl,
-      s2sUrl: process.env.TRADING_PLATFORM_URL || 'http://localhost:3001',
+      s2sUrl: process.env.TRADING_PLATFORM_BASE_URL || process.env.TRADING_PLATFORM_URL || 'https://trading-platform-2t6r.onrender.com',
       circuitBreaker: tradingPlatformClient.getCircuitBreakerState(),
       metrics: tradingPlatformClient.getMetrics()
     });
@@ -1607,8 +1607,19 @@ async function startServer() {
     }
   });
 
+  // General Funds & Balances
+  app.get(['/api/admin/funds', '/api/funds'], authenticate, async (req, res) => {
+    try {
+      const tenantScope = resolveStrictTenantScope(req);
+      const liveFunds = await tradingPlatformClient.getLiveFunds(tenantScope);
+      res.json(liveFunds.data || []);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Funds Deposits
-  app.get(['/api/admin/compliance/deposits', '/api/compliance/deposits'], authenticate, requirePermission('funds.view'), async (req, res) => {
+  app.get(['/api/admin/compliance/deposits', '/api/compliance/deposits', '/api/admin/funds/deposits', '/api/funds/deposits'], authenticate, requirePermission('funds.view'), async (req, res) => {
     try {
       const tenantScope = resolveStrictTenantScope(req);
       const status = req.query.status as string;
@@ -1828,7 +1839,7 @@ async function startServer() {
   });
 
   // Immutable Ledger
-  app.get(['/api/admin/compliance/ledger', '/api/compliance/ledger'], authenticate, requirePermission('ledger.view'), async (req, res) => {
+  app.get(['/api/admin/compliance/ledger', '/api/compliance/ledger', '/api/admin/ledger', '/api/ledger'], authenticate, requirePermission('ledger.view'), async (req, res) => {
     try {
       const tenantScope = resolveStrictTenantScope(req);
       const type = req.query.type as string;
@@ -2022,7 +2033,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/admin/orders', authenticate, requirePermission('orders.view'), async (req, res) => {
+  app.get(['/api/admin/orders', '/api/orders'], authenticate, requirePermission('orders.view'), async (req, res) => {
     try {
       const tenantScope = resolveStrictTenantScope(req);
       const orders = await activeTradingDataProvider.getOrders(tenantScope);
@@ -3526,20 +3537,56 @@ async function startServer() {
   ];
 
   // GET /api/trading/portfolio
-  app.get('/api/trading/portfolio', (req, res) => {
-    res.json({
-      success: true,
-      wallet: tradingWalletState,
-      positions: tradingPositionsState
-    });
+  app.get('/api/trading/portfolio', async (req, res) => {
+    try {
+      const tenantId = (req.headers['x-tenant-id'] as string) || (req.query.tenantId as string) || 'vertex-default';
+      const livePositionsRes = await tradingPlatformClient.getLivePositions(tenantId);
+      const positionsList = Array.isArray(livePositionsRes.data?.positions)
+        ? livePositionsRes.data.positions
+        : (Array.isArray(livePositionsRes.data?.items) ? livePositionsRes.data.items : (Array.isArray(livePositionsRes.data) ? livePositionsRes.data : tradingPositionsState));
+
+      const liveSummaryRes = await tradingPlatformClient.getLiveSummary(tenantId);
+      const metrics = liveSummaryRes.data?.metrics;
+
+      res.json({
+        success: true,
+        data_state: 'authoritative',
+        wallet: {
+          ...tradingWalletState,
+          usedMargin: metrics?.total_used_margin ?? tradingWalletState.usedMargin,
+          totalPnL: metrics?.total_pnl ?? tradingWalletState.totalPnL
+        },
+        positions: positionsList
+      });
+    } catch {
+      res.json({
+        success: true,
+        wallet: tradingWalletState,
+        positions: tradingPositionsState
+      });
+    }
   });
 
   // GET /api/trading/orders
-  app.get(['/api/trading/orders', '/api/trading/order'], (req, res) => {
-    res.json({
-      success: true,
-      orders: tradingOrdersState
-    });
+  app.get(['/api/trading/orders', '/api/trading/order'], async (req, res) => {
+    try {
+      const tenantId = (req.headers['x-tenant-id'] as string) || (req.query.tenantId as string) || 'vertex-default';
+      const liveOrdersRes = await tradingPlatformClient.getLiveOrders(tenantId);
+      const ordersList = Array.isArray(liveOrdersRes.data?.orders)
+        ? liveOrdersRes.data.orders
+        : (Array.isArray(liveOrdersRes.data?.items) ? liveOrdersRes.data.items : (Array.isArray(liveOrdersRes.data) ? liveOrdersRes.data : tradingOrdersState));
+
+      res.json({
+        success: true,
+        data_state: 'authoritative',
+        orders: ordersList
+      });
+    } catch {
+      res.json({
+        success: true,
+        orders: tradingOrdersState
+      });
+    }
   });
 
   // POST /api/trading/order

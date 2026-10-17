@@ -15,6 +15,8 @@ async function main() {
   const correlationId = `corr-${Date.now()}`;
   const tenantId = 'vertex-default'; // let's check tenants: vertex-default, default, TNT-001, etc.
   const candidateSecrets = [
+    'nextrade-internal-hmac-secret-2026',
+    'Tr@dingS2S#2026!Kp8$Xm4&Qr7r7484',
     'tradematrix-s2s-hmac-secret-32chars-min-2026',
     'dev-internal-s2s-secret-32chars-tradematrix',
     'vtx_dev_internal_shared_secret_do_not_use_in_prod',

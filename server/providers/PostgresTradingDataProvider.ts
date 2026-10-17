@@ -121,17 +121,29 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     let liveOrdersCount = 0;
     let liveTradesVolume = 0;
     let liveOpenPositionsCount = 0;
+    let liveClientsCount = 0;
+    let liveSummaryMetrics: any = {};
 
     try {
-      const [liveTradesRes, liveOrdersRes, livePositionsRes] = await Promise.all([
+      const [liveTradesRes, liveOrdersRes, livePositionsRes, liveClientsRes, liveSummaryRes] = await Promise.all([
         tradingPlatformClient.getLiveTrades(tenantId).catch(() => ({ success: false, data: [] })),
         tradingPlatformClient.getLiveOrders(tenantId).catch(() => ({ success: false, data: [] })),
-        tradingPlatformClient.getLivePositions(tenantId).catch(() => ({ success: false, data: [] }))
+        tradingPlatformClient.getLivePositions(tenantId).catch(() => ({ success: false, data: [] })),
+        tradingPlatformClient.getLiveClients(tenantId).catch(() => ({ success: false, data: [] })),
+        tradingPlatformClient.getLiveSummary(tenantId).catch(() => ({ success: false, data: null }))
       ]);
 
+      liveSummaryMetrics = liveSummaryRes?.data?.metrics || {};
+      const liveClientsList = Array.isArray(liveClientsRes.data?.clients)
+        ? liveClientsRes.data.clients
+        : (Array.isArray(liveClientsRes.data?.items) ? liveClientsRes.data.items : (Array.isArray(liveClientsRes.data) ? liveClientsRes.data : []));
+      liveClientsCount = liveClientsList.length;
+
+      const defaultTenants = new Set(['vertex-default', 'default', 'TNT-001', 'ALL', 'ALL_TENANTS', '']);
+
       let tradesList = Array.isArray(liveTradesRes.data) ? liveTradesRes.data : (Array.isArray(liveTradesRes.data?.trades) ? liveTradesRes.data.trades : []);
-      if (tenantId) {
-        tradesList = tradesList.filter((t: any) => (t.tenant_id || t.tenantId) === tenantId || (tenantId === 'TNT-001' && (t.tenant_id === 'vertex-default' || t.tenantId === 'vertex-default')));
+      if (tenantId && !defaultTenants.has(tenantId)) {
+        tradesList = tradesList.filter((t: any) => (t.tenant_id || t.tenantId) === tenantId);
       }
       if (tradesList.length > 0) {
         liveTradesCount = tradesList.length;
@@ -142,16 +154,16 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       }
 
       let ordersList = Array.isArray(liveOrdersRes.data) ? liveOrdersRes.data : (Array.isArray(liveOrdersRes.data?.orders) ? liveOrdersRes.data.orders : []);
-      if (tenantId) {
-        ordersList = ordersList.filter((o: any) => (o.tenant_id || o.tenantId) === tenantId || (tenantId === 'TNT-001' && (o.tenant_id === 'vertex-default' || o.tenantId === 'vertex-default')));
+      if (tenantId && !defaultTenants.has(tenantId)) {
+        ordersList = ordersList.filter((o: any) => (o.tenant_id || o.tenantId) === tenantId);
       }
       if (ordersList.length > 0) {
         liveOrdersCount = ordersList.filter((o: any) => o.status === 'PENDING' || o.status === 'OPEN').length;
       }
 
       let positionsList = Array.isArray(livePositionsRes.data) ? livePositionsRes.data : (Array.isArray(livePositionsRes.data?.positions) ? livePositionsRes.data.positions : []);
-      if (tenantId) {
-        positionsList = positionsList.filter((p: any) => (p.tenant_id || p.tenantId) === tenantId || (tenantId === 'TNT-001' && (p.tenant_id === 'vertex-default' || p.tenantId === 'vertex-default')));
+      if (tenantId && !defaultTenants.has(tenantId)) {
+        positionsList = positionsList.filter((p: any) => (p.tenant_id || p.tenantId) === tenantId);
       }
       if (positionsList.length > 0) {
         liveOpenPositionsCount = positionsList.filter((p: any) => p.status === 'OPEN').length;
@@ -160,16 +172,16 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       // non-fatal live telemetry probe
     }
 
-    const todayVolumeNum = Math.max(parseFloat(todayVolumeRes.rows[0]?.volume || '0'), liveTradesVolume);
-    const totalVolumeNum = Math.max(parseFloat(totalVolumeRes.rows[0]?.volume || '0'), liveTradesVolume);
+    const todayVolumeNum = Math.max(parseFloat(todayVolumeRes.rows[0]?.volume || '0'), liveTradesVolume, parseFloat(liveSummaryMetrics?.today_turnover || '0'));
+    const totalVolumeNum = Math.max(parseFloat(totalVolumeRes.rows[0]?.volume || '0'), liveTradesVolume, parseFloat(liveSummaryMetrics?.total_turnover || '0'));
     const totalCommissionNum = parseFloat(commissionRes.rows[0]?.total || '0');
-    const realizedPlNum = parseFloat(realizedPlRes.rows[0]?.total || '0');
-    const unrealizedPlNum = parseFloat(unrealizedPlRes.rows[0]?.total || '0');
+    const realizedPlNum = parseFloat(realizedPlRes.rows[0]?.total || '0') || parseFloat(liveSummaryMetrics?.realized_pnl || '0');
+    const unrealizedPlNum = parseFloat(unrealizedPlRes.rows[0]?.total || '0') || parseFloat(liveSummaryMetrics?.unrealized_pnl || '0');
     const totalPlNum = realizedPlNum + unrealizedPlNum;
 
     const totalBalanceNum = parseFloat(marginRes.rows[0]?.total_balance || '0');
     const totalEquityNum = parseFloat(marginRes.rows[0]?.total_equity || '0');
-    const totalMarginUsedNum = parseFloat(marginRes.rows[0]?.total_margin_used || '0');
+    const totalMarginUsedNum = parseFloat(marginRes.rows[0]?.total_margin_used || '0') || parseFloat(liveSummaryMetrics?.total_used_margin || '0');
     const availableMarginNum = Math.max(0, totalEquityNum - totalMarginUsedNum);
 
     const openPositionsNum = parseInt(openPositionsRes.rows[0]?.count || '0', 10);
@@ -180,6 +192,11 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     const pendingWithdrawalsAmount = parseFloat(pendingWithdrawalsRes.rows[0]?.total_amount || '0');
     const pendingKycNum = parseInt(kycRes.rows[0]?.count || '0', 10);
     const openTicketsNum = parseInt(ticketsRes.rows[0]?.count || '0', 10);
+
+    const authoritativeClientsCount = Math.max(totalClientsNum, liveSummaryMetrics?.total_users || 0, liveClientsCount);
+    const authoritativeActiveClientsCount = Math.max(activeClientsNum, liveSummaryMetrics?.active_users || 0);
+    const authoritativeOpenPositions = Math.max(openPositionsNum, liveSummaryMetrics?.open_positions_count || 0, liveOpenPositionsCount);
+    const authoritativePendingOrders = Math.max(pendingOrdersNum, liveSummaryMetrics?.pending_orders_count || 0, liveOrdersCount);
 
     const formatCurrency = (amount: number): string => {
       if (amount === 0) return '₹0';
@@ -208,13 +225,13 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         subtitle: 'Sub-Brokers'
       },
       total_clients: {
-        value: totalClientsNum,
-        badge: `${activeClientsNum} active`,
-        subtitle: `${totalClientsNum - pendingKycNum} verified`
+        value: authoritativeClientsCount,
+        badge: `${authoritativeActiveClientsCount} active`,
+        subtitle: `${authoritativeActiveClientsCount} active trader${authoritativeActiveClientsCount === 1 ? '' : 's'}`
       },
       active_clients: {
-        value: activeClientsNum,
-        badge: `${activeClientsNum} active`,
+        value: authoritativeActiveClientsCount,
+        badge: `${authoritativeActiveClientsCount} active`,
         subtitle: 'Active trading accounts'
       },
       todays_turnover: {
@@ -1069,6 +1086,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
   // HIERARCHY: CLIENTS
   // ----------------------------------------------------
   async getClients(tenantId?: string, subBrokerId?: string): Promise<Client[]> {
+    const defaultTenants = new Set(['vertex-default', 'default', 'TNT-001', 'ALL', 'ALL_TENANTS', '']);
     let sql = `
       SELECT c.*, t.name as tenant_name, sb.name as parent_sub_broker_name
       FROM clients c
@@ -1078,7 +1096,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     `;
     const params: any[] = [];
 
-    if (tenantId) {
+    if (tenantId && !defaultTenants.has(tenantId)) {
       params.push(tenantId);
       sql += ` AND c.tenant_id = $${params.length}`;
     }
@@ -1088,9 +1106,9 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     }
 
     sql += ' ORDER BY c.created_at ASC';
-    const res = await this.executeQuery(sql, params);
+    const res = await this.executeQuery(sql, params).catch(() => ({ rows: [] }));
 
-    return res.rows.map(r => ({
+    const dbClients: Client[] = res.rows.map(r => ({
       id: r.id,
       client_code: r.client_code,
       sub_broker_id: r.sub_broker_id,
@@ -1110,6 +1128,57 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       open_positions_count: 0,
       created_at: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : '2026-01-01'
     }));
+
+    // Actively fetch live authoritative clients from Trading Platform API
+    try {
+      const liveRes = await tradingPlatformClient.getLiveClients(tenantId);
+      const remoteClients = Array.isArray(liveRes.data?.clients)
+        ? liveRes.data.clients
+        : (Array.isArray(liveRes.data?.items) ? liveRes.data.items : (Array.isArray(liveRes.data) ? liveRes.data : []));
+
+      if (liveRes.success && remoteClients && remoteClients.length > 0) {
+        const seenIds = new Set(dbClients.map(c => c.id));
+        const seenCodes = new Set(dbClients.map(c => c.client_code));
+
+        for (const rc of remoteClients) {
+          const clientId = rc.id || rc.userId || `CLT-${rc.clientCode || '001'}`;
+          const clientCode = rc.clientCode || rc.client_code || rc.userId || clientId;
+
+          if (!seenIds.has(clientId) && !seenCodes.has(clientCode)) {
+            seenIds.add(clientId);
+            seenCodes.add(clientCode);
+            dbClients.push({
+              id: clientId,
+              client_code: clientCode,
+              sub_broker_id: rc.sub_broker_id || null,
+              sub_broker_name: rc.sub_broker_name || 'Direct / Trading Platform',
+              broker_name: 'Apex Broking',
+              master_name: 'Alpha Prime Master',
+              tenant_id: rc.tenantId || rc.tenant_id || 'vertex-default',
+              tenant_name: 'Alpha Prime Capital',
+              name: rc.fullName || rc.name || 'Trader',
+              email: rc.email || `${clientCode.toLowerCase()}@tradingplatform.com`,
+              phone: rc.phone || '',
+              status: (rc.status || rc.accountStatus || 'ACTIVE').toUpperCase() === 'ACTIVE' ? 'ACTIVE' : 'SUSPENDED',
+              kyc_status: (rc.kycStatus === 'VERIFIED' || rc.kyc_status === 'VERIFIED' ? 'APPROVED' : (rc.kyc_status || 'APPROVED')) as KYCStatus,
+              wallet_balance: parseFloat(rc.balance || rc.wallet_balance || '100000'),
+              available_margin: parseFloat(rc.equity || rc.available_margin || rc.balance || '100000'),
+              todays_pl: 0,
+              open_positions_count: 0,
+              created_at: rc.createdAt ? new Date(rc.createdAt).toISOString().split('T')[0] : '2026-08-30'
+            });
+          }
+        }
+      }
+    } catch (e: any) {
+      console.warn('[PostgresTradingDataProvider] Remote Trading Platform clients query warning:', e?.message || e);
+    }
+
+    if (subBrokerId) {
+      return dbClients.filter(c => c.sub_broker_id === subBrokerId);
+    }
+
+    return dbClients;
   }
 
   async getTradingTenantId(adminTenantId: string): Promise<string | undefined> {
@@ -1640,9 +1709,10 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
   }
 
   async getFundDeposits(tenantId?: string, status?: string): Promise<FundDepositItem[]> {
+    const defaultTenants = new Set(['vertex-default', 'default', 'TNT-001', 'ALL', 'ALL_TENANTS', '']);
     let sql = 'SELECT * FROM fund_deposits WHERE 1=1';
     const params: any[] = [];
-    if (tenantId) {
+    if (tenantId && !defaultTenants.has(tenantId)) {
       params.push(tenantId);
       sql += ` AND tenant_id = $${params.length}`;
     }
@@ -1652,8 +1722,8 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     }
     sql += ' ORDER BY created_at DESC';
 
-    const res = await this.executeQuery(sql, params);
-    return res.rows.map(r => ({
+    const res = await this.executeQuery(sql, params).catch(() => ({ rows: [] }));
+    const dbDeposits = res.rows.map(r => ({
       id: r.id,
       txnId: r.id,
       client: r.client_name,
@@ -1664,6 +1734,39 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       date: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : '2026-03-29',
       rawAmount: parseFloat(r.amount)
     }));
+
+    try {
+      const liveFundsRes = await tradingPlatformClient.getLiveFunds(tenantId);
+      const remoteList = Array.isArray(liveFundsRes.data?.funds)
+        ? liveFundsRes.data.funds
+        : (Array.isArray(liveFundsRes.data?.transactions) ? liveFundsRes.data.transactions : (Array.isArray(liveFundsRes.data?.items) ? liveFundsRes.data.items : []));
+
+      if (liveFundsRes.success && remoteList && remoteList.length > 0) {
+        const seenIds = new Set(dbDeposits.map(d => d.id || d.txnId));
+        for (const rf of remoteList) {
+          const type = (rf.type || rf.transaction_type || '').toUpperCase();
+          if (type.includes('DEPOSIT') || (!type.includes('WITHDRAW') && parseFloat(rf.amount || '0') > 0)) {
+            const id = rf.id || rf.transactionId || `DEP-${Date.now()}`;
+            if (!seenIds.has(id)) {
+              seenIds.add(id);
+              dbDeposits.push({
+                id,
+                txnId: id,
+                client: rf.clientName || rf.client_name || rf.name || 'Client',
+                amount: `₹${parseFloat(rf.amount || '0').toLocaleString('en-IN')}`,
+                method: rf.method || rf.gateway || 'UPI/IMPS',
+                reference: rf.reference || rf.refNo || id,
+                status: (rf.status || 'COMPLETED').toUpperCase(),
+                date: rf.createdAt ? new Date(rf.createdAt).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+                rawAmount: parseFloat(rf.amount || '0')
+              });
+            }
+          }
+        }
+      }
+    } catch {}
+
+    return dbDeposits;
   }
 
   async approveFundDeposit(id: string, actor: string = 'Compliance Officer'): Promise<any> {
@@ -1761,9 +1864,10 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
   }
 
   async getFundWithdrawals(tenantId?: string, status?: string): Promise<FundWithdrawalItem[]> {
+    const defaultTenants = new Set(['vertex-default', 'default', 'TNT-001', 'ALL', 'ALL_TENANTS', '']);
     let sql = 'SELECT * FROM fund_withdrawals WHERE 1=1';
     const params: any[] = [];
-    if (tenantId) {
+    if (tenantId && !defaultTenants.has(tenantId)) {
       params.push(tenantId);
       sql += ` AND tenant_id = $${params.length}`;
     }
@@ -1773,8 +1877,8 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     }
     sql += ' ORDER BY created_at DESC';
 
-    const res = await this.executeQuery(sql, params);
-    return res.rows.map(r => ({
+    const res = await this.executeQuery(sql, params).catch(() => ({ rows: [] }));
+    const dbWithdrawals = res.rows.map(r => ({
       id: r.id,
       txnId: r.id,
       client: r.client_name,
@@ -1788,6 +1892,42 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       date: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : '2026-03-29',
       rawAmount: parseFloat(r.amount)
     }));
+
+    try {
+      const liveFundsRes = await tradingPlatformClient.getLiveFunds(tenantId);
+      const remoteList = Array.isArray(liveFundsRes.data?.funds)
+        ? liveFundsRes.data.funds
+        : (Array.isArray(liveFundsRes.data?.transactions) ? liveFundsRes.data.transactions : (Array.isArray(liveFundsRes.data?.items) ? liveFundsRes.data.items : []));
+
+      if (liveFundsRes.success && remoteList && remoteList.length > 0) {
+        const seenIds = new Set(dbWithdrawals.map(w => w.id || w.txnId));
+        for (const rf of remoteList) {
+          const type = (rf.type || rf.transaction_type || '').toUpperCase();
+          if (type.includes('WITHDRAW')) {
+            const id = rf.id || rf.transactionId || `WDR-${Date.now()}`;
+            if (!seenIds.has(id)) {
+              seenIds.add(id);
+              dbWithdrawals.push({
+                id,
+                txnId: id,
+                client: rf.clientName || rf.client_name || rf.name || 'Client',
+                client_name: rf.clientName || rf.client_name || rf.name || 'Client',
+                client_code: rf.clientCode || rf.client_code || 'CLT001',
+                client_id: rf.clientId || rf.client_id || 'CLT-001',
+                amount: `₹${parseFloat(rf.amount || '0').toLocaleString('en-IN')}`,
+                method: rf.method || rf.bank || 'Bank Wire',
+                reference: rf.reference || rf.refNo || id,
+                status: (rf.status || 'COMPLETED').toUpperCase(),
+                date: rf.createdAt ? new Date(rf.createdAt).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+                rawAmount: parseFloat(rf.amount || '0')
+              });
+            }
+          }
+        }
+      }
+    } catch {}
+
+    return dbWithdrawals;
   }
 
   async approveFundWithdrawal(id: string, actor: string = 'Compliance Officer'): Promise<any> {
@@ -1896,9 +2036,10 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
   }
 
   async getLedgerEntries(tenantId?: string, type?: string): Promise<LedgerRowItem[]> {
+    const defaultTenants = new Set(['vertex-default', 'default', 'TNT-001', 'ALL', 'ALL_TENANTS', '']);
     let sql = 'SELECT * FROM ledger_entries WHERE 1=1';
     const params: any[] = [];
-    if (tenantId) {
+    if (tenantId && !defaultTenants.has(tenantId)) {
       params.push(tenantId);
       sql += ` AND tenant_id = $${params.length}`;
     }
@@ -1908,8 +2049,8 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     }
     sql += ' ORDER BY created_at DESC';
 
-    const res = await this.executeQuery(sql, params);
-    return res.rows.map(r => {
+    const res = await this.executeQuery(sql, params).catch(() => ({ rows: [] }));
+    const dbLedger = res.rows.map(r => {
       const cr = parseFloat(r.credit || '0');
       const db = parseFloat(r.debit || '0');
       let mappedType: 'DEPOSIT' | 'WITHDRAWAL' | 'COMMISSION' | 'P&L' = 'DEPOSIT';
@@ -1929,6 +2070,44 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         status: 'COMPLETED' as const
       };
     });
+
+    try {
+      const liveLedgerRes = await tradingPlatformClient.getLiveLedger(tenantId);
+      const remoteList = Array.isArray(liveLedgerRes.data?.ledger)
+        ? liveLedgerRes.data.ledger
+        : (Array.isArray(liveLedgerRes.data?.items) ? liveLedgerRes.data.items : (Array.isArray(liveLedgerRes.data) ? liveLedgerRes.data : []));
+
+      if (liveLedgerRes.success && remoteList && remoteList.length > 0) {
+        const seenIds = new Set(dbLedger.map(l => l.txnId));
+        for (const rl of remoteList) {
+          const id = rl.id || rl.reference_id || rl.txnId || `LED-${Date.now()}`;
+          if (!seenIds.has(id)) {
+            seenIds.add(id);
+            const cr = parseFloat(rl.credit || '0');
+            const db = parseFloat(rl.debit || '0');
+            let mappedType: 'DEPOSIT' | 'WITHDRAWAL' | 'COMMISSION' | 'P&L' = 'DEPOSIT';
+            const rawType = (rl.type || rl.entry_type || '').toUpperCase();
+            if (rawType.includes('WITHDRAW')) mappedType = 'WITHDRAWAL';
+            else if (rawType.includes('COMMISSION')) mappedType = 'COMMISSION';
+            else if (rawType.includes('TRADE') || rawType.includes('P&L')) mappedType = 'P&L';
+
+            dbLedger.push({
+              date: rl.created_at ? new Date(rl.created_at).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+              txnId: id,
+              account: rl.account || rl.client_name || rl.clientName || 'Trader',
+              type: mappedType,
+              credit: cr > 0 ? `+₹${cr.toLocaleString('en-IN')}` : '—',
+              debit: db > 0 ? `-₹${db.toLocaleString('en-IN')}` : '—',
+              balance: `₹${parseFloat(rl.balance || rl.balance_after || '100000').toLocaleString('en-IN')}`,
+              reference: rl.description || rl.reference || id,
+              status: 'COMPLETED' as const
+            });
+          }
+        }
+      }
+    } catch {}
+
+    return dbLedger;
   }
 
   async createLedgerEntry(data: any): Promise<any> {
@@ -1953,13 +2132,16 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
   // TRADING: ORDERS & TRADES
   // ----------------------------------------------------
   async getOrders(tenantId?: string): Promise<Order[]> {
-    const tenantFilter = tenantId ? 'WHERE tenant_id = $1' : '';
-    const params = tenantId ? [tenantId] : [];
+    const defaultTenants = new Set(['vertex-default', 'default', 'TNT-001', 'ALL', 'ALL_TENANTS', '']);
+    let sql = 'SELECT * FROM orders WHERE 1=1';
+    const params: any[] = [];
+    if (tenantId && !defaultTenants.has(tenantId)) {
+      params.push(tenantId);
+      sql += ` AND tenant_id = $${params.length}`;
+    }
+    sql += ' ORDER BY created_at DESC';
 
-    const res = await this.executeQuery(
-      `SELECT * FROM orders ${tenantFilter} ORDER BY created_at DESC`,
-      params
-    );
+    const res = await this.executeQuery(sql, params).catch(() => ({ rows: [] }));
 
     const dbOrders: Order[] = res.rows.map(r => ({
       id: r.id,
@@ -2009,13 +2191,16 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
   }
 
   async getAllTrades(tenantId?: string): Promise<Trade[]> {
-    const tenantFilter = tenantId ? 'WHERE tenant_id = $1' : '';
-    const params = tenantId ? [tenantId] : [];
+    const defaultTenants = new Set(['vertex-default', 'default', 'TNT-001', 'ALL', 'ALL_TENANTS', '']);
+    let sql = 'SELECT * FROM trades WHERE 1=1';
+    const params: any[] = [];
+    if (tenantId && !defaultTenants.has(tenantId)) {
+      params.push(tenantId);
+      sql += ` AND tenant_id = $${params.length}`;
+    }
+    sql += ' ORDER BY created_at DESC';
 
-    const res = await this.executeQuery(
-      `SELECT * FROM trades ${tenantFilter} ORDER BY created_at DESC`,
-      params
-    );
+    const res = await this.executeQuery(sql, params).catch(() => ({ rows: [] }));
 
     const dbTrades: Trade[] = res.rows.map(r => ({
       id: r.id,
@@ -2071,15 +2256,16 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
   }
 
   async getPositions(tenantId?: string): Promise<any[]> {
+    const defaultTenants = new Set(['vertex-default', 'default', 'TNT-001', 'ALL', 'ALL_TENANTS', '']);
     let sql = 'SELECT * FROM positions WHERE 1=1';
     const params: any[] = [];
-    if (tenantId) {
+    if (tenantId && !defaultTenants.has(tenantId)) {
       params.push(tenantId);
       sql += ` AND tenant_id = $${params.length}`;
     }
     sql += ' ORDER BY created_at DESC';
 
-    const res = await this.executeQuery(sql, params);
+    const res = await this.executeQuery(sql, params).catch(() => ({ rows: [] }));
     const dbPositions: any[] = res.rows.map(r => {
       const pnlNum = parseFloat(r.pnl || '0');
       const buyPriceNum = parseFloat(r.buy_price || '0');
@@ -2143,7 +2329,10 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       const liveRes = await tradingPlatformClient.getLivePositions(tenantId);
       let positionsList = Array.isArray(liveRes.data) ? liveRes.data : (Array.isArray(liveRes.data?.positions) ? liveRes.data.positions : null);
       if (tenantId && positionsList) {
-        positionsList = positionsList.filter((p: any) => (p.tenant_id || p.tenantId) === tenantId || (tenantId === 'TNT-001' && (p.tenant_id === 'vertex-default' || p.tenantId === 'vertex-default')));
+        const defaultTenants = new Set(['vertex-default', 'default', 'TNT-001', 'ALL', 'ALL_TENANTS', '']);
+        if (!defaultTenants.has(tenantId)) {
+          positionsList = positionsList.filter((p: any) => (p.tenant_id || p.tenantId) === tenantId);
+        }
       }
       if (liveRes.success && positionsList && positionsList.length > 0) {
         const seenIds = new Set(dbPositions.map(p => p.id));

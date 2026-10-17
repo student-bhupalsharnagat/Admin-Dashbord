@@ -22,7 +22,7 @@ export function validateAndLoadConfig(): AppConfig {
   const isTest = process.env.NODE_ENV === 'test';
 
   const jwtSecret = process.env.JWT_SECRET || 'Jt9#vQ7!mX2akL8SzP4&nR6*fhgjg8eerrnm';
-  const internalSecret = process.env.INTERNAL_COMMUNICATION_SECRET || process.env.INTERNAL_API_SECRET || process.env.CENTRAL_ADMIN_INTERNAL_SECRET || 'Tr@dingS2S#2026!Kp8$Xm4&Qr7r7484';
+  const internalSecret = process.env.INTERNAL_COMMUNICATION_SECRET || process.env.INTERNAL_API_SECRET || process.env.CENTRAL_ADMIN_INTERNAL_SECRET || 'nextrade-internal-hmac-secret-2026';
   const tradingPlatformBaseUrl = process.env.TRADING_PLATFORM_BASE_URL || process.env.TRADING_PLATFORM_URL || 'https://trading-platform-2t6r.onrender.com';
   const tradingPlatformTimeoutMs = parseInt(process.env.TRADING_PLATFORM_TIMEOUT_MS || '5000', 10);
   const databaseUrl = process.env.DATABASE_URL || '';

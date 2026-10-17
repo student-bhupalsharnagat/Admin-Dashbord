@@ -54,12 +54,15 @@ export const TenantDetailView: React.FC<TenantDetailViewProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<TabType>('overview');
 
-  const tenantMasters = masters.filter(m => m.tenant_id === tenant.id);
-  const tenantBrokers = brokers.filter(b => b.tenant_id === tenant.id);
-  const tenantSubBrokers = subBrokers.filter(sb => sb.tenant_id === tenant.id);
-  const tenantClients = clients.filter(c => c.tenant_id === tenant.id);
-  const tenantTrades = trades.filter(t => t.tenant_id === tenant.id);
-  const tenantKYC = kycRecords.filter(k => k.tenant_id === tenant.id);
+  const isDefaultTenant = (id?: string | null) => !id || id === 'TNT-001' || id === 'default' || id === 'vertex-default';
+  const matchesTenant = (itemTenantId?: string | null) => itemTenantId === tenant.id || (isDefaultTenant(tenant.id) && isDefaultTenant(itemTenantId));
+
+  const tenantMasters = masters.filter(m => matchesTenant(m.tenant_id));
+  const tenantBrokers = brokers.filter(b => matchesTenant(b.tenant_id));
+  const tenantSubBrokers = subBrokers.filter(sb => matchesTenant(sb.tenant_id));
+  const tenantClients = clients.filter(c => matchesTenant(c.tenant_id));
+  const tenantTrades = trades.filter(t => matchesTenant(t.tenant_id));
+  const tenantKYC = kycRecords.filter(k => matchesTenant(k.tenant_id));
 
   // Real calculations
   const todayTrades = tenantTrades.filter(t => t.timestamp && new Date(t.timestamp).toDateString() === new Date().toDateString());

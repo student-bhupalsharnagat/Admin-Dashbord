@@ -39,7 +39,8 @@ export const TradingMonitorView: React.FC<TradingMonitorViewProps> = ({
       t.client_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       t.symbol.toLowerCase().includes(searchTerm.toLowerCase());
     const matchSide = sideFilter === 'ALL' || t.side === sideFilter;
-    const matchTenant = tenantFilter === 'ALL' || t.tenant_id === tenantFilter;
+    const isDefault = (id?: string) => !id || id === 'ALL' || id === 'TNT-001' || id === 'default' || id === 'vertex-default';
+    const matchTenant = tenantFilter === 'ALL' || t.tenant_id === tenantFilter || (isDefault(tenantFilter) && isDefault(t.tenant_id));
     return matchSearch && matchSide && matchTenant;
   });
 

@@ -1533,7 +1533,7 @@ export class EventHandler {
 
       // 2. GET /api/internal/v1/trading/ledger
       try {
-        const res = await tradingPlatformClient.request<any>({ method: 'GET', path: '/api/internal/v1/trading/ledger', tenantId: outboundTenant });
+        const res = await tradingPlatformClient.request<any>({ method: 'GET', path: '/api/internal/v1/trading/ledger', tenantId: tenantId });
         const items = res.success ? (res.data?.ledger || res.data?.items || (Array.isArray(res.data) ? res.data : [])) : [];
         for (const item of items) {
           const entryId = String(item.id || item.entryId || `LDG-BF-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`);
@@ -1564,7 +1564,7 @@ export class EventHandler {
 
       // 3. GET /api/internal/v1/trading/funds
       try {
-        const res = await tradingPlatformClient.request<any>({ method: 'GET', path: '/api/internal/v1/trading/funds', tenantId: outboundTenant });
+        const res = await tradingPlatformClient.request<any>({ method: 'GET', path: '/api/internal/v1/trading/funds', tenantId: tenantId });
         const items = res.success ? (res.data?.funds || res.data?.items || (Array.isArray(res.data) ? res.data : [])) : [];
         for (const item of items) {
           const type = (item.type || item.fundType || 'DEPOSIT').toUpperCase();
@@ -1593,7 +1593,7 @@ export class EventHandler {
 
       // 4. GET /api/internal/v1/trading/orders
       try {
-        const res = await tradingPlatformClient.request<any>({ method: 'GET', path: '/api/internal/v1/trading/orders', tenantId: outboundTenant });
+        const res = await tradingPlatformClient.request<any>({ method: 'GET', path: '/api/internal/v1/trading/orders', tenantId: tenantId });
         const items = res.success ? (res.data?.orders || res.data?.items || (Array.isArray(res.data) ? res.data : [])) : [];
         for (const item of items) {
           await this.handleOrderEvent({
@@ -1611,7 +1611,7 @@ export class EventHandler {
 
       // 5. GET /api/internal/v1/trading/trades
       try {
-        const res = await tradingPlatformClient.request<any>({ method: 'GET', path: '/api/internal/v1/trading/trades', tenantId: outboundTenant });
+        const res = await tradingPlatformClient.request<any>({ method: 'GET', path: '/api/internal/v1/trading/trades', tenantId: tenantId });
         const items = res.success ? (res.data?.trades || res.data?.items || (Array.isArray(res.data) ? res.data : [])) : [];
         for (const item of items) {
           await this.handleTradeExecuted({
@@ -1629,7 +1629,7 @@ export class EventHandler {
 
       // 6. GET /api/internal/v1/trading/positions
       try {
-        const res = await tradingPlatformClient.request<any>({ method: 'GET', path: '/api/internal/v1/trading/positions', tenantId: outboundTenant });
+        const res = await tradingPlatformClient.request<any>({ method: 'GET', path: '/api/internal/v1/trading/positions', tenantId: tenantId });
         const items = res.success ? (res.data?.positions || res.data?.items || (Array.isArray(res.data) ? res.data : [])) : [];
         for (const item of items) {
           await this.handlePositionUpdated({
