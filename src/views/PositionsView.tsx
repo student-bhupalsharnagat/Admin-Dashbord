@@ -33,6 +33,8 @@ interface PositionsViewProps {
 export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify }) => {
   const [positions, setPositions] = useState<PositionItem[]>(initialPositionsData);
   const [searchQuery, setSearchQuery] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 25;
   const [selectedPosition, setSelectedPosition] = useState<PositionItem | null>(null);
 
   const notify = (msg: string, type: 'info' | 'success' | 'warning' = 'info') => {
@@ -72,26 +74,21 @@ export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify }) => {
   useEffect(() => {
     fetchPositions();
 
-    // Real-time EventSource listener for position updates
-    let eventSource: EventSource | null = null;
-    try {
-      eventSource = new EventSource('/api/admin/events/stream');
-      eventSource.onmessage = (e) => {
-        try {
-          const evt = JSON.parse(e.data);
-          if (
-            evt?.eventType === 'position.updated' ||
-            evt?.eventType === 'position.closed' ||
-            evt?.eventType === 'trade.executed'
-          ) {
-            fetchPositions();
-          }
-        } catch {}
-      };
-    } catch {}
+    // Listen to shared window admin:live-event to avoid socket starvation
+    const handleLiveEvent = (e: any) => {
+      const evt = e.detail;
+      if (
+        evt?.eventType === 'position.updated' ||
+        evt?.eventType === 'position.closed' ||
+        evt?.eventType === 'trade.executed'
+      ) {
+        fetchPositions();
+      }
+    };
 
+    window.addEventListener('admin:live-event', handleLiveEvent);
     return () => {
-      if (eventSource) eventSource.close();
+      window.removeEventListener('admin:live-event', handleLiveEvent);
     };
   }, []);
 
@@ -117,6 +114,9 @@ export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify }) => {
     );
   });
 
+  const totalPages = Math.ceil(filteredPositions.length / pageSize) || 1;
+  const paginatedPositions = filteredPositions.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+
   return (
     <div className="space-y-6">
       {/* Breadcrumb matching Screenshot 6 */}
@@ -138,7 +138,10 @@ export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify }) => {
           <input
             type="text"
             value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
+            onChange={e => {
+              setSearchQuery(e.target.value);
+              setCurrentPage(1);
+            }}
             placeholder="Client or symbol..."
             className="w-full pl-9 pr-3 py-2 bg-[#091122] border border-[#162238] rounded-lg text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
           />
@@ -162,7 +165,7 @@ export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify }) => {
               </tr>
             </thead>
             <tbody className="divide-y divide-[#131e36]/60">
-              {filteredPositions.map(item => (
+              {paginatedPositions.map(item => (
                 <tr
                   key={item.id}
                   onClick={() => setSelectedPosition(item)}
@@ -196,6 +199,31 @@ export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify }) => {
             </tbody>
           </table>
         </div>
+
+        {filteredPositions.length > pageSize && (
+          <div className="px-4 py-3 border-t border-[#131e36] flex items-center justify-between text-xs text-slate-400">
+            <div>
+              Showing {((currentPage - 1) * pageSize) + 1} to {Math.min(currentPage * pageSize, filteredPositions.length)} of {filteredPositions.length} positions
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                disabled={currentPage <= 1}
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                className="px-2.5 py-1 rounded bg-[#0f172a] hover:bg-[#1e293b] disabled:opacity-40 disabled:cursor-not-allowed border border-[#1e293b] text-slate-200"
+              >
+                Previous
+              </button>
+              <span className="text-slate-300 font-medium">Page {currentPage} of {totalPages}</span>
+              <button
+                disabled={currentPage >= totalPages}
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                className="px-2.5 py-1 rounded bg-[#0f172a] hover:bg-[#1e293b] disabled:opacity-40 disabled:cursor-not-allowed border border-[#1e293b] text-slate-200"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Position Detail & Square-off Modal */}

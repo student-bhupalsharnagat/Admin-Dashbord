@@ -379,6 +379,9 @@ export default function App() {
           const event = JSON.parse(e.data);
           if (!event || !event.eventType) return;
 
+          // Dispatch event to window for all child views to eliminate duplicate SSE streams
+          window.dispatchEvent(new CustomEvent('admin:live-event', { detail: event }));
+
           switch (event.eventType) {
             case 'client.registered':
             case 'client.activated': {

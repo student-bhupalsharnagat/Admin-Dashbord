@@ -189,23 +189,18 @@ export const TradesView: React.FC<TradesViewProps> = ({
 
     fetchTrades();
 
-    // Real-time EventSource listener
-    let eventSource: EventSource | null = null;
-    try {
-      eventSource = new EventSource('/api/admin/events/stream');
-      eventSource.onmessage = (e) => {
-        try {
-          const evt = JSON.parse(e.data);
-          if (evt?.eventType === 'trade.executed') {
-            fetchTrades();
-          }
-        } catch {}
-      };
-    } catch {}
+    // Listen to shared window admin:live-event to avoid socket starvation
+    const handleLiveEvent = (e: any) => {
+      const evt = e.detail;
+      if (evt?.eventType === 'trade.executed') {
+        fetchTrades();
+      }
+    };
 
+    window.addEventListener('admin:live-event', handleLiveEvent);
     return () => {
       isMounted = false;
-      if (eventSource) eventSource.close();
+      window.removeEventListener('admin:live-event', handleLiveEvent);
     };
   }, []);
 

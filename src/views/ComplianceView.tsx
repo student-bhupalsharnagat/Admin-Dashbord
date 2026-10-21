@@ -148,6 +148,12 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
   const [selectedLedgerItem, setSelectedLedgerItem] = useState<LedgerRowItem | null>(null);
   const [selectedDrawerTxn, setSelectedDrawerTxn] = useState<LedgerRowItem | null>(null);
 
+  // Pagination states for high-volume compliance sections
+  const [kycPage, setKycPage] = useState(1);
+  const [fundsPage, setFundsPage] = useState(1);
+  const [ledgerPage, setLedgerPage] = useState(1);
+  const compliancePageSize = 25;
+
   // ----------------------------------------------------------------------
   // DATA FETCHING HOOKS (PostgreSQL-backed)
   // ----------------------------------------------------------------------
@@ -224,31 +230,26 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
     fetchLedgerData();
   }, [ledgerTypeFilter]);
 
-  // Real-time EventSource listener for funds, withdrawals, kyc, and ledger events
+  // Listen to shared window admin:live-event to avoid socket starvation
   useEffect(() => {
-    let eventSource: EventSource | null = null;
-    try {
-      eventSource = new EventSource('/api/admin/events/stream');
-      eventSource.onmessage = (e) => {
-        try {
-          const evt = JSON.parse(e.data);
-          if (evt?.eventType?.startsWith('deposit.') || evt?.eventType?.startsWith('fund.')) {
-            fetchFundsData();
-            fetchLedgerData();
-          } else if (evt?.eventType?.startsWith('withdrawal.')) {
-            fetchFundsData();
-            fetchLedgerData();
-          } else if (evt?.eventType === 'trade.executed') {
-            fetchLedgerData();
-          } else if (evt?.eventType?.startsWith('kyc.')) {
-            fetchKycData();
-          }
-        } catch {}
-      };
-    } catch {}
+    const handleLiveEvent = (e: any) => {
+      const evt = e.detail;
+      if (evt?.eventType?.startsWith('deposit.') || evt?.eventType?.startsWith('fund.')) {
+        fetchFundsData();
+        fetchLedgerData();
+      } else if (evt?.eventType?.startsWith('withdrawal.')) {
+        fetchFundsData();
+        fetchLedgerData();
+      } else if (evt?.eventType === 'trade.executed') {
+        fetchLedgerData();
+      } else if (evt?.eventType?.startsWith('kyc.')) {
+        fetchKycData();
+      }
+    };
 
+    window.addEventListener('admin:live-event', handleLiveEvent);
     return () => {
-      if (eventSource) eventSource.close();
+      window.removeEventListener('admin:live-event', handleLiveEvent);
     };
   }, []);
 
@@ -410,6 +411,9 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
       return matchSearch && matchStatus;
     });
 
+    const kycTotalPages = Math.ceil(filteredKyc.length / compliancePageSize) || 1;
+    const paginatedKyc = filteredKyc.slice((kycPage - 1) * compliancePageSize, kycPage * compliancePageSize);
+
     return (
       <div className="space-y-6">
         {/* Breadcrumb matching screenshot */}
@@ -535,7 +539,7 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#131e36]/60">
-                {filteredKyc.map(item => (
+                {paginatedKyc.map(item => (
                   <tr key={item.kycId} className="hover:bg-[#0c152a] transition-colors">
                     <td className="py-3.5 px-4 font-mono font-bold text-[#38bdf8]">{item.kycId}</td>
                     <td className="py-3.5 px-4 font-mono text-slate-400">{item.clientId}</td>
@@ -595,6 +599,31 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
               </tbody>
             </table>
           </div>
+
+          {filteredKyc.length > compliancePageSize && (
+            <div className="px-4 py-3 border-t border-[#131e36] flex items-center justify-between text-xs text-slate-400">
+              <div>
+                Showing {((kycPage - 1) * compliancePageSize) + 1} to {Math.min(kycPage * compliancePageSize, filteredKyc.length)} of {filteredKyc.length} submissions
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  disabled={kycPage <= 1}
+                  onClick={() => setKycPage(p => Math.max(1, p - 1))}
+                  className="px-2.5 py-1 rounded bg-[#0f172a] hover:bg-[#1e293b] disabled:opacity-40 disabled:cursor-not-allowed border border-[#1e293b] text-slate-200"
+                >
+                  Previous
+                </button>
+                <span className="text-slate-300 font-medium">Page {kycPage} of {kycTotalPages}</span>
+                <button
+                  disabled={kycPage >= kycTotalPages}
+                  onClick={() => setKycPage(p => Math.min(kycTotalPages, p + 1))}
+                  className="px-2.5 py-1 rounded bg-[#0f172a] hover:bg-[#1e293b] disabled:opacity-40 disabled:cursor-not-allowed border border-[#1e293b] text-slate-200"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* KYC Dossier Modal */}
@@ -730,6 +759,10 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
       const matchStatus = fundsStatusFilter === 'All Status' || w.status === fundsStatusFilter;
       return matchSearch && matchStatus;
     });
+
+    const currentFundsList = isDeposits ? filteredDeposits : filteredWithdrawals;
+    const fundsTotalPages = Math.ceil(currentFundsList.length / compliancePageSize) || 1;
+    const paginatedFunds = currentFundsList.slice((fundsPage - 1) * compliancePageSize, fundsPage * compliancePageSize);
 
     return (
       <div className="space-y-6">
@@ -982,7 +1015,7 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#131e36]/60">
-                {(isDeposits ? filteredDeposits : filteredWithdrawals).map(item => (
+                {paginatedFunds.map(item => (
                   <tr key={item.txnId} className="hover:bg-[#0c152a] transition-colors">
                     <td className="py-3.5 px-4 font-mono font-bold text-[#38bdf8]">{item.txnId}</td>
                     <td className="py-3.5 px-4 font-bold text-white">{item.client}</td>
@@ -1042,6 +1075,31 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
               </tbody>
             </table>
           </div>
+
+          {currentFundsList.length > compliancePageSize && (
+            <div className="px-4 py-3 border-t border-[#131e36] flex items-center justify-between text-xs text-slate-400">
+              <div>
+                Showing {((fundsPage - 1) * compliancePageSize) + 1} to {Math.min(fundsPage * compliancePageSize, currentFundsList.length)} of {currentFundsList.length} records
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  disabled={fundsPage <= 1}
+                  onClick={() => setFundsPage(p => Math.max(1, p - 1))}
+                  className="px-2.5 py-1 rounded bg-[#0f172a] hover:bg-[#1e293b] disabled:opacity-40 disabled:cursor-not-allowed border border-[#1e293b] text-slate-200"
+                >
+                  Previous
+                </button>
+                <span className="text-slate-300 font-medium">Page {fundsPage} of {fundsTotalPages}</span>
+                <button
+                  disabled={fundsPage >= fundsTotalPages}
+                  onClick={() => setFundsPage(p => Math.min(fundsTotalPages, p + 1))}
+                  className="px-2.5 py-1 rounded bg-[#0f172a] hover:bg-[#1e293b] disabled:opacity-40 disabled:cursor-not-allowed border border-[#1e293b] text-slate-200"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Transaction Modal */}
@@ -1141,6 +1199,9 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
       const matchType = ledgerTypeFilter === 'All Types' || row.type === ledgerTypeFilter;
       return matchSearch && matchType;
     });
+
+    const ledgerTotalPages = Math.ceil(filteredLedger.length / compliancePageSize) || 1;
+    const paginatedLedger = filteredLedger.slice((ledgerPage - 1) * compliancePageSize, ledgerPage * compliancePageSize);
 
     const renderTypeBadge = (type: string) => {
       if (type === 'DEPOSIT') {
@@ -1259,7 +1320,7 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#131e36]/60">
-                {filteredLedger.map(item => (
+                {paginatedLedger.map(item => (
                   <tr key={item.txnId} className="hover:bg-[#0c152a] transition-colors group">
                     <td className="py-3.5 px-4 font-mono text-slate-400">{item.date}</td>
                     <td 
@@ -1322,6 +1383,31 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
               </tbody>
             </table>
           </div>
+
+          {filteredLedger.length > compliancePageSize && (
+            <div className="px-4 py-3 border-t border-[#131e36] flex items-center justify-between text-xs text-slate-400">
+              <div>
+                Showing {((ledgerPage - 1) * compliancePageSize) + 1} to {Math.min(ledgerPage * compliancePageSize, filteredLedger.length)} of {filteredLedger.length} transactions
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  disabled={ledgerPage <= 1}
+                  onClick={() => setLedgerPage(p => Math.max(1, p - 1))}
+                  className="px-2.5 py-1 rounded bg-[#0f172a] hover:bg-[#1e293b] disabled:opacity-40 disabled:cursor-not-allowed border border-[#1e293b] text-slate-200"
+                >
+                  Previous
+                </button>
+                <span className="text-slate-300 font-medium">Page {ledgerPage} of {ledgerTotalPages}</span>
+                <button
+                  disabled={ledgerPage >= ledgerTotalPages}
+                  onClick={() => setLedgerPage(p => Math.min(ledgerTotalPages, p + 1))}
+                  className="px-2.5 py-1 rounded bg-[#0f172a] hover:bg-[#1e293b] disabled:opacity-40 disabled:cursor-not-allowed border border-[#1e293b] text-slate-200"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Ledger Voucher Modal */}

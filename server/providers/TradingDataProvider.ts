@@ -1203,14 +1203,16 @@ export class MockTradingDataProvider implements ITradingDataProvider {
       const brokersCount = this.brokers.filter(b => b.tenant_id === tenantId).length;
       const clientsCount = this.clients.filter(c => c.tenant_id === tenantId).length;
       return {
-        total_masters: { value: mastersCount, badge: '+1 new', subtitle: `Across ${tenant?.name || 'Tenant'}` },
-        total_brokers: { value: brokersCount, badge: '+2 new', subtitle: `${brokersCount} active` },
-        total_clients: { value: clientsCount, badge: '↑ 9.4%', subtitle: `${clientsCount} KYC verified` },
-        commission_earned: { value: tenant?.commission || '₹14.2L', badge: '↑ 6.8%', subtitle: 'Today' },
-        todays_turnover: { value: tenant?.trading_volume || '₹3.4Cr', badge: '↑ 14.2%', subtitle: 'Turnover' },
-        total_pl: { value: tenant?.pl || '₹84.2L', badge: '↑ 5.1%', subtitle: 'Unrealized + Realized' },
+        total_masters: { value: mastersCount, badge: `${mastersCount} registered`, subtitle: `Across ${tenant?.name || 'Tenant'}` },
+        total_brokers: { value: brokersCount, badge: `${brokersCount} active`, subtitle: `${brokersCount} active` },
+        total_clients: { value: clientsCount, badge: `${clientsCount} active`, subtitle: `${clientsCount} registered` },
+        commission_earned: { value: tenant?.commission || '₹0', badge: 'Today', subtitle: 'Commission' },
+        todays_turnover: { value: tenant?.trading_volume || '₹0', badge: 'Today', subtitle: 'Turnover' },
+        total_turnover: { value: tenant?.trading_volume || '₹0', badge: 'Total Executed', subtitle: 'All-Time Turnover' },
+        total_pl: { value: tenant?.pl || '₹0', badge: 'Net P&L', subtitle: 'Unrealized + Realized' },
+        net_pl: { value: tenant?.pl || '₹0', badge: 'Net P&L', subtitle: 'Unrealized + Realized' },
         pending_kyc: { value: this.kycRecords.filter(k => k.tenant_id === tenantId && k.kyc_status === 'PENDING').length, subtitle: 'Requires review' },
-        open_tickets: { value: this.supportTickets.filter(t => t.tenant_id === tenantId && t.status === 'OPEN').length, subtitle: '1 high priority' }
+        open_tickets: { value: this.supportTickets.filter(t => t.tenant_id === tenantId && t.status === 'OPEN').length, subtitle: 'Support tickets' }
       };
     }
 
@@ -1767,6 +1769,7 @@ export class MockTradingDataProvider implements ITradingDataProvider {
   }
 
   async getOrders(tenantId?: string): Promise<Order[]> {
+    if (tenantId) return this.orders.filter(o => (o as any).tenant_id === tenantId);
     return this.orders;
   }
 

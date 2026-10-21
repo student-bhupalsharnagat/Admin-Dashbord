@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Search,
   Download,
@@ -508,9 +508,15 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
 
   // Search and dropdown filters
   const [searchQuery, setSearchQuery] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 25;
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [kycFilter, setKycFilter] = useState('ALL');
   const [accountFilter, setAccountFilter] = useState('ALL');
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, statusFilter, kycFilter, accountFilter, level]);
 
   // Interactive Modals State
   const [selectedEntity, setSelectedEntity] = useState<any | null>(null);
@@ -715,6 +721,11 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
       return matchQuery && matchKyc && matchAccount;
     });
   }, [clientsList, searchQuery, kycFilter, accountFilter]);
+
+  const totalPages = Math.ceil(filteredClients.length / pageSize) || 1;
+  const paginatedClients = useMemo(() => {
+    return filteredClients.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  }, [filteredClients, currentPage, pageSize]);
 
   // CSV Export Handler
   const handleExport = () => {
@@ -1471,7 +1482,7 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#101a2e]">
-                {filteredClients.map(client => (
+                {paginatedClients.map(client => (
                   <tr
                     key={client.id}
                     className="hover:bg-[#0c1527] transition-colors group"
@@ -1568,6 +1579,31 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
               </tbody>
             </table>
           </div>
+
+          {filteredClients.length > pageSize && (
+            <div className="px-4 py-3 border-t border-[#121d33] flex items-center justify-between text-xs text-slate-400 bg-[#060c18]">
+              <div>
+                Showing {((currentPage - 1) * pageSize) + 1} to {Math.min(currentPage * pageSize, filteredClients.length)} of {filteredClients.length} clients
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  disabled={currentPage <= 1}
+                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                  className="px-2.5 py-1 rounded bg-[#0f172a] hover:bg-[#1e293b] disabled:opacity-40 disabled:cursor-not-allowed border border-[#1e293b] text-slate-200"
+                >
+                  Previous
+                </button>
+                <span className="text-slate-300 font-medium">Page {currentPage} of {totalPages}</span>
+                <button
+                  disabled={currentPage >= totalPages}
+                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                  className="px-2.5 py-1 rounded bg-[#0f172a] hover:bg-[#1e293b] disabled:opacity-40 disabled:cursor-not-allowed border border-[#1e293b] text-slate-200"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

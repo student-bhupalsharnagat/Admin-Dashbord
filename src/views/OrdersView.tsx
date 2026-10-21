@@ -46,6 +46,8 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
 }) => {
   const [orders, setOrders] = useState<OrderItem[]>(initialOrdersData);
   const [searchQuery, setSearchQuery] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 25;
   const [sideFilter, setSideFilter] = useState<'All Sides' | 'BUY' | 'SELL'>('All Sides');
   const [statusFilter, setStatusFilter] = useState<'All Status' | 'FILLED' | 'PENDING' | 'CANCELLED'>('All Status');
 
@@ -89,27 +91,22 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
   useEffect(() => {
     fetchOrders();
 
-    // Real-time EventSource listener for new orders and executions
-    let eventSource: EventSource | null = null;
-    try {
-      eventSource = new EventSource('/api/admin/events/stream');
-      eventSource.onmessage = (e) => {
-        try {
-          const evt = JSON.parse(e.data);
-          if (
-            evt?.eventType === 'order.created' ||
-            evt?.eventType === 'order.updated' ||
-            evt?.eventType === 'order.cancelled' ||
-            evt?.eventType === 'trade.executed'
-          ) {
-            fetchOrders();
-          }
-        } catch {}
-      };
-    } catch {}
+    // Listen to shared window admin:live-event to avoid socket starvation
+    const handleLiveEvent = (e: any) => {
+      const evt = e.detail;
+      if (
+        evt?.eventType === 'order.created' ||
+        evt?.eventType === 'order.updated' ||
+        evt?.eventType === 'order.cancelled' ||
+        evt?.eventType === 'trade.executed'
+      ) {
+        fetchOrders();
+      }
+    };
 
+    window.addEventListener('admin:live-event', handleLiveEvent);
     return () => {
-      if (eventSource) eventSource.close();
+      window.removeEventListener('admin:live-event', handleLiveEvent);
     };
   }, []);
 
@@ -160,6 +157,9 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
     const matchStatus = statusFilter === 'All Status' || o.status === statusFilter;
     return matchSearch && matchSide && matchStatus;
   });
+
+  const totalPages = Math.ceil(filteredOrders.length / pageSize) || 1;
+  const paginatedOrders = filteredOrders.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   const renderSideBadge = (side: 'BUY' | 'SELL') => {
     if (side === 'BUY') {
@@ -291,7 +291,7 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-[#131e36]/60">
-              {filteredOrders.map(item => (
+              {paginatedOrders.map(item => (
                 <tr key={item.orderId} className="hover:bg-[#0c152a] transition-colors group">
                   <td className="py-3.5 px-4 font-mono font-bold text-[#38bdf8]">{item.orderId}</td>
                   <td 
@@ -348,6 +348,31 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
             </tbody>
           </table>
         </div>
+
+        {filteredOrders.length > pageSize && (
+          <div className="px-4 py-3 border-t border-[#131e36] flex items-center justify-between text-xs text-slate-400">
+            <div>
+              Showing {((currentPage - 1) * pageSize) + 1} to {Math.min(currentPage * pageSize, filteredOrders.length)} of {filteredOrders.length} orders
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                disabled={currentPage <= 1}
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                className="px-2.5 py-1 rounded bg-[#0f172a] hover:bg-[#1e293b] disabled:opacity-40 disabled:cursor-not-allowed border border-[#1e293b] text-slate-200"
+              >
+                Previous
+              </button>
+              <span className="text-slate-300 font-medium">Page {currentPage} of {totalPages}</span>
+              <button
+                disabled={currentPage >= totalPages}
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                className="px-2.5 py-1 rounded bg-[#0f172a] hover:bg-[#1e293b] disabled:opacity-40 disabled:cursor-not-allowed border border-[#1e293b] text-slate-200"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Order Detail Modal */}

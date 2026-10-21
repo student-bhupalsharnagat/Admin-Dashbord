@@ -74,6 +74,13 @@ export class TradingPlatformClient {
   public clockOffsetMs: number = 0;
   private lastClockSync: number = 0;
 
+  // 2-second in-memory response cache for read-only telemetry queries to eliminate UI latency
+  private requestCache = new Map<string, { data: S2SResponse<any>; expiresAt: number }>();
+
+  public clearCache(): void {
+    this.requestCache.clear();
+  }
+
   constructor(
     baseUrl: string = appConfig.tradingPlatformBaseUrl || 'https://trading-platform-2t6r.onrender.com',
     secret: string = appConfig.internalCommunicationSecret || 'nextrade-internal-hmac-secret-2026',
@@ -396,6 +403,18 @@ export class TradingPlatformClient {
     this.metrics.totalRequests++;
     this.checkCircuitBreaker();
 
+    // Fast return from in-memory cache for repeated GET telemetry requests
+    const cacheKey = `${options.method}:${options.path}:${options.tenantId || ''}`;
+    if (options.method === 'GET') {
+      const cached = this.requestCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        return cached.data as S2SResponse<T>;
+      }
+    } else {
+      // Clear cache on write operations so data is immediately authoritative
+      this.clearCache();
+    }
+
     if (this.clockOffsetMs === 0 || !this.lastClockSync || (Date.now() - this.lastClockSync > 30000)) {
       await this.syncClockOffset().catch(() => {});
     }
@@ -468,13 +487,21 @@ export class TradingPlatformClient {
         if (response.ok) {
           const data = (await response.json().catch(() => ({}))) as T;
           this.recordSuccess();
-          return {
+          const s2sRes: S2SResponse<T> = {
             success: true,
             statusCode: response.status,
             data,
             correlationId,
             latencyMs
           };
+          if (options.method === 'GET') {
+            this.requestCache.set(cacheKey, { data: s2sRes, expiresAt: Date.now() + 2000 });
+            if (this.requestCache.size > 200) {
+              const firstKey = this.requestCache.keys().next().value;
+              if (firstKey) this.requestCache.delete(firstKey);
+            }
+          }
+          return s2sRes;
         }
 
         // If 404 on canonical /v1 path, attempt fallback to unversioned /api/internal/ path

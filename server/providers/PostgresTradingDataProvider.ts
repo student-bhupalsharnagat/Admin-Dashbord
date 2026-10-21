@@ -120,24 +120,17 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     let liveTradesCount = 0;
     let liveOrdersCount = 0;
     let liveTradesVolume = 0;
+    let liveCommission = 0;
+    let liveRealizedPl = 0;
+    let liveUnrealizedPl = 0;
     let liveOpenPositionsCount = 0;
-    let liveClientsCount = 0;
-    let liveSummaryMetrics: any = {};
 
     try {
-      const [liveTradesRes, liveOrdersRes, livePositionsRes, liveClientsRes, liveSummaryRes] = await Promise.all([
+      const [liveTradesRes, liveOrdersRes, livePositionsRes] = await Promise.all([
         tradingPlatformClient.getLiveTrades(tenantId).catch(() => ({ success: false, data: [] })),
         tradingPlatformClient.getLiveOrders(tenantId).catch(() => ({ success: false, data: [] })),
-        tradingPlatformClient.getLivePositions(tenantId).catch(() => ({ success: false, data: [] })),
-        tradingPlatformClient.getLiveClients(tenantId).catch(() => ({ success: false, data: [] })),
-        tradingPlatformClient.getLiveSummary(tenantId).catch(() => ({ success: false, data: null }))
+        tradingPlatformClient.getLivePositions(tenantId).catch(() => ({ success: false, data: [] }))
       ]);
-
-      liveSummaryMetrics = liveSummaryRes?.data?.metrics || {};
-      const liveClientsList = Array.isArray(liveClientsRes.data?.clients)
-        ? liveClientsRes.data.clients
-        : (Array.isArray(liveClientsRes.data?.items) ? liveClientsRes.data.items : (Array.isArray(liveClientsRes.data) ? liveClientsRes.data : []));
-      liveClientsCount = liveClientsList.length;
 
       const defaultTenants = new Set(['vertex-default', 'default', 'TNT-001', 'ALL', 'ALL_TENANTS', '']);
 
@@ -150,6 +143,8 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         for (const t of tradesList) {
           const val = parseFloat(t.execution_value || t.total_value || (parseFloat(t.execution_price || t.price || 0) * parseFloat(t.quantity || 0)) || 0);
           if (!isNaN(val)) liveTradesVolume += val;
+          const comm = parseFloat(t.commission || t.brokerage || t.fee || 0);
+          if (!isNaN(comm)) liveCommission += comm;
         }
       }
 
@@ -167,25 +162,34 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       }
       if (positionsList.length > 0) {
         liveOpenPositionsCount = positionsList.filter((p: any) => p.status === 'OPEN').length;
+        for (const p of positionsList) {
+          const pnl = parseFloat(p.pnl || p.unrealized_pnl || p.unrealizedPnl || '0');
+          if (!isNaN(pnl)) {
+            if (p.status === 'OPEN') liveUnrealizedPl += pnl;
+            else liveRealizedPl += pnl;
+          }
+        }
       }
     } catch {
       // non-fatal live telemetry probe
     }
 
-    const todayVolumeNum = Math.max(parseFloat(todayVolumeRes.rows[0]?.volume || '0'), liveTradesVolume, parseFloat(liveSummaryMetrics?.today_turnover || '0'));
-    const totalVolumeNum = Math.max(parseFloat(totalVolumeRes.rows[0]?.volume || '0'), liveTradesVolume, parseFloat(liveSummaryMetrics?.total_turnover || '0'));
-    const totalCommissionNum = parseFloat(commissionRes.rows[0]?.total || '0');
-    const realizedPlNum = parseFloat(realizedPlRes.rows[0]?.total || '0') || parseFloat(liveSummaryMetrics?.realized_pnl || '0');
-    const unrealizedPlNum = parseFloat(unrealizedPlRes.rows[0]?.total || '0') || parseFloat(liveSummaryMetrics?.unrealized_pnl || '0');
+    const dbTodayVolume = parseFloat(todayVolumeRes.rows[0]?.volume || '0');
+    const dbTotalVolume = parseFloat(totalVolumeRes.rows[0]?.volume || '0');
+    const todayVolumeNum = Math.max(dbTodayVolume, liveTradesVolume);
+    const totalVolumeNum = Math.max(dbTotalVolume, todayVolumeNum);
+    const totalCommissionNum = parseFloat(commissionRes.rows[0]?.total || '0') + liveCommission;
+    const realizedPlNum = parseFloat(realizedPlRes.rows[0]?.total || '0') + liveRealizedPl;
+    const unrealizedPlNum = parseFloat(unrealizedPlRes.rows[0]?.total || '0') + liveUnrealizedPl;
     const totalPlNum = realizedPlNum + unrealizedPlNum;
 
     const totalBalanceNum = parseFloat(marginRes.rows[0]?.total_balance || '0');
     const totalEquityNum = parseFloat(marginRes.rows[0]?.total_equity || '0');
-    const totalMarginUsedNum = parseFloat(marginRes.rows[0]?.total_margin_used || '0') || parseFloat(liveSummaryMetrics?.total_used_margin || '0');
+    const totalMarginUsedNum = parseFloat(marginRes.rows[0]?.total_margin_used || '0');
     const availableMarginNum = Math.max(0, totalEquityNum - totalMarginUsedNum);
 
-    const openPositionsNum = parseInt(openPositionsRes.rows[0]?.count || '0', 10);
-    const pendingOrdersNum = parseInt(pendingOrdersRes.rows[0]?.count || '0', 10);
+    const openPositionsNum = Math.max(parseInt(openPositionsRes.rows[0]?.count || '0', 10), liveOpenPositionsCount);
+    const pendingOrdersNum = Math.max(parseInt(pendingOrdersRes.rows[0]?.count || '0', 10), liveOrdersCount);
     const pendingDepositsCount = parseInt(pendingDepositsRes.rows[0]?.count || '0', 10);
     const pendingDepositsAmount = parseFloat(pendingDepositsRes.rows[0]?.total_amount || '0');
     const pendingWithdrawalsCount = parseInt(pendingWithdrawalsRes.rows[0]?.count || '0', 10);
@@ -193,10 +197,14 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     const pendingKycNum = parseInt(kycRes.rows[0]?.count || '0', 10);
     const openTicketsNum = parseInt(ticketsRes.rows[0]?.count || '0', 10);
 
-    const authoritativeClientsCount = Math.max(totalClientsNum, liveSummaryMetrics?.total_users || 0, liveClientsCount);
-    const authoritativeActiveClientsCount = Math.max(activeClientsNum, liveSummaryMetrics?.active_users || 0);
-    const authoritativeOpenPositions = Math.max(openPositionsNum, liveSummaryMetrics?.open_positions_count || 0, liveOpenPositionsCount);
-    const authoritativePendingOrders = Math.max(pendingOrdersNum, liveSummaryMetrics?.pending_orders_count || 0, liveOrdersCount);
+    // Authoritative client count resolved from deduplicated clients without dummy inflation
+    const authoritativeClientsList = await this.getClients(tenantId).catch(() => []);
+    const authoritativeClientsCount = authoritativeClientsList.length > 0 ? authoritativeClientsList.length : totalClientsNum;
+    const authoritativeActiveClientsCount = authoritativeClientsList.length > 0
+      ? authoritativeClientsList.filter(c => c.status === 'ACTIVE').length
+      : activeClientsNum;
+    const authoritativeOpenPositions = openPositionsNum;
+    const authoritativePendingOrders = pendingOrdersNum;
 
     const formatCurrency = (amount: number): string => {
       if (amount === 0) return '₹0';
@@ -1137,37 +1145,64 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         : (Array.isArray(liveRes.data?.items) ? liveRes.data.items : (Array.isArray(liveRes.data) ? liveRes.data : []));
 
       if (liveRes.success && remoteClients && remoteClients.length > 0) {
-        const seenIds = new Set(dbClients.map(c => c.id));
-        const seenCodes = new Set(dbClients.map(c => c.client_code));
+        const seenKeys = new Set<string>();
+        for (const c of dbClients) {
+          if (c.id) seenKeys.add(String(c.id).toLowerCase().trim());
+          if (c.client_code) seenKeys.add(String(c.client_code).toLowerCase().trim());
+        }
+
+        const defaultTenants = new Set(['vertex-default', 'default', 'TNT-001', 'ALL', 'ALL_TENANTS', '']);
 
         for (const rc of remoteClients) {
-          const clientId = rc.id || rc.userId || `CLT-${rc.clientCode || '001'}`;
-          const clientCode = rc.clientCode || rc.client_code || rc.userId || clientId;
-
-          if (!seenIds.has(clientId) && !seenCodes.has(clientCode)) {
-            seenIds.add(clientId);
-            seenCodes.add(clientCode);
-            dbClients.push({
-              id: clientId,
-              client_code: clientCode,
-              sub_broker_id: rc.sub_broker_id || null,
-              sub_broker_name: rc.sub_broker_name || 'Direct / Trading Platform',
-              broker_name: 'Apex Broking',
-              master_name: 'Alpha Prime Master',
-              tenant_id: rc.tenantId || rc.tenant_id || 'vertex-default',
-              tenant_name: 'Alpha Prime Capital',
-              name: rc.fullName || rc.name || 'Trader',
-              email: rc.email || `${clientCode.toLowerCase()}@tradingplatform.com`,
-              phone: rc.phone || '',
-              status: (rc.status || rc.accountStatus || 'ACTIVE').toUpperCase() === 'ACTIVE' ? 'ACTIVE' : 'SUSPENDED',
-              kyc_status: (rc.kycStatus === 'VERIFIED' || rc.kyc_status === 'VERIFIED' ? 'APPROVED' : (rc.kyc_status || 'APPROVED')) as KYCStatus,
-              wallet_balance: parseFloat(rc.balance || rc.wallet_balance || '100000'),
-              available_margin: parseFloat(rc.equity || rc.available_margin || rc.balance || '100000'),
-              todays_pl: 0,
-              open_positions_count: 0,
-              created_at: rc.createdAt ? new Date(rc.createdAt).toISOString().split('T')[0] : '2026-08-30'
-            });
+          // Tenant isolation check
+          if (tenantId && !defaultTenants.has(tenantId)) {
+            const rcTenant = rc.tenantId || rc.tenant_id;
+            if (!rcTenant || rcTenant !== tenantId) {
+              continue;
+            }
           }
+
+          const rawCode = rc.clientCode || rc.client_code || rc.userId || rc.id || '';
+          const userKey = String(rawCode).toLowerCase().trim();
+          const userIdKey = rc.userId ? String(rc.userId).toLowerCase().trim() : '';
+          const idKey = rc.id ? String(rc.id).toLowerCase().trim() : '';
+
+          // Filter out dummy/mock accounts
+          if (userKey.includes('mock_') || userKey.includes('test_') || userKey.includes('demo_')) {
+            continue;
+          }
+
+          if (seenKeys.has(userKey) || (userIdKey && seenKeys.has(userIdKey)) || (idKey && seenKeys.has(idKey))) {
+            continue;
+          }
+
+          seenKeys.add(userKey);
+          if (userIdKey) seenKeys.add(userIdKey);
+          if (idKey) seenKeys.add(idKey);
+
+          const clientId = rc.id || rc.userId || `CLT-${rawCode}`;
+          const clientCode = rawCode || clientId;
+
+          dbClients.push({
+            id: clientId,
+            client_code: clientCode,
+            sub_broker_id: rc.sub_broker_id || null,
+            sub_broker_name: rc.sub_broker_name || 'Direct / Trading Platform',
+            broker_name: 'Apex Broking',
+            master_name: 'Alpha Prime Master',
+            tenant_id: rc.tenantId || rc.tenant_id || tenantId || 'TNT-001',
+            tenant_name: 'Alpha Prime Capital',
+            name: rc.fullName || rc.name || rawCode || 'Trader',
+            email: rc.email || `${String(clientCode).toLowerCase()}@tradingplatform.com`,
+            phone: rc.phone || '',
+            status: (rc.status || rc.accountStatus || 'ACTIVE').toUpperCase() === 'ACTIVE' ? 'ACTIVE' : 'SUSPENDED',
+            kyc_status: (rc.kycStatus === 'VERIFIED' || rc.kyc_status === 'VERIFIED' ? 'APPROVED' : (rc.kyc_status || 'APPROVED')) as KYCStatus,
+            wallet_balance: parseFloat(rc.balance || rc.wallet_balance || '100000'),
+            available_margin: parseFloat(rc.equity || rc.available_margin || rc.balance || '100000'),
+            todays_pl: 0,
+            open_positions_count: 0,
+            created_at: rc.createdAt ? new Date(rc.createdAt).toISOString().split('T')[0] : '2026-08-30'
+          });
         }
       }
     } catch (e: any) {
@@ -2164,6 +2199,12 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       if (liveRes.success && ordersList && ordersList.length > 0) {
         const seenIds = new Set(dbOrders.map(o => o.order_id || o.id));
         for (const r of ordersList) {
+          if (tenantId && !defaultTenants.has(tenantId)) {
+            const ordTenant = r.tenant_id || r.tenantId;
+            if (!ordTenant || ordTenant !== tenantId) {
+              continue;
+            }
+          }
           const ordId = r.id || r.order_id;
           if (!seenIds.has(ordId)) {
             seenIds.add(ordId);
@@ -2226,6 +2267,12 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       if (liveRes.success && tradesList && tradesList.length > 0) {
         const seenIds = new Set(dbTrades.map(t => t.trade_id || t.id));
         for (const r of tradesList) {
+          if (tenantId && !defaultTenants.has(tenantId)) {
+            const trdTenant = r.tenant_id || r.tenantId;
+            if (!trdTenant || trdTenant !== tenantId) {
+              continue;
+            }
+          }
           const trdId = r.id || r.trade_id;
           if (!seenIds.has(trdId)) {
             seenIds.add(trdId);
@@ -2289,24 +2336,35 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       };
     });
 
-    // Attempt live position exposure query from Trading Platform and merge
+    // Query live positions from Trading Platform once, apply tenant filtering and deduplicate
     try {
       const liveRes = await tradingPlatformClient.getLivePositions(tenantId);
-      const positionsList = Array.isArray(liveRes.data) ? liveRes.data : (Array.isArray(liveRes.data?.positions) ? liveRes.data.positions : (Array.isArray(liveRes.data?.data) ? liveRes.data.data : null));
+      let positionsList = Array.isArray(liveRes.data)
+        ? liveRes.data
+        : (Array.isArray(liveRes.data?.positions) ? liveRes.data.positions : (Array.isArray(liveRes.data?.data) ? liveRes.data.data : null));
+
+      if (tenantId && positionsList) {
+        const defaultTenants = new Set(['vertex-default', 'default', 'TNT-001', 'ALL', 'ALL_TENANTS', '']);
+        if (!defaultTenants.has(tenantId)) {
+          positionsList = positionsList.filter((p: any) => (p.tenant_id || p.tenantId) === tenantId);
+        }
+      }
+
       if (liveRes.success && positionsList && positionsList.length > 0) {
         const seenIds = new Set(dbPositions.map(p => p.id));
         for (const r of positionsList) {
-          if (!seenIds.has(r.id)) {
-            seenIds.add(r.id);
-            const pnlNum = parseFloat(r.pnl || r.unrealized_pnl || '0');
-            const buyPriceNum = parseFloat(r.buy_price || r.avg_price || '0');
-            const curPriceNum = parseFloat(r.current_price || '0');
-            const qtyNum = parseFloat(r.quantity || r.qty || '0');
-            const marginVal = r.margin !== undefined && r.margin !== null ? parseFloat(String(r.margin)) : (r.margin_used !== undefined ? parseFloat(String(r.margin_used)) : (r.used_margin !== undefined ? parseFloat(String(r.used_margin)) : 0));
+          const posId = r.id || r.positionId || `POS-${r.symbol}-${r.side || 'BUY'}`;
+          if (!seenIds.has(posId)) {
+            seenIds.add(posId);
+            const pnlNum = parseFloat(r.pnl || r.unrealized_pnl || r.unrealizedPnl || '0');
+            const buyPriceNum = parseFloat(r.buy_price || r.avg_price || r.buyPrice || r.avgPrice || r.entryPrice || '0');
+            const curPriceNum = parseFloat(r.current_price || r.currentPrice || r.markPrice || buyPriceNum.toString());
+            const qtyNum = parseFloat(r.quantity || r.qty || '1');
+            const marginVal = r.margin !== undefined && r.margin !== null ? parseFloat(String(r.margin)) : (r.margin_used !== undefined ? parseFloat(String(r.margin_used)) : (r.used_margin !== undefined ? parseFloat(String(r.used_margin)) : parseFloat(r.marginUsed || '0')));
 
             dbPositions.push({
-              id: r.id,
-              client: r.client_name || r.client || 'Client',
+              id: posId,
+              client: r.client_name || r.clientName || r.client || r.userId || 'Live Trader',
               symbol: r.symbol,
               qty: qtyNum.toLocaleString('en-IN'),
               avgPrice: buyPriceNum.toLocaleString('en-IN'),
@@ -2323,47 +2381,6 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       }
     } catch {
       // Degraded / graceful fallback to local DB records
-    }
-
-    try {
-      const liveRes = await tradingPlatformClient.getLivePositions(tenantId);
-      let positionsList = Array.isArray(liveRes.data) ? liveRes.data : (Array.isArray(liveRes.data?.positions) ? liveRes.data.positions : null);
-      if (tenantId && positionsList) {
-        const defaultTenants = new Set(['vertex-default', 'default', 'TNT-001', 'ALL', 'ALL_TENANTS', '']);
-        if (!defaultTenants.has(tenantId)) {
-          positionsList = positionsList.filter((p: any) => (p.tenant_id || p.tenantId) === tenantId);
-        }
-      }
-      if (liveRes.success && positionsList && positionsList.length > 0) {
-        const seenIds = new Set(dbPositions.map(p => p.id));
-        for (const r of positionsList) {
-          const posId = r.id || r.positionId || `POS-${r.symbol}-${r.side}`;
-          if (!seenIds.has(posId)) {
-            const pnlNum = parseFloat(r.pnl || r.unrealizedPnl || '0');
-            const buyPriceNum = parseFloat(r.buyPrice || r.avgPrice || r.entryPrice || '0');
-            const curPriceNum = parseFloat(r.currentPrice || r.markPrice || buyPriceNum.toString());
-            const qtyNum = parseFloat(r.quantity || r.qty || '1');
-            const marginVal = parseFloat(r.margin || r.marginUsed || '0');
-            dbPositions.push({
-              id: posId,
-              client: r.clientName || r.client_name || r.userId || 'Live Trader',
-              symbol: r.symbol,
-              qty: qtyNum.toLocaleString('en-IN'),
-              avgPrice: buyPriceNum.toLocaleString('en-IN'),
-              currentPrice: curPriceNum.toLocaleString('en-IN'),
-              unrealizedPL: `${pnlNum >= 0 ? '+' : ''}₹${pnlNum.toLocaleString('en-IN')}`,
-              realizedPL: '+₹0',
-              margin: `₹${marginVal.toLocaleString('en-IN')}`,
-              unrealizedPLPositive: pnlNum >= 0,
-              realizedPLPositive: true,
-              status: r.status || 'OPEN'
-            });
-            seenIds.add(posId);
-          }
-        }
-      }
-    } catch (liveErr: any) {
-      // non-fatal
     }
     return dbPositions;
   }

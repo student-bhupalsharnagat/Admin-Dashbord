@@ -166,22 +166,17 @@ export const SupportView: React.FC<SupportViewProps> = ({ onNotify, currentUser 
   useEffect(() => {
     fetchTickets();
 
-    // Real-time EventSource listener
-    let eventSource: EventSource | null = null;
-    try {
-      eventSource = new EventSource('/api/admin/events/stream');
-      eventSource.onmessage = (e) => {
-        try {
-          const evt = JSON.parse(e.data);
-          if (evt?.eventType?.startsWith('support.')) {
-            fetchTickets();
-          }
-        } catch {}
-      };
-    } catch {}
+    // Listen to shared window admin:live-event to avoid socket starvation
+    const handleLiveEvent = (e: any) => {
+      const evt = e.detail;
+      if (evt?.eventType?.startsWith('support.')) {
+        fetchTickets();
+      }
+    };
 
+    window.addEventListener('admin:live-event', handleLiveEvent);
     return () => {
-      if (eventSource) eventSource.close();
+      window.removeEventListener('admin:live-event', handleLiveEvent);
     };
   }, []);
 

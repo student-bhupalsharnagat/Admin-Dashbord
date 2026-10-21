@@ -655,7 +655,7 @@ export class EventHandler {
     await query(
       `INSERT INTO wallets (id, client_id, client_code, tenant_id, balance, equity, used_margin, available_margin, currency, updated_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'INR', CURRENT_TIMESTAMP)
-       ON CONFLICT (tenant_id, client_id) DO UPDATE SET
+       ON CONFLICT (id) DO UPDATE SET
          client_code = EXCLUDED.client_code,
          balance = EXCLUDED.balance,
          equity = EXCLUDED.equity,
@@ -806,7 +806,7 @@ export class EventHandler {
     await query(
       `INSERT INTO wallets (id, client_id, client_code, tenant_id, balance, equity, used_margin, available_margin, currency, updated_at)
        VALUES ($1, $2, $3, $4, COALESCE($5, 0.00), COALESCE($6, 0.00), COALESCE($7, 0.00), $8, 'INR', CURRENT_TIMESTAMP)
-       ON CONFLICT (tenant_id, client_id) DO UPDATE SET
+       ON CONFLICT (id) DO UPDATE SET
          client_code = EXCLUDED.client_code,
          balance = COALESCE(EXCLUDED.balance, wallets.balance),
          equity = COALESCE(EXCLUDED.equity, wallets.equity),
@@ -1547,7 +1547,7 @@ export class EventHandler {
             entryId,
             tenantId,
             item.clientId || item.client_id || null,
-            item.clientCode || item.client_code || null,
+            item.clientCode || item.client_code || item.clientId || item.client_id || 'CLT-DEFAULT',
             item.clientName || item.client_name || 'Client',
             item.entryType || item.type || 'ADJUSTMENT',
             Number(item.debit || 0),
