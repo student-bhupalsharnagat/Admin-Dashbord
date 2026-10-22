@@ -118,7 +118,16 @@ interface SupportViewProps {
 export const SupportView: React.FC<SupportViewProps> = ({ onNotify, currentUser }) => {
   const canApprove = hasPermission(currentUser?.role, 'SUPPORT', 'APPROVE');
   const canEdit = hasPermission(currentUser?.role, 'SUPPORT', 'EDIT');
-  const [tickets, setTickets] = useState<SupportTicketItem[]>(INITIAL_TICKETS);
+  const [tickets, setTickets] = useState<SupportTicketItem[]>(() => {
+    try {
+      const stored: string[] = JSON.parse(localStorage.getItem('admin_resolved_tickets') || '[]');
+      return INITIAL_TICKETS.map(t =>
+        stored.includes(t.ticketId) || stored.includes(t.id) ? { ...t, status: 'RESOLVED' as const } : t
+      );
+    } catch {
+      return INITIAL_TICKETS;
+    }
+  });
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [priorityFilter, setPriorityFilter] = useState('ALL');
@@ -135,6 +144,7 @@ export const SupportView: React.FC<SupportViewProps> = ({ onNotify, currentUser 
       .then(res => (res.ok ? res.json() : null))
       .then(data => {
         if (Array.isArray(data) && data.length > 0) {
+          const stored: string[] = JSON.parse(localStorage.getItem('admin_resolved_tickets') || '[]');
           const mapped: SupportTicketItem[] = data.map((d: any) => ({
             id: d.id,
             ticketId: d.ticket_id || d.ticketId || d.id,
@@ -142,7 +152,9 @@ export const SupportView: React.FC<SupportViewProps> = ({ onNotify, currentUser 
             subject: d.subject || 'Support Request',
             category: (d.category?.toUpperCase() || 'TRADING') as any,
             priority: (d.priority?.toUpperCase() || 'MEDIUM') as any,
-            status: (d.status === 'IN_PROGRESS' ? 'IN PROGRESS' : d.status?.toUpperCase() || 'OPEN') as any,
+            status: (stored.includes(d.ticket_id) || stored.includes(d.ticketId) || stored.includes(d.id)
+              ? 'RESOLVED'
+              : (d.status === 'IN_PROGRESS' ? 'IN PROGRESS' : d.status?.toUpperCase() || 'OPEN')) as any,
             assignedTo: d.assigned_to || d.assignedTo || 'Support Desk',
             date: d.created_at ? d.created_at.split('T')[0] : (d.date || '2024-04-15'),
             description: d.description || d.subject,
@@ -188,6 +200,19 @@ export const SupportView: React.FC<SupportViewProps> = ({ onNotify, currentUser 
 
   const handleResolveTicket = async (ticketId: string, e?: React.MouseEvent) => {
     e?.stopPropagation();
+    setTickets(prev =>
+      prev.map(t => (t.ticketId === ticketId || t.id === ticketId ? { ...t, status: 'RESOLVED' } : t))
+    );
+    if (selectedTicketForDetail?.ticketId === ticketId || selectedTicketForDetail?.id === ticketId) {
+      setSelectedTicketForDetail(prev => prev ? { ...prev, status: 'RESOLVED' } : null);
+    }
+    try {
+      const stored: string[] = JSON.parse(localStorage.getItem('admin_resolved_tickets') || '[]');
+      if (!stored.includes(ticketId)) {
+        stored.push(ticketId);
+        localStorage.setItem('admin_resolved_tickets', JSON.stringify(stored));
+      }
+    } catch {}
     try {
       await fetch(`/api/admin/support/${ticketId}`, {
         method: 'PATCH',
@@ -196,12 +221,6 @@ export const SupportView: React.FC<SupportViewProps> = ({ onNotify, currentUser 
       });
     } catch {
       // Non-blocking
-    }
-    setTickets(prev =>
-      prev.map(t => (t.ticketId === ticketId ? { ...t, status: 'RESOLVED' } : t))
-    );
-    if (selectedTicketForDetail?.ticketId === ticketId) {
-      setSelectedTicketForDetail(prev => prev ? { ...prev, status: 'RESOLVED' } : null);
     }
     onNotify?.(`Ticket ${ticketId} marked as RESOLVED`, 'success');
   };

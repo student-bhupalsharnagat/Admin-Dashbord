@@ -1414,10 +1414,11 @@ export class MockTradingDataProvider implements ITradingDataProvider {
     return newTenant;
   }
 
-  async updateTenantStatus(id: string, status: 'ACTIVE' | 'SUSPENDED' | 'INACTIVE'): Promise<Tenant | null> {
-    const tenant = this.tenants.find(t => t.id === id);
+  async updateTenantStatus(id: string, status: 'ACTIVE' | 'SUSPENDED' | 'INACTIVE' | string): Promise<Tenant | null> {
+    const norm = (status || 'ACTIVE').toString().toUpperCase() as any;
+    const tenant = this.tenants.find(t => t.id === id || t.code === id);
     if (tenant) {
-      tenant.status = status;
+      tenant.status = norm;
       return tenant;
     }
     return null;
@@ -1472,13 +1473,18 @@ export class MockTradingDataProvider implements ITradingDataProvider {
   }
 
   async createBroker(data: Partial<Broker>): Promise<Broker> {
-    const master = this.masters.find(m => m.id === data.master_id) || this.masters[0];
-    const newBroker: Broker = {
-      id: `BRK-00${this.brokers.length + 1}`,
-      master_id: master.id,
-      master_name: master.name,
-      tenant_id: master.tenant_id,
-      tenant_name: master.tenant_name,
+    const master = this.masters.find(m => m.id === (data.master_id || (data as any).masterId) || m.name === (data as any).masterName || m.name === (data as any).parentMaster) || this.masters[0];
+    const resolvedMasterName = (data as any).masterName || (data as any).parentMaster || (master ? master.name : 'Apex Capital');
+    const newBroker: any = {
+      id: data.id || `BRK-00${this.brokers.length + 1}`,
+      master_id: master?.id || 'MST-001',
+      masterId: master?.id || 'MST-001',
+      master_name: resolvedMasterName,
+      masterName: resolvedMasterName,
+      parentMaster: resolvedMasterName,
+      master: resolvedMasterName,
+      tenant_id: master?.tenant_id || 'TNT-001',
+      tenant_name: master?.tenant_name || 'Alpha Prime Capital',
       name: data.name || 'New Broker',
       code: data.code || `BRK-${this.brokers.length + 101}`,
       email: data.email || 'broker@tradepro.com',
@@ -1490,18 +1496,22 @@ export class MockTradingDataProvider implements ITradingDataProvider {
       created_at: new Date().toISOString().split('T')[0]
     };
     this.brokers.push(newBroker);
-    master.brokers_count += 1;
+    if (master) master.brokers_count += 1;
     return newBroker;
   }
 
   async createSubBroker(data: Partial<SubBroker>): Promise<SubBroker> {
-    const broker = this.brokers.find(b => b.id === data.broker_id) || this.brokers[0];
-    const newSubBroker: SubBroker = {
-      id: `SBRK-00${this.subBrokers.length + 1}`,
-      broker_id: broker.id,
-      broker_name: broker.name,
-      tenant_id: broker.tenant_id,
-      tenant_name: broker.tenant_name,
+    const broker = this.brokers.find(b => b.id === (data.broker_id || (data as any).brokerId) || b.name === (data as any).brokerName || b.name === (data as any).parentBroker) || this.brokers[0];
+    const resolvedBrokerName = (data as any).brokerName || (data as any).parentBroker || (broker ? broker.name : 'Ryan Chen');
+    const newSubBroker: any = {
+      id: data.id || `SBRK-00${this.subBrokers.length + 1}`,
+      broker_id: broker?.id || 'BRK-001',
+      brokerId: broker?.id || 'BRK-001',
+      broker_name: resolvedBrokerName,
+      brokerName: resolvedBrokerName,
+      parentBroker: resolvedBrokerName,
+      tenant_id: broker?.tenant_id || 'TNT-001',
+      tenant_name: broker?.tenant_name || 'Alpha Prime Capital',
       name: data.name || 'New Sub Broker',
       code: data.code || `SB-${this.subBrokers.length + 101}`,
       email: data.email || 'subbroker@tradepro.com',
@@ -1512,34 +1522,45 @@ export class MockTradingDataProvider implements ITradingDataProvider {
       created_at: new Date().toISOString().split('T')[0]
     };
     this.subBrokers.push(newSubBroker);
-    broker.sub_brokers_count += 1;
+    if (broker) broker.sub_brokers_count += 1;
     return newSubBroker;
   }
 
   async createClient(data: Partial<Client>): Promise<Client> {
     const subBroker = this.subBrokers.find(sb => sb.id === data.sub_broker_id) || this.subBrokers[0];
-    const broker = this.brokers.find(b => b.id === subBroker.broker_id) || this.brokers[0];
-    const newClient: Client = {
-      id: `CLT-00${this.clients.length + 1}`,
-      client_code: `CLT00${this.clients.length + 1}`,
-      sub_broker_id: subBroker.id,
-      sub_broker_name: subBroker.name,
-      broker_name: broker.name,
-      master_name: broker.master_name,
-      tenant_id: subBroker.tenant_id,
-      tenant_name: subBroker.tenant_name,
+    const broker = this.brokers.find(b => b.id === subBroker?.broker_id) || this.brokers[0];
+    const rawBal = (data as any).balance !== undefined ? parseFloat(String((data as any).balance).replace(/[^\d.-]/g, '')) : (data.wallet_balance || 0);
+    const resolvedStatus = ((data as any).account || data.status || 'ACTIVE').toUpperCase();
+    const resolvedKyc = ((data as any).kyc || data.kyc_status || 'APPROVED').toUpperCase();
+
+    const newClient: any = {
+      id: data.id || `CLT-00${this.clients.length + 1}`,
+      client_code: (data as any).client_code || `CLT00${this.clients.length + 1}`,
+      sub_broker_id: subBroker?.id || 'SBRK-001',
+      sub_broker_name: (data as any).subBroker || (data as any).sub_broker_name || subBroker?.name || 'Tom Anderson',
+      broker_name: (data as any).broker || (data as any).broker_name || broker?.name || 'Ryan Chen',
+      broker: (data as any).broker || (data as any).broker_name || broker?.name || 'Ryan Chen',
+      master_name: (data as any).master || (data as any).master_name || broker?.master_name || 'Apex Capital',
+      master: (data as any).master || (data as any).master_name || broker?.master_name || 'Apex Capital',
+      tenant_id: subBroker?.tenant_id || 'TNT-001',
+      tenant_name: subBroker?.tenant_name || 'Alpha Prime Capital',
       name: data.name || 'New Client',
       email: data.email || 'client@trade.com',
       phone: data.phone || '+91 98000 00000',
-      kyc_status: 'PENDING',
-      wallet_balance: data.wallet_balance || 0,
-      available_margin: data.available_margin || 0,
+      kyc_status: resolvedKyc,
+      kyc: resolvedKyc,
+      balance: `₹${rawBal.toLocaleString('en-IN')}`,
+      wallet_balance: rawBal,
+      available_margin: rawBal,
       todays_pl: 0,
-      status: 'ACTIVE',
+      pl: '+₹0',
+      pnl: 0,
+      status: resolvedStatus,
+      account: resolvedStatus,
       created_at: new Date().toISOString().split('T')[0]
     };
     this.clients.push(newClient);
-    subBroker.clients_count += 1;
+    if (subBroker) subBroker.clients_count += 1;
 
     // Trigger S2S account synchronization with the Trading Platform
     try {

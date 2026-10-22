@@ -27,9 +27,17 @@ export const CreateBrokerModal: React.FC<CreateBrokerModalProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
+    const activeMasterId = masterId || masters[0]?.id || '';
+    const selectedMaster = masters.find(m => m.id === activeMasterId || m.name === activeMasterId);
+    const masterName = selectedMaster?.name || (masters[0]?.name || '');
     try {
       await onSubmit({
-        master_id: masterId,
+        master_id: activeMasterId,
+        masterId: activeMasterId,
+        master_name: masterName,
+        masterName: masterName,
+        parentMaster: masterName,
+        master: masterName,
         name,
         code,
         email,

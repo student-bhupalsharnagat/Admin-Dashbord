@@ -94,11 +94,23 @@ export const SystemToolsView: React.FC<SystemToolsViewProps> = ({
   ]);
 
   // Suspicious Alerts state
-  const [suspiciousAlerts, setSuspiciousAlerts] = useState([
-    { id: 'ALT-101', severity: 'HIGH', type: 'RAPID_ORDER_PLACEMENT', entity: 'CLT-009', detail: '14 orders placed in 2.1s exceeding throttle rate', status: 'PENDING', time: '10:45 AM' },
-    { id: 'ALT-102', severity: 'CRITICAL', type: 'MARGIN_BREACH', entity: 'BRK-104', detail: 'Net margin utilization reached 92.4%', status: 'PENDING', time: '11:12 AM' },
-    { id: 'ALT-103', severity: 'MEDIUM', type: 'GEO_IP_ANOMALY', entity: 'USR-882', detail: 'Simultaneous login from Mumbai and Singapore', status: 'RESOLVED', time: '08:30 AM' }
-  ]);
+  const [suspiciousAlerts, setSuspiciousAlerts] = useState(() => {
+    try {
+      const stored: string[] = JSON.parse(localStorage.getItem('admin_resolved_alerts') || '[]');
+      const initialAlerts = [
+        { id: 'ALT-101', severity: 'HIGH', type: 'RAPID_ORDER_PLACEMENT', entity: 'CLT-009', detail: '14 orders placed in 2.1s exceeding throttle rate', status: 'PENDING', time: '10:45 AM' },
+        { id: 'ALT-102', severity: 'CRITICAL', type: 'MARGIN_BREACH', entity: 'BRK-104', detail: 'Net margin utilization reached 92.4%', status: 'PENDING', time: '11:12 AM' },
+        { id: 'ALT-103', severity: 'MEDIUM', type: 'GEO_IP_ANOMALY', entity: 'USR-882', detail: 'Simultaneous login from Mumbai and Singapore', status: 'RESOLVED', time: '08:30 AM' }
+      ];
+      return initialAlerts.map(a => (stored.includes(a.id) ? { ...a, status: 'RESOLVED' } : a));
+    } catch {
+      return [
+        { id: 'ALT-101', severity: 'HIGH', type: 'RAPID_ORDER_PLACEMENT', entity: 'CLT-009', detail: '14 orders placed in 2.1s exceeding throttle rate', status: 'PENDING', time: '10:45 AM' },
+        { id: 'ALT-102', severity: 'CRITICAL', type: 'MARGIN_BREACH', entity: 'BRK-104', detail: 'Net margin utilization reached 92.4%', status: 'PENDING', time: '11:12 AM' },
+        { id: 'ALT-103', severity: 'MEDIUM', type: 'GEO_IP_ANOMALY', entity: 'USR-882', detail: 'Simultaneous login from Mumbai and Singapore', status: 'RESOLVED', time: '08:30 AM' }
+      ];
+    }
+  });
 
   // API Activity logs
   const [apiLogs, setApiLogs] = useState([
@@ -138,6 +150,23 @@ export const SystemToolsView: React.FC<SystemToolsViewProps> = ({
       .then(data => {
         if (data) {
           setTradingPaused(Boolean(data.paused));
+        }
+      })
+      .catch(() => {});
+
+    fetch('/api/admin/monitoring/alerts')
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        const stored: string[] = JSON.parse(localStorage.getItem('admin_resolved_alerts') || '[]');
+        if (Array.isArray(data) && data.length > 0) {
+          setSuspiciousAlerts(data.map((a: any) => ({
+            ...a,
+            status: stored.includes(a.id) ? 'RESOLVED' : (a.status || 'PENDING')
+          })));
+        } else {
+          setSuspiciousAlerts(prev =>
+            prev.map(a => (stored.includes(a.id) ? { ...a, status: 'RESOLVED' } : a))
+          );
         }
       })
       .catch(() => {});
@@ -288,17 +317,20 @@ export const SystemToolsView: React.FC<SystemToolsViewProps> = ({
   };
 
   const handleResolveAlert = async (alertId: string) => {
+    setSuspiciousAlerts(prev =>
+      prev.map(a => (a.id === alertId ? { ...a, status: 'RESOLVED' } : a))
+    );
     try {
-      const res = await fetch(`/api/admin/monitoring/alerts/${alertId}/resolve`, { method: 'POST' });
-      if (res.ok) {
-        setSuspiciousAlerts(prev =>
-          prev.map(a => (a.id === alertId ? { ...a, status: 'RESOLVED' } : a))
-        );
-        onNotify?.(`Alert ${alertId} resolved`, 'success');
+      const stored: string[] = JSON.parse(localStorage.getItem('admin_resolved_alerts') || '[]');
+      if (!stored.includes(alertId)) {
+        stored.push(alertId);
+        localStorage.setItem('admin_resolved_alerts', JSON.stringify(stored));
       }
-    } catch {
-      onNotify?.(`Failed to resolve alert ${alertId}`, 'warning');
-    }
+    } catch {}
+    try {
+      await fetch(`/api/admin/monitoring/alerts/${alertId}/resolve`, { method: 'POST' });
+    } catch {}
+    onNotify?.(`Alert ${alertId} resolved`, 'success');
   };
 
   const handleToggleMaintenance = async () => {

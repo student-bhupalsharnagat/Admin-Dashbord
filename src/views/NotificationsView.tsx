@@ -111,7 +111,17 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
   onNotify,
   onNavigateTab
 }) => {
-  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [notifications, setNotifications] = useState<NotificationItem[]>(() => {
+    try {
+      const storedRead: string[] = JSON.parse(localStorage.getItem('admin_read_notifications') || '[]');
+      return INITIAL_NOTIFICATIONS.map(n => ({
+        ...n,
+        read: storedRead.includes(n.id) ? true : n.read
+      }));
+    } catch {
+      return INITIAL_NOTIFICATIONS;
+    }
+  });
   const [activeCategory, setActiveCategory] = useState<string>('All');
 
   useEffect(() => {
@@ -125,14 +135,15 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
         });
         if (res.ok) {
           const data = await res.json();
-          if (Array.isArray(data) && isMounted) {
+          if (Array.isArray(data) && data.length > 0 && isMounted) {
+            const storedRead: string[] = JSON.parse(localStorage.getItem('admin_read_notifications') || '[]');
             const mapped: NotificationItem[] = data.map((d: any, idx: number) => ({
               id: d.id || `notif-backend-${idx}`,
               title: d.title || 'Notification',
               message: d.message || d.details || '',
               timeAgo: d.created_at ? new Date(d.created_at).toLocaleTimeString() : 'Just now',
               category: d.category || 'System',
-              read: d.is_read ?? d.read ?? false,
+              read: storedRead.includes(d.id) || d.is_read || d.read || false,
               icon: Bell,
               iconBg: 'bg-blue-500/10',
               iconColor: 'text-blue-400',
@@ -142,7 +153,7 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
           }
         }
       } catch {
-        if (isMounted) setNotifications([]);
+        // Keeps state
       }
     };
     fetchNotifications();
@@ -154,16 +165,36 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
   const unreadCount = notifications.filter(n => !n.read).length;
 
   const handleMarkAllAsRead = async () => {
+    const allIds = notifications.map(n => n.id);
+    try {
+      localStorage.setItem('admin_read_notifications', JSON.stringify(allIds));
+      await fetch('/api/admin/notifications/all/read', { method: 'POST' });
+    } catch {}
     setNotifications(prev => prev.map(n => ({ ...n, read: true })));
     onNotify?.('All notifications marked as read', 'success');
   };
 
   const handleToggleRead = async (id: string, e?: React.MouseEvent) => {
     e?.stopPropagation();
+    let willBeRead = false;
     setNotifications(prev =>
-      prev.map(n => (n.id === id ? { ...n, read: !n.read } : n))
+      prev.map(n => {
+        if (n.id === id) {
+          willBeRead = !n.read;
+          return { ...n, read: willBeRead };
+        }
+        return n;
+      })
     );
     try {
+      const stored: string[] = JSON.parse(localStorage.getItem('admin_read_notifications') || '[]');
+      if (willBeRead) {
+        if (!stored.includes(id)) stored.push(id);
+      } else {
+        const idx = stored.indexOf(id);
+        if (idx !== -1) stored.splice(idx, 1);
+      }
+      localStorage.setItem('admin_read_notifications', JSON.stringify(stored));
       const token = localStorage.getItem('auth_token') || sessionStorage.getItem('auth_token');
       await fetch(`/api/admin/notifications/${id}/read`, {
         method: 'POST',
@@ -183,9 +214,7 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
   const handleItemClick = (item: NotificationItem) => {
     // mark read
     if (!item.read) {
-      setNotifications(prev =>
-        prev.map(n => (n.id === item.id ? { ...n, read: true } : n))
-      );
+      handleToggleRead(item.id);
     }
     // navigate if targetTab available
     if (item.targetTab && onNavigateTab) {

@@ -478,10 +478,10 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
 
         <button
           onClick={() => setShowCreateModal(true)}
-          className="flex items-center gap-1.5 px-3.5 py-2 bg-[#2563eb] hover:bg-blue-600 text-white font-medium text-xs rounded-lg transition-colors shadow-sm"
+          className="flex items-center gap-1.5 px-3.5 py-2 bg-[#2563eb] hover:bg-blue-600 text-white font-medium text-xs rounded-lg transition-colors shadow-sm cursor-pointer"
         >
           <Plus size={14} />
-          Create Plan
+          {activeTab === 'rules' ? 'Add Rule' : 'Create Plan'}
         </button>
       </div>
 
@@ -597,8 +597,15 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
       {/* Tab 2: Rules Dashboard & Specification */}
       {activeTab === 'rules' && (
         !selectedRule ? (
-          <div className="bg-[#070e1b] border border-[#121d33] rounded-xl p-12 text-center text-slate-500 text-xs">
-            No commission rules configured in database. Click &quot;Add Rule&quot; to configure one.
+          <div className="bg-[#070e1b] border border-[#121d33] rounded-xl p-12 text-center text-slate-500 text-xs flex flex-col items-center justify-center space-y-3">
+            <p>No commission rules configured in database. Click &quot;Add Rule&quot; to configure one.</p>
+            <button
+              onClick={() => setShowCreateModal(true)}
+              className="flex items-center gap-1.5 px-3.5 py-2 bg-[#2563eb] hover:bg-blue-600 text-white font-medium text-xs rounded-lg transition-colors shadow-sm cursor-pointer"
+            >
+              <Plus size={14} />
+              Add Rule
+            </button>
           </div>
         ) : (
         <div className="space-y-6 animate-in fade-in duration-150">

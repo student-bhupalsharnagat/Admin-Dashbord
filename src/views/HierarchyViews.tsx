@@ -861,10 +861,16 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
         setMastersList([saved, ...mastersList]);
         notify(`Master ${saved.name} (${saved.id}) created successfully!`, 'success');
       } else if (level === 'brokers') {
+        const selectedMaster = mastersList.find(m => m.id === formData.masterId || m.name === formData.master || m.id === formData.master);
+        const resolvedMasterName = formData.masterName || selectedMaster?.name || formData.master || 'Apex Capital Group';
+        const resolvedMasterId = formData.masterId || selectedMaster?.id || 'MST001';
         const newBroker = {
           id: formData.id || `BRK00${brokersList.length + 1}`,
           name: formData.name,
-          master: formData.master || 'Apex Capital Group',
+          master: resolvedMasterName,
+          masterName: resolvedMasterName,
+          masterId: resolvedMasterId,
+          parentMaster: resolvedMasterName,
           email: formData.email || `broker@${formData.name.toLowerCase().replace(/\s+/g, '')}.com`,
           subBrokers: Number(formData.subBrokers) || 0,
           clients: Number(formData.clients) || 0,
@@ -883,10 +889,15 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
         setBrokersList([saved, ...brokersList]);
         notify(`Broker ${saved.name} (${saved.id}) registered!`, 'success');
       } else if (level === 'sub-brokers') {
+        const selectedBroker = brokersList.find(b => b.id === formData.brokerId || b.name === formData.parentBroker || b.id === formData.parentBroker);
+        const resolvedBrokerName = formData.brokerName || selectedBroker?.name || formData.parentBroker || 'Ryan Chen';
+        const resolvedBrokerId = formData.brokerId || selectedBroker?.id || 'BRK001';
         const newSub = {
           id: formData.id || `SBK00${subBrokersList.length + 1}`,
           name: formData.name,
-          parentBroker: formData.parentBroker || 'Ryan Chen',
+          parentBroker: resolvedBrokerName,
+          brokerName: resolvedBrokerName,
+          brokerId: resolvedBrokerId,
           email: formData.email || `sub@${formData.name.toLowerCase().replace(/\s+/g, '')}.com`,
           clients: Number(formData.clients) || 0,
           turnover: formData.turnover || '$0.0M',
@@ -1301,7 +1312,7 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
                       {broker.name}
                     </td>
                     <td className="py-3.5 px-4 text-slate-300 whitespace-nowrap">
-                      {broker.master}
+                      {(broker as any).masterName || (broker as any).parentMaster || broker.master || (broker as any).master_name || 'Unassigned'}
                     </td>
                     <td className="py-3.5 px-4 text-slate-400 font-normal">
                       {broker.email}
@@ -1409,7 +1420,7 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
                       {sub.name}
                     </td>
                     <td className="py-3.5 px-4 text-slate-300 whitespace-nowrap">
-                      {sub.parentBroker}
+                      {(sub as any).brokerName || sub.parentBroker || (sub as any).parent_broker || (sub as any).broker || 'Unassigned'}
                     </td>
                     <td className="py-3.5 px-4 text-slate-400 font-normal">
                       {sub.email}
@@ -1724,22 +1735,16 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
                     <span className="text-white font-semibold text-xs">{selectedEntity.company}</span>
                   </div>
                 )}
-                {selectedEntity.master && (
+                {(selectedEntity.master || selectedEntity.masterName || selectedEntity.parentMaster) && (
                   <div className="p-2.5 rounded-lg bg-[#0d162a] border border-[#152342]">
                     <span className="text-slate-400 text-[10px] block">Parent Master</span>
-                    <span className="text-white font-semibold text-xs">{selectedEntity.master}</span>
+                    <span className="text-white font-semibold text-xs">{selectedEntity.masterName || selectedEntity.parentMaster || selectedEntity.master}</span>
                   </div>
                 )}
-                {selectedEntity.broker && (
+                {(selectedEntity.broker || selectedEntity.parentBroker || selectedEntity.brokerName) && (
                   <div className="p-2.5 rounded-lg bg-[#0d162a] border border-[#152342]">
                     <span className="text-slate-400 text-[10px] block">Parent Broker</span>
-                    <span className="text-white font-semibold text-xs">{selectedEntity.broker}</span>
-                  </div>
-                )}
-                {selectedEntity.parentBroker && (
-                  <div className="p-2.5 rounded-lg bg-[#0d162a] border border-[#152342]">
-                    <span className="text-slate-400 text-[10px] block">Parent Broker</span>
-                    <span className="text-white font-semibold text-xs">{selectedEntity.parentBroker}</span>
+                    <span className="text-white font-semibold text-xs">{selectedEntity.brokerName || selectedEntity.parentBroker || selectedEntity.broker}</span>
                   </div>
                 )}
                 {selectedEntity.turnover && (
@@ -1853,8 +1858,16 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
                     Assign Parent Master
                   </label>
                   <select
-                    value={formData.master || ''}
-                    onChange={e => setFormData({ ...formData, master: e.target.value })}
+                    value={formData.master || formData.masterName || (mastersList[0]?.name || '')}
+                    onChange={e => {
+                      const sel = mastersList.find(m => m.name === e.target.value || m.id === e.target.value);
+                      setFormData({
+                        ...formData,
+                        master: sel?.name || e.target.value,
+                        masterName: sel?.name || e.target.value,
+                        masterId: sel?.id || ''
+                      });
+                    }}
                     className="w-full px-3 py-1.5 bg-[#080e1c] border border-[#152342] rounded-lg text-slate-200 focus:outline-none focus:border-blue-500"
                   >
                     {mastersList.map(m => (
@@ -1872,8 +1885,16 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
                     Assign Parent Broker
                   </label>
                   <select
-                    value={formData.parentBroker || ''}
-                    onChange={e => setFormData({ ...formData, parentBroker: e.target.value })}
+                    value={formData.parentBroker || formData.brokerName || (brokersList[0]?.name || '')}
+                    onChange={e => {
+                      const sel = brokersList.find(b => b.name === e.target.value || b.id === e.target.value);
+                      setFormData({
+                        ...formData,
+                        parentBroker: sel?.name || e.target.value,
+                        brokerName: sel?.name || e.target.value,
+                        brokerId: sel?.id || ''
+                      });
+                    }}
                     className="w-full px-3 py-1.5 bg-[#080e1c] border border-[#152342] rounded-lg text-slate-200 focus:outline-none focus:border-blue-500"
                   >
                     {brokersList.map(b => (

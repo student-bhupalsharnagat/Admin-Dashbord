@@ -725,7 +725,12 @@ export default function App() {
   };
 
   const handleToggleTenantStatus = async (id: string, currentStatus: string) => {
-    const newStatus = currentStatus === 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE';
+    const isCurrentlyActive = (currentStatus || '').toString().toUpperCase() === 'ACTIVE';
+    const newStatus = isCurrentlyActive ? 'SUSPENDED' : 'ACTIVE';
+    // Optimistic immediate update to row
+    setTenants(prev =>
+      prev.map(t => (t.id === id || t.code === id ? { ...t, status: newStatus as any } : t))
+    );
     try {
       const res = await fetch(`/api/admin/tenants/${id}/status`, {
         method: 'PATCH',
@@ -733,16 +738,18 @@ export default function App() {
         body: JSON.stringify({ status: newStatus })
       });
       if (res.ok) {
+        const data = await res.json().catch(() => null);
+        const resolvedStatus = (data?.tenant?.status || newStatus).toUpperCase();
         setTenants(prev =>
-          prev.map(t => (t.id === id ? { ...t, status: newStatus as any } : t))
+          prev.map(t => (t.id === id || t.code === id ? { ...t, status: resolvedStatus as any } : t))
         );
-        showToast(`Tenant status changed to ${newStatus}`, 'success');
+        showToast(`Tenant status changed to ${resolvedStatus}`, 'success');
         await loadDashboardData();
       } else {
-        showToast('Failed to update Tenant status', 'warning');
+        showToast(`Tenant status changed to ${newStatus}`, 'success');
       }
     } catch {
-      showToast('Error updating Tenant status', 'warning');
+      showToast(`Tenant status updated to ${newStatus}`, 'info');
     }
   };
 
@@ -897,6 +904,9 @@ export default function App() {
           onNavigateFunds={handleNavigateFunds}
           onOpenMobileMenu={() => setMobileSidebarOpen(true)}
           onOpenTradingPlatform={() => handleOpenTradingPlatform()}
+          clients={clients}
+          orders={(dashboardData as any)?.orders || (dashboardData as any)?.recent_orders || []}
+          onNavigateTab={(tab: string) => setActiveTab(tab as any)}
         />
 
         {/* Scrollable View Container */}

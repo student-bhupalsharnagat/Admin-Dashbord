@@ -36,6 +36,9 @@ interface AdminHeaderProps {
   onNavigateFunds?: (tab: 'deposits' | 'withdrawals', status?: string) => void;
   onOpenMobileMenu?: () => void;
   onOpenTradingPlatform?: () => void;
+  clients?: any[];
+  orders?: any[];
+  onNavigateTab?: (tab: string) => void;
 }
 
 export const AdminHeader: React.FC<AdminHeaderProps> = ({
@@ -51,7 +54,10 @@ export const AdminHeader: React.FC<AdminHeaderProps> = ({
   onOpenNotifications,
   onNavigateFunds,
   onOpenMobileMenu,
-  onOpenTradingPlatform
+  onOpenTradingPlatform,
+  clients = [],
+  orders = [],
+  onNavigateTab
 }) => {
   const { theme, toggleTheme } = useTheme();
   const [showProfileMenu, setShowProfileMenu] = useState(false);
@@ -59,6 +65,7 @@ export const AdminHeader: React.FC<AdminHeaderProps> = ({
   const [showNotificationsMenu, setShowNotificationsMenu] = useState(false);
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
+  const [searchFocused, setSearchFocused] = useState(false);
 
   // Active modal triggered from profile dropdown
   const [activeModal, setActiveModal] = useState<'profile' | 'security' | 'password' | 'settings' | null>(null);
@@ -67,6 +74,7 @@ export const AdminHeader: React.FC<AdminHeaderProps> = ({
   const profileMenuRef = useRef<HTMLDivElement>(null);
   const tenantMenuRef = useRef<HTMLDivElement>(null);
   const notificationsMenuRef = useRef<HTMLDivElement>(null);
+  const searchContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -80,11 +88,41 @@ export const AdminHeader: React.FC<AdminHeaderProps> = ({
       if (notificationsMenuRef.current && !notificationsMenuRef.current.contains(target)) {
         setShowNotificationsMenu(false);
       }
+      if (searchContainerRef.current && !searchContainerRef.current.contains(target)) {
+        setSearchFocused(false);
+      }
     };
 
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  const searchResults = React.useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return { clients: [], orders: [], total: 0 };
+
+    const matchedClients = (clients || []).filter((c: any) =>
+      (c.name || '').toLowerCase().includes(q) ||
+      (c.email || '').toLowerCase().includes(q) ||
+      (c.id || '').toLowerCase().includes(q) ||
+      (c.client_code || '').toLowerCase().includes(q) ||
+      (c.clientCode || '').toLowerCase().includes(q)
+    ).slice(0, 4);
+
+    const matchedOrders = (orders || []).filter((o: any) =>
+      (o.id || '').toLowerCase().includes(q) ||
+      (o.symbol || '').toLowerCase().includes(q) ||
+      (o.client_name || '').toLowerCase().includes(q) ||
+      (o.clientName || '').toLowerCase().includes(q) ||
+      (o.side || '').toLowerCase().includes(q)
+    ).slice(0, 4);
+
+    return {
+      clients: matchedClients,
+      orders: matchedOrders,
+      total: matchedClients.length + matchedOrders.length
+    };
+  }, [searchQuery, clients, orders]);
 
   const activeTenant = tenants.find(t => t.id === selectedTenantId);
 
@@ -134,7 +172,7 @@ export const AdminHeader: React.FC<AdminHeaderProps> = ({
       {/* Right Controls */}
       <div className="flex items-center gap-1.5 sm:gap-3">
         {/* Global Search (Desktop & Tablet) */}
-        <div className="relative w-48 md:w-64 hidden sm:block">
+        <div className="relative w-48 md:w-64 hidden sm:block" ref={searchContainerRef}>
           <Search
             size={14}
             className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500"
@@ -142,16 +180,87 @@ export const AdminHeader: React.FC<AdminHeaderProps> = ({
           <input
             type="text"
             value={searchQuery}
-            onChange={e => onSearchChange(e.target.value)}
+            onFocus={() => setSearchFocused(true)}
+            onChange={e => {
+              onSearchChange(e.target.value);
+              setSearchFocused(true);
+            }}
+            onKeyDown={e => {
+              if (e.key === 'Enter') setSearchFocused(true);
+              if (e.key === 'Escape') setSearchFocused(false);
+            }}
             placeholder="Search clients, orders, transactions.."
             className="w-full pl-9 pr-3 py-1.5 bg-[#0e1629] border border-[#18243e] rounded-lg text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-blue-500/80 transition-colors"
           />
+
+          {/* Interactive Search Results Dropdown (QA-008) */}
+          {searchFocused && searchQuery.trim().length > 0 && (
+            <div className="absolute left-0 right-0 mt-2 bg-[#0c1527] border border-[#1a2948] rounded-xl shadow-2xl shadow-black/80 py-2 z-50 text-xs overflow-hidden max-h-80 overflow-y-auto">
+              {searchResults.total === 0 ? (
+                <div className="px-4 py-4 text-center text-slate-400">
+                  No matching records found for '{searchQuery}'
+                </div>
+              ) : (
+                <div className="divide-y divide-[#15223c]">
+                  {searchResults.clients.length > 0 && (
+                    <div className="py-1">
+                      <div className="px-3 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                        Clients ({searchResults.clients.length})
+                      </div>
+                      {searchResults.clients.map((c: any) => (
+                        <button
+                          key={c.id || c.client_code}
+                          onClick={() => {
+                            setSearchFocused(false);
+                            onNavigateTab?.('clients');
+                          }}
+                          className="w-full flex items-center justify-between px-3 py-1.5 text-left hover:bg-[#13203c] transition-colors"
+                        >
+                          <div>
+                            <span className="font-semibold text-white block truncate">{c.name}</span>
+                            <span className="text-[10px] text-slate-400 font-mono">{c.id || c.client_code} • {c.email}</span>
+                          </div>
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">Client</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {searchResults.orders.length > 0 && (
+                    <div className="py-1">
+                      <div className="px-3 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                        Orders ({searchResults.orders.length})
+                      </div>
+                      {searchResults.orders.map((o: any) => (
+                        <button
+                          key={o.id}
+                          onClick={() => {
+                            setSearchFocused(false);
+                            onNavigateTab?.('orders');
+                          }}
+                          className="w-full flex items-center justify-between px-3 py-1.5 text-left hover:bg-[#13203c] transition-colors"
+                        >
+                          <div>
+                            <span className="font-semibold text-white block truncate">{o.symbol} • {o.id}</span>
+                            <span className="text-[10px] text-slate-400">{o.client_name || o.clientName || 'Trader'}</span>
+                          </div>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${o.side === 'BUY' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>
+                            {o.side || 'ORDER'}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Mobile Search Toggle Button */}
         <button
           onClick={() => setMobileSearchOpen(!mobileSearchOpen)}
-          className="sm:hidden p-2 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-[#111b33] transition-colors"
+          className="sm:hidden p-2 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-[#111b33] transition-colors cursor-pointer"
           title="Search"
         >
           <Search size={17} />
@@ -564,6 +673,89 @@ export const AdminHeader: React.FC<AdminHeaderProps> = ({
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Mobile Search Overlay Bar */}
+      {mobileSearchOpen && (
+        <div className="sm:hidden absolute top-16 left-0 right-0 bg-[#090f1e] border-b border-[#152038] p-3 shadow-xl z-40">
+          <div className="relative">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+            <input
+              type="text"
+              autoFocus
+              value={searchQuery}
+              onChange={e => onSearchChange(e.target.value)}
+              placeholder="Search clients, orders, transactions.."
+              className="w-full pl-9 pr-9 py-2 bg-[#0e1629] border border-[#18243e] rounded-lg text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-blue-500"
+            />
+            <button
+              onClick={() => setMobileSearchOpen(false)}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+            >
+              <X size={15} />
+            </button>
+          </div>
+          {searchQuery.trim().length > 0 && (
+            <div className="mt-2 bg-[#0c1527] border border-[#1a2948] rounded-xl shadow-2xl py-2 text-xs overflow-hidden max-h-60 overflow-y-auto">
+              {searchResults.total === 0 ? (
+                <div className="px-4 py-3 text-center text-slate-400">
+                  No matching records found for '{searchQuery}'
+                </div>
+              ) : (
+                <div className="divide-y divide-[#15223c]">
+                  {searchResults.clients.length > 0 && (
+                    <div className="py-1">
+                      <div className="px-3 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                        Clients ({searchResults.clients.length})
+                      </div>
+                      {searchResults.clients.map((c: any) => (
+                        <button
+                          key={c.id || c.client_code}
+                          onClick={() => {
+                            setMobileSearchOpen(false);
+                            onNavigateTab?.('clients');
+                          }}
+                          className="w-full flex items-center justify-between px-3 py-1.5 text-left hover:bg-[#13203c]"
+                        >
+                          <div>
+                            <span className="font-semibold text-white block truncate">{c.name}</span>
+                            <span className="text-[10px] text-slate-400 font-mono">{c.id || c.client_code} • {c.email}</span>
+                          </div>
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400">Client</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {searchResults.orders.length > 0 && (
+                    <div className="py-1">
+                      <div className="px-3 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                        Orders ({searchResults.orders.length})
+                      </div>
+                      {searchResults.orders.map((o: any) => (
+                        <button
+                          key={o.id}
+                          onClick={() => {
+                            setMobileSearchOpen(false);
+                            onNavigateTab?.('orders');
+                          }}
+                          className="w-full flex items-center justify-between px-3 py-1.5 text-left hover:bg-[#13203c]"
+                        >
+                          <div>
+                            <span className="font-semibold text-white block truncate">{o.symbol} • {o.id}</span>
+                            <span className="text-[10px] text-slate-400">{o.client_name || o.clientName || 'Trader'}</span>
+                          </div>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${o.side === 'BUY' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>
+                            {o.side || 'ORDER'}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </header>
