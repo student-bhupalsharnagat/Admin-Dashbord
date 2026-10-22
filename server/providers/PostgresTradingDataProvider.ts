@@ -2387,8 +2387,8 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         const seenIds = new Set(dbOrders.map(o => o.order_id || o.id));
         for (const r of ordersList) {
           if (tenantId && !defaultTenants.has(tenantId)) {
-            const ordTenant = r.tenant_id || r.tenantId;
-            if (!ordTenant || ordTenant !== tenantId) {
+            const ordTenant = r.tenant_id || r.tenantId || tenantId;
+            if (ordTenant !== tenantId) {
               continue;
             }
           }
@@ -2455,8 +2455,8 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         const seenIds = new Set(dbTrades.map(t => t.trade_id || t.id));
         for (const r of tradesList) {
           if (tenantId && !defaultTenants.has(tenantId)) {
-            const trdTenant = r.tenant_id || r.tenantId;
-            if (!trdTenant || trdTenant !== tenantId) {
+            const trdTenant = r.tenant_id || r.tenantId || tenantId;
+            if (trdTenant !== tenantId) {
               continue;
             }
           }
@@ -2533,7 +2533,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       if (tenantId && positionsList) {
         const defaultTenants = new Set(['vertex-default', 'default', 'TNT-001', 'ALL', 'ALL_TENANTS', '']);
         if (!defaultTenants.has(tenantId)) {
-          positionsList = positionsList.filter((p: any) => (p.tenant_id || p.tenantId) === tenantId);
+          positionsList = positionsList.filter((p: any) => (p.tenant_id || p.tenantId || tenantId) === tenantId);
         }
       }
 
@@ -2775,6 +2775,10 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     if (id === 'all') {
       await this.executeQuery('UPDATE notifications SET is_read = true', []).catch(() => {});
       return { success: true, count: 'all' };
+    }
+    if (this.readNotificationIds.size >= 200) {
+      const first = this.readNotificationIds.values().next().value;
+      if (first) this.readNotificationIds.delete(first);
     }
     this.readNotificationIds.add(id);
     await this.executeQuery(
@@ -3327,6 +3331,10 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
 
   async updateSupportTicket(ticketId: string, data: Partial<SupportTicket>, actor?: string): Promise<SupportTicket | null> {
     const statusVal = data.status || 'RESOLVED';
+    if (this.resolvedTicketStatuses.size >= 200) {
+      const first = this.resolvedTicketStatuses.keys().next().value;
+      if (first) this.resolvedTicketStatuses.delete(first);
+    }
     this.resolvedTicketStatuses.set(ticketId, statusVal);
 
     await this.executeQuery(
@@ -4271,6 +4279,10 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
   }
 
   async resolveSuspiciousAlert(alertId: string, actor: string): Promise<boolean> {
+    if (this.resolvedAlertIds.size >= 200) {
+      const first = this.resolvedAlertIds.values().next().value;
+      if (first) this.resolvedAlertIds.delete(first);
+    }
     this.resolvedAlertIds.add(alertId);
     const target = this.suspiciousAlertsList.find(a => a.id === alertId);
     if (target) {

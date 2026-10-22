@@ -74,11 +74,14 @@ export class TradingPlatformClient {
   public clockOffsetMs: number = 0;
   private lastClockSync: number = 0;
 
-  // 2-second in-memory response cache for read-only telemetry queries to eliminate UI latency
+  // 3-second in-memory response cache for read-only telemetry queries (capped at max 50 entries)
   private requestCache = new Map<string, { data: S2SResponse<any>; expiresAt: number }>();
+  // In-flight request deduplication map to prevent concurrent duplicate network queries
+  private inFlightRequests = new Map<string, Promise<S2SResponse<any>>>();
 
   public clearCache(): void {
     this.requestCache.clear();
+    this.inFlightRequests.clear();
   }
 
   constructor(
@@ -403,17 +406,41 @@ export class TradingPlatformClient {
     this.metrics.totalRequests++;
     this.checkCircuitBreaker();
 
-    // Fast return from in-memory cache for repeated GET telemetry requests
-    const cacheKey = `${options.method}:${options.path}:${options.tenantId || ''}`;
+    // Normalize tenant aliases (TNT-001, TNT-002, TNT-003, vertex-default, default, ALL, ALL_TENANTS) to vertex-default
+    const defaultAliases = new Set(['vertex-default', 'default', 'TNT-001', 'TNT-002', 'TNT-003', 'ALL', 'ALL_TENANTS', '']);
+    const normalizedTenant = (!options.tenantId || defaultAliases.has(options.tenantId))
+      ? 'vertex-default'
+      : options.tenantId;
+    const cacheKey = `${options.method}:${options.path}:${normalizedTenant}`;
+
+    // Fast return from in-memory cache for repeated GET telemetry requests (3s TTL)
     if (options.method === 'GET') {
       const cached = this.requestCache.get(cacheKey);
       if (cached && cached.expiresAt > Date.now()) {
         return cached.data as S2SResponse<T>;
       }
+      // In-flight request deduplication: share the same running Promise across concurrent callers
+      const inFlight = this.inFlightRequests.get(cacheKey);
+      if (inFlight) {
+        return inFlight as Promise<S2SResponse<T>>;
+      }
     } else {
       // Clear cache on write operations so data is immediately authoritative
       this.clearCache();
     }
+
+    const execPromise = this.executeRequest<T>(options, cacheKey);
+    if (options.method === 'GET') {
+      this.inFlightRequests.set(cacheKey, execPromise);
+      execPromise.finally(() => {
+        this.inFlightRequests.delete(cacheKey);
+      });
+    }
+
+    return execPromise;
+  }
+
+  private async executeRequest<T = any>(options: S2SRequestOptions, cacheKey: string): Promise<S2SResponse<T>> {
 
     if (this.clockOffsetMs === 0 || !this.lastClockSync || (Date.now() - this.lastClockSync > 30000)) {
       await this.syncClockOffset().catch(() => {});
@@ -495,8 +522,8 @@ export class TradingPlatformClient {
             latencyMs
           };
           if (options.method === 'GET') {
-            this.requestCache.set(cacheKey, { data: s2sRes, expiresAt: Date.now() + 2000 });
-            if (this.requestCache.size > 200) {
+            this.requestCache.set(cacheKey, { data: s2sRes, expiresAt: Date.now() + 3000 });
+            if (this.requestCache.size > 50) {
               const firstKey = this.requestCache.keys().next().value;
               if (firstKey) this.requestCache.delete(firstKey);
             }
@@ -523,7 +550,7 @@ export class TradingPlatformClient {
             if (fallbackRes.ok) {
               const data = (await fallbackRes.json().catch(() => ({}))) as T;
               this.recordSuccess();
-              return {
+              const fallbackResObj: S2SResponse<T> = {
                 success: true,
                 statusCode: fallbackRes.status,
                 data,
@@ -531,6 +558,14 @@ export class TradingPlatformClient {
                 latencyMs: Date.now() - startTime,
                 fromFallback: true
               };
+              if (options.method === 'GET') {
+                this.requestCache.set(cacheKey, { data: fallbackResObj, expiresAt: Date.now() + 3000 });
+                if (this.requestCache.size > 50) {
+                  const firstKey = this.requestCache.keys().next().value;
+                  if (firstKey) this.requestCache.delete(firstKey);
+                }
+              }
+              return fallbackResObj;
             }
           } catch {
             // Ignore fallback network error and proceed
@@ -637,7 +672,8 @@ export class TradingPlatformClient {
    */
   public async resolveOutboundTenantId(adminTenantId?: string): Promise<string> {
     const defaultTradingTenant = process.env.DEFAULT_TENANT_ID || process.env.TRADING_TENANT_ID || 'vertex-default';
-    if (!adminTenantId || adminTenantId === 'ALL_TENANTS' || adminTenantId === 'default' || adminTenantId === 'TNT-001' || adminTenantId === 'vertex-default') {
+    const defaultAliases = new Set(['vertex-default', 'default', 'TNT-001', 'TNT-002', 'TNT-003', 'ALL', 'ALL_TENANTS', '']);
+    if (!adminTenantId || defaultAliases.has(adminTenantId)) {
       return defaultTradingTenant;
     }
     try {
@@ -652,7 +688,7 @@ export class TradingPlatformClient {
     } catch {
       // In case DB is not yet available or testing standalone
     }
-    return defaultTradingTenant;
+    return adminTenantId || defaultTradingTenant;
   }
 
   /**

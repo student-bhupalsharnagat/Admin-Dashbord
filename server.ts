@@ -1,7 +1,7 @@
 import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
+import fs from 'fs';
 import cookieParser from 'cookie-parser';
-import { createServer as createViteServer } from 'vite';
 import { activeTradingDataProvider } from './server/providers/TradingDataProvider.ts';
 import { assetStorage } from './server/providers/AssetStorageProvider.ts';
 import { UserRole } from './src/types.ts';
@@ -2592,11 +2592,21 @@ async function startServer() {
   });
 
   // Real-time Server-Sent Events stream for Admin Console
+  let activeSseClients = 0;
+  const MAX_SSE_CLIENTS = 25;
+
   app.get('/api/admin/events/stream', authenticate, (req, res) => {
+    if (activeSseClients >= MAX_SSE_CLIENTS) {
+      return res.status(503).json({ error: 'SSE_LIMIT_REACHED', message: 'Too many active event streams. Please retry shortly.' });
+    }
+
     res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders?.();
+
+    activeSseClients++;
 
     const user = req.user;
     const isGlobal = user?.role === 'SUPER_ADMIN' || user?.role === 'PLATFORM_OWNER';
@@ -2614,10 +2624,20 @@ async function startServer() {
       res.write(': keepalive\n\n');
     }, 20000);
 
-    req.on('close', () => {
+    let closed = false;
+    const cleanup = () => {
+      if (closed) return;
+      closed = true;
+      activeSseClients = Math.max(0, activeSseClients - 1);
       clearInterval(heartbeat);
       adminEventBus.off('event', listener);
-    });
+      try { res.end(); } catch {}
+    };
+
+    req.on('close', cleanup);
+    req.on('end', cleanup);
+    res.on('finish', cleanup);
+    res.on('error', cleanup);
   });
 
   app.get('/api/admin/support', authMiddleware, async (req, res) => {
@@ -3663,7 +3683,7 @@ async function startServer() {
         filledQuantity: orderType === 'MARKET' ? Number(quantity) : 0
       };
 
-      tradingOrdersState = [newOrder, ...tradingOrdersState];
+      tradingOrdersState = [newOrder, ...tradingOrdersState].slice(0, 50);
 
       if (orderType === 'MARKET') {
         tradingWalletState.availableBalance -= requiredMargin;
@@ -3684,7 +3704,7 @@ async function startServer() {
           marginUsed: requiredMargin,
           entryTime: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
         };
-        tradingPositionsState = [newPos, ...tradingPositionsState];
+        tradingPositionsState = [newPos, ...tradingPositionsState].slice(0, 50);
       }
 
       res.status(201).json({
@@ -3808,25 +3828,40 @@ async function startServer() {
         }
       ]
     };
-    tradingTicketsState = [newTicket, ...tradingTicketsState];
+    tradingTicketsState = [newTicket, ...tradingTicketsState].slice(0, 50);
     res.status(201).json({ success: true, ticket: newTicket });
   });
 
   // ----------------------------------------------------
   // Vite Integration (Dev Middleware & Production Static)
   // ----------------------------------------------------
-  if (process.env.NODE_ENV !== 'production') {
+  const distPath = path.join(process.cwd(), 'dist');
+  const indexHtmlExists = fs.existsSync(path.join(distPath, 'index.html'));
+
+  if (process.env.NODE_ENV === 'production' || indexHtmlExists) {
+    app.use(express.static(distPath));
+    app.get('*', (_req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
+  } else {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
+  }
+
+  // Periodic memory check & GC trigger if running in memory-constrained environment
+  if (global.gc) {
+    setInterval(() => {
+      try {
+        const mem = process.memoryUsage();
+        if (mem.heapUsed > 250 * 1024 * 1024) {
+          global.gc!();
+        }
+      } catch {}
+    }, 60000).unref();
   }
 
   app.listen(PORT, '0.0.0.0', () => {

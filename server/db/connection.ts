@@ -61,8 +61,8 @@ export function getDbConfig(): DbConfig {
 
   return {
     connectionString,
-    max: parseInt(process.env.DB_POOL_MAX || '20', 10),
-    idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT_MS || '30000', 10),
+    max: parseInt(process.env.DB_POOL_MAX || '5', 10),
+    idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT_MS || '10000', 10),
     connectionTimeoutMillis: parseInt(process.env.DB_CONNECTION_TIMEOUT_MS || '5000', 10),
     ssl: requiresSsl ? { rejectUnauthorized: false } : undefined
   };

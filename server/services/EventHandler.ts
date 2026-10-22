@@ -88,7 +88,7 @@ export interface ActiveUserSession {
 export class EventHandler {
   // In-memory LRU set for fast deduplication check (backed by processed_events table)
   private processedEventIds = new Set<string>();
-  private readonly MAX_MEM_CACHE = 10000;
+  private readonly MAX_MEM_CACHE = 1000;
 
   // Active users registry (in-memory tracking)
   private activeUsers = new Map<string, ActiveUserSession>();
@@ -1503,13 +1503,12 @@ export class EventHandler {
   }> {
     const counts = { clients: 0, ledger: 0, funds: 0, orders: 0, trades: 0, positions: 0 };
     
-    // Resolve active tenants to backfill
+    // Resolve active tenants to backfill: query vertex-default primarily since it returns all authoritative records
     let tenantIds: string[] = [];
     if (targetTenantId) {
       tenantIds = [targetTenantId];
     } else {
-      const tenantsRes = await query<{ id: string }>('SELECT id FROM tenants WHERE status = \'ACTIVE\'');
-      tenantIds = tenantsRes.rows.map(r => r.id);
+      tenantIds = ['vertex-default'];
     }
 
     for (const tenantId of tenantIds) {
