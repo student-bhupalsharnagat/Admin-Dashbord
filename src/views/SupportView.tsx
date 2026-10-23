@@ -118,12 +118,27 @@ interface SupportViewProps {
 export const SupportView: React.FC<SupportViewProps> = ({ onNotify, currentUser }) => {
   const canApprove = hasPermission(currentUser?.role, 'SUPPORT', 'APPROVE');
   const canEdit = hasPermission(currentUser?.role, 'SUPPORT', 'EDIT');
+  const getStoredReplies = (): Record<string, any[]> => {
+    try {
+      return JSON.parse(localStorage.getItem('admin_ticket_replies') || '{}');
+    } catch {
+      return {};
+    }
+  };
+
   const [tickets, setTickets] = useState<SupportTicketItem[]>(() => {
     try {
-      const stored: string[] = JSON.parse(localStorage.getItem('admin_resolved_tickets') || '[]');
-      return INITIAL_TICKETS.map(t =>
-        stored.includes(t.ticketId) || stored.includes(t.id) ? { ...t, status: 'RESOLVED' as const } : t
-      );
+      const storedResolved: string[] = JSON.parse(localStorage.getItem('admin_resolved_tickets') || '[]');
+      const storedReplies = getStoredReplies();
+      return INITIAL_TICKETS.map(t => {
+        const extraReplies = storedReplies[t.id] || storedReplies[t.ticketId] || [];
+        const isResolved = storedResolved.includes(t.ticketId) || storedResolved.includes(t.id);
+        return {
+          ...t,
+          status: isResolved ? ('RESOLVED' as const) : (extraReplies.length > 0 && t.status === 'OPEN' ? ('IN PROGRESS' as const) : t.status),
+          messages: [...(t.messages || []), ...extraReplies]
+        };
+      });
     } catch {
       return INITIAL_TICKETS;
     }
@@ -145,28 +160,44 @@ export const SupportView: React.FC<SupportViewProps> = ({ onNotify, currentUser 
       .then(data => {
         if (Array.isArray(data) && data.length > 0) {
           const stored: string[] = JSON.parse(localStorage.getItem('admin_resolved_tickets') || '[]');
-          const mapped: SupportTicketItem[] = data.map((d: any) => ({
-            id: d.id,
-            ticketId: d.ticket_id || d.ticketId || d.id,
-            createdBy: d.client_name || d.createdBy || 'Client User',
-            subject: d.subject || 'Support Request',
-            category: (d.category?.toUpperCase() || 'TRADING') as any,
-            priority: (d.priority?.toUpperCase() || 'MEDIUM') as any,
-            status: (stored.includes(d.ticket_id) || stored.includes(d.ticketId) || stored.includes(d.id)
-              ? 'RESOLVED'
-              : (d.status === 'IN_PROGRESS' ? 'IN PROGRESS' : d.status?.toUpperCase() || 'OPEN')) as any,
-            assignedTo: d.assigned_to || d.assignedTo || 'Support Desk',
-            date: d.created_at ? d.created_at.split('T')[0] : (d.date || '2024-04-15'),
-            description: d.description || d.subject,
-            messages: d.messages || [
+          const storedReplies = getStoredReplies();
+          const mapped: SupportTicketItem[] = data.map((d: any) => {
+            const ticketKey = d.ticket_id || d.ticketId || d.id;
+            const extraReplies = storedReplies[ticketKey] || storedReplies[d.id] || [];
+            const baseMsgs = d.messages || [
               {
                 sender: d.client_name || d.createdBy || 'Client',
                 time: d.created_at ? d.created_at.replace('T', ' ').substring(0, 16) : '2024-04-15 10:00',
                 text: d.description || d.subject,
                 isAdmin: false
               }
-            ]
-          }));
+            ];
+
+            // Filter out duplicates between baseMsgs and extraReplies
+            const existingTexts = new Set(baseMsgs.map((m: any) => `${m.sender}-${m.text}`));
+            const mergedMsgs = [...baseMsgs];
+            for (const r of extraReplies) {
+              if (!existingTexts.has(`${r.sender}-${r.text}`)) {
+                mergedMsgs.push(r);
+              }
+            }
+
+            return {
+              id: d.id,
+              ticketId: ticketKey,
+              createdBy: d.client_name || d.createdBy || 'Client User',
+              subject: d.subject || 'Support Request',
+              category: (d.category?.toUpperCase() || 'TRADING') as any,
+              priority: (d.priority?.toUpperCase() || 'MEDIUM') as any,
+              status: (stored.includes(d.ticket_id) || stored.includes(d.ticketId) || stored.includes(d.id)
+                ? 'RESOLVED'
+                : (d.status === 'IN_PROGRESS' || (extraReplies.length > 0 && d.status === 'OPEN') ? 'IN PROGRESS' : d.status?.toUpperCase() || 'OPEN')) as any,
+              assignedTo: d.assigned_to || d.assignedTo || 'Support Desk',
+              date: d.created_at ? d.created_at.split('T')[0] : (d.date || '2024-04-15'),
+              description: d.description || d.subject,
+              messages: mergedMsgs
+            };
+          });
           setTickets(mapped);
         }
       })
@@ -247,9 +278,18 @@ export const SupportView: React.FC<SupportViewProps> = ({ onNotify, currentUser 
       isAdmin: true
     };
 
+    try {
+      const stored = getStoredReplies();
+      const keys = [selectedTicketForDetail.id, selectedTicketForDetail.ticketId].filter(Boolean);
+      for (const k of keys) {
+        stored[k] = [...(stored[k] || []), newMessage];
+      }
+      localStorage.setItem('admin_ticket_replies', JSON.stringify(stored));
+    } catch {}
+
     setTickets(prev =>
       prev.map(t =>
-        t.ticketId === selectedTicketForDetail.ticketId
+        t.ticketId === selectedTicketForDetail.ticketId || t.id === selectedTicketForDetail.id
           ? {
               ...t,
               status: t.status === 'OPEN' ? 'IN PROGRESS' : t.status,
@@ -295,9 +335,18 @@ export const SupportView: React.FC<SupportViewProps> = ({ onNotify, currentUser 
       isAdmin: true
     };
 
+    try {
+      const stored = getStoredReplies();
+      const keys = [ticketForReply.id, ticketForReply.ticketId].filter(Boolean);
+      for (const k of keys) {
+        stored[k] = [...(stored[k] || []), newMessage];
+      }
+      localStorage.setItem('admin_ticket_replies', JSON.stringify(stored));
+    } catch {}
+
     setTickets(prev =>
       prev.map(t =>
-        t.ticketId === ticketForReply.ticketId
+        t.ticketId === ticketForReply.ticketId || t.id === ticketForReply.id
           ? {
               ...t,
               status: 'IN PROGRESS',

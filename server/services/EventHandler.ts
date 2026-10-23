@@ -988,27 +988,33 @@ export class EventHandler {
           `, [`COMM-${tradeId}-TNT`, event.tenantId, commAmount, currentPeriod]);
         }
 
-        const ledgerId = `LDG-${tradeId.replace(/[^a-zA-Z0-9]/g, '')}-${Date.now().toString().slice(-4)}`;
-        await query(`
-          INSERT INTO ledger_entries (
-            id, tenant_id, client_id, client_code, client_name, entry_type,
-            debit, credit, balance_after, reference_id, description, is_finalized
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-          ON CONFLICT (id) DO NOTHING
-        `, [
-          ledgerId,
-          event.tenantId,
-          clientId,
-          clientCode,
-          clientName,
-          'COMMISSION',
-          0.00,
-          commAmount,
-          0.00,
-          tradeId,
-          `Commission on trade ${tradeId} (${symbol})`,
-          true
-        ]);
+        const ledgerId = `LDG-${tradeId.replace(/[^a-zA-Z0-9]/g, '')}-COMM`;
+        const existingComm = await query(`
+          SELECT id FROM ledger_entries WHERE (reference_id = $1 AND entry_type = 'COMMISSION') OR id = $2 LIMIT 1
+        `, [tradeId, ledgerId]).catch(() => ({ rows: [] }));
+
+        if (existingComm.rows.length === 0) {
+          await query(`
+            INSERT INTO ledger_entries (
+              id, tenant_id, client_id, client_code, client_name, entry_type,
+              debit, credit, balance_after, reference_id, description, is_finalized
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            ON CONFLICT (id) DO NOTHING
+          `, [
+            ledgerId,
+            event.tenantId,
+            clientId,
+            clientCode,
+            clientName,
+            'COMMISSION',
+            0.00,
+            commAmount,
+            0.00,
+            tradeId,
+            `Commission on trade ${tradeId} (${symbol})`,
+            true
+          ]);
+        }
       }
     } catch (commErr) {
       console.warn('[EventHandler] Commission calculation/ledger error:', commErr);
@@ -1535,7 +1541,25 @@ export class EventHandler {
         const res = await tradingPlatformClient.request<any>({ method: 'GET', path: '/api/internal/v1/trading/ledger', tenantId: tenantId });
         const items = res.success ? (res.data?.ledger || res.data?.items || (Array.isArray(res.data) ? res.data : [])) : [];
         for (const item of items) {
-          const entryId = String(item.id || item.entryId || `LDG-BF-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`);
+          const rawRef = item.referenceId || item.reference_id || item.id || '';
+          const rawType = (item.entryType || item.type || 'ADJUSTMENT').toUpperCase();
+          const debitVal = Number(item.debit || 0);
+          const creditVal = Number(item.credit || 0);
+
+          // Prevent duplicate ledger entry creation
+          if (rawRef) {
+            const exists = await query(`
+              SELECT id FROM ledger_entries 
+              WHERE (reference_id = $1 AND entry_type = $2)
+                 OR (id = $3)
+              LIMIT 1
+            `, [rawRef, rawType, String(item.id || item.entryId || '')]).catch(() => ({ rows: [] }));
+            if (exists.rows && exists.rows.length > 0) {
+              continue;
+            }
+          }
+
+          const entryId = String(item.id || item.entryId || (rawRef ? `LDG-BF-${rawRef.replace(/[^a-zA-Z0-9]/g, '')}-${rawType}` : `LDG-BF-${item.clientId || 'clt'}-${Date.now()}`));
           await query(`
             INSERT INTO ledger_entries (
               id, tenant_id, client_id, client_code, client_name, entry_type,
@@ -1548,11 +1572,11 @@ export class EventHandler {
             item.clientId || item.client_id || null,
             item.clientCode || item.client_code || item.clientId || item.client_id || 'CLT-DEFAULT',
             item.clientName || item.client_name || 'Client',
-            item.entryType || item.type || 'ADJUSTMENT',
-            Number(item.debit || 0),
-            Number(item.credit || 0),
+            rawType,
+            debitVal,
+            creditVal,
             Number(item.balanceAfter || item.balance_after || 0),
-            item.referenceId || item.reference_id || null,
+            rawRef || null,
             item.description || 'Backfilled ledger entry'
           ]);
           counts.ledger++;

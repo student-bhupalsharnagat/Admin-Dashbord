@@ -244,13 +244,28 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
       const res = await fetch(`/api/admin/compliance/ledger${typeParam}`, { credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
-        const resolvedData = Array.isArray(data)
-          ? data.map((d: any) => ({
-              ...d,
-              account: resolveAccountName(d)
-            }))
-          : [];
-        setLedgerList(resolvedData);
+        const seenIds = new Set<string>();
+        const seenKeys = new Set<string>();
+        const deduped: any[] = [];
+        for (const item of (Array.isArray(data) ? data : [])) {
+          const account = resolveAccountName(item);
+          const txnId = item.txnId || item.id || item.reference_id || item.referenceId || '';
+          const ref = item.reference || item.reference_id || item.referenceId || txnId;
+          const type = (item.type || item.entry_type || '').toUpperCase();
+          const cr = item.credit || '';
+          const db = item.debit || '';
+          const compositeKey = `${ref}|${type}|${cr}|${db}|${account}`.toLowerCase();
+          if (txnId && seenIds.has(txnId)) continue;
+          if (seenKeys.has(compositeKey)) continue;
+          if (txnId) seenIds.add(txnId);
+          seenKeys.add(compositeKey);
+          deduped.push({
+            ...item,
+            txnId,
+            account
+          });
+        }
+        setLedgerList(deduped);
       }
     } catch (e) {
       console.error('Error fetching ledger:', e);
@@ -1270,10 +1285,18 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
   // ======================================================================
   if (section === 'ledger') {
     const filteredLedger = ledgerList.filter(row => {
+      const rowType = (row.type || (row as any).entry_type || '').toString().toUpperCase();
+      // Bug #25: Strictly reject row if type filter is active and does not match
+      if (ledgerTypeFilter !== 'All Types' && rowType !== ledgerTypeFilter.toUpperCase()) {
+        return false;
+      }
+
+      // Bug #27: Apply search query across all row fields
       const q = ledgerSearch.trim().toLowerCase();
+      if (!q) return true;
+
       const accountName = resolveAccountName(row);
-      const matchSearch =
-        !q ||
+      return (
         accountName.toLowerCase().includes(q) ||
         (row.account || '').toLowerCase().includes(q) ||
         ((row as any).clientName || '').toLowerCase().includes(q) ||
@@ -1281,11 +1304,8 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
         ((row as any).id || '').toLowerCase().includes(q) ||
         (row.reference || '').toLowerCase().includes(q) ||
         ((row as any).referenceId || '').toLowerCase().includes(q) ||
-        ((row as any).description || '').toLowerCase().includes(q);
-      const matchType =
-        ledgerTypeFilter === 'All Types' ||
-        (row.type || '').toString().toUpperCase() === ledgerTypeFilter.toUpperCase();
-      return matchSearch && matchType;
+        ((row as any).description || '').toLowerCase().includes(q)
+      );
     });
 
     const ledgerTotalPages = Math.ceil(filteredLedger.length / compliancePageSize) || 1;
@@ -1747,7 +1767,35 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
               <div className="pt-5 border-t border-[#131e36] flex items-center gap-2 mt-4">
                 <button
                   onClick={() => {
-                    notify(`Receipt for ${selectedDrawerTxn.txnId} downloaded successfully.`, 'success');
+                    try {
+                      const receiptContent = `=======================================================
+               TRANSACTION RECEIPT
+=======================================================
+Transaction ID : ${selectedDrawerTxn.txnId}
+Date           : ${selectedDrawerTxn.date}
+Account Name   : ${selectedDrawerTxn.account}
+Type           : ${selectedDrawerTxn.type}
+Credit         : ${selectedDrawerTxn.credit}
+Debit          : ${selectedDrawerTxn.debit}
+Balance After  : ${selectedDrawerTxn.balance}
+Reference      : ${selectedDrawerTxn.reference}
+Status         : ${selectedDrawerTxn.status}
+Issued By      : TradeMatrix Admin Central Liquidity & Clearing
+Generated At   : ${new Date().toISOString()}
+=======================================================`;
+                      const blob = new Blob([receiptContent], { type: 'text/plain;charset=utf-8' });
+                      const url = URL.createObjectURL(blob);
+                      const link = document.createElement('a');
+                      link.setAttribute('href', url);
+                      link.setAttribute('download', `receipt-${selectedDrawerTxn.txnId}.txt`);
+                      document.body.appendChild(link);
+                      link.click();
+                      document.body.removeChild(link);
+                      URL.revokeObjectURL(url);
+                      notify(`Receipt for ${selectedDrawerTxn.txnId} downloaded successfully.`, 'success');
+                    } catch (e) {
+                      notify('Failed to generate receipt file', 'warning');
+                    }
                   }}
                   className="flex-1 py-2 px-3 bg-[#091122] hover:bg-[#121c35] border border-[#162238] rounded-lg text-xs font-semibold text-slate-200 hover:text-white transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
                 >

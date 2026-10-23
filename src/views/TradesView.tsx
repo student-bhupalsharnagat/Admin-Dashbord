@@ -33,7 +33,7 @@ export interface DetailedTradeItem {
 const defaultTradesData: DetailedTradeItem[] = [
   {
     tradeId: 'TRD001',
-    orderId: 'ORD001',
+    orderId: 'ORD-72564',
     client: 'Alexander Hunt',
     clientId: 'CLT001',
     symbol: 'EUR/INR',
@@ -48,7 +48,7 @@ const defaultTradesData: DetailedTradeItem[] = [
   },
   {
     tradeId: 'TRD002',
-    orderId: 'ORD002',
+    orderId: 'ORD-79871',
     client: 'Maya Patel',
     clientId: 'CLT004',
     symbol: 'BTC/INR',
@@ -132,7 +132,7 @@ export const TradesView: React.FC<TradesViewProps> = ({
     if (initialTrades && Array.isArray(initialTrades) && initialTrades.length > 0) {
       const mapped: DetailedTradeItem[] = initialTrades.map((t: any, idx: number) => ({
         tradeId: t.trade_id || t.tradeId || t.id || `TRD${String(idx + 1).padStart(3, '0')}`,
-        orderId: t.order_id || t.orderId || `ORD${String(idx + 1).padStart(3, '0')}`,
+        orderId: t.order_id || t.orderId || t.orderRef || t.order_ref || t.originating_order_id || t.originatingOrderId || `ORD-${String(idx + 1).padStart(5, '0')}`,
         client: t.client_name || t.client || 'Client Trader',
         clientId: t.client_id || t.clientId,
         symbol: t.symbol || 'EUR/INR',
@@ -160,8 +160,8 @@ export const TradesView: React.FC<TradesViewProps> = ({
         const data = await res.json();
         if (isMounted && Array.isArray(data) && data.length > 0) {
           const mapped: DetailedTradeItem[] = data.map((t: any, idx: number) => ({
-            tradeId: t.id || t.tradeId || `TRD${String(idx + 1).padStart(3, '0')}`,
-            orderId: t.order_id || t.orderId || `ORD${String(idx + 1).padStart(3, '0')}`,
+            tradeId: t.id || t.tradeId || t.trade_id || `TRD${String(idx + 1).padStart(3, '0')}`,
+            orderId: t.order_id || t.orderId || t.orderRef || t.order_ref || t.originating_order_id || t.originatingOrderId || `ORD-${String(idx + 1).padStart(5, '0')}`,
             client: t.client_name || t.client || 'Client Trader',
             clientId: t.client_id || t.clientId,
             symbol: t.symbol || 'EUR/INR',

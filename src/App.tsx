@@ -772,15 +772,26 @@ export default function App() {
   const handleOpenTradingPlatform = useCallback((clientData?: any) => {
     const MAIN_TRADING_PLATFORM_URL = 'https://trading-platform-2t6r.onrender.com';
     if (clientData) {
-      const clientId = clientData.client_code || clientData.userId || clientData.id || '';
+      const clientId = clientData.id || clientData.client_code || clientData.userId || '';
       const clientName = clientData.name || clientData.fullName || '';
-      const clientBalance = clientData.balance || '';
+      const rawBalance = typeof clientData.balance === 'number'
+        ? clientData.balance
+        : parseFloat(String(clientData.balance || '').replace(/[^0-9.-]/g, '')) || 0;
       const clientEmail = clientData.email || '';
       const queryParams = new URLSearchParams();
-      if (clientId) queryParams.set('client_id', clientId);
-      if (clientName) queryParams.set('name', clientName);
-      if (clientBalance) queryParams.set('balance', clientBalance);
-      if (clientEmail) queryParams.set('email', clientEmail);
+      if (clientId) {
+        queryParams.set('impersonateClient', clientId);
+        queryParams.set('client_id', clientId);
+      }
+      if (clientName) {
+        queryParams.set('clientName', clientName);
+        queryParams.set('name', clientName);
+      }
+      if (clientEmail) {
+        queryParams.set('clientEmail', clientEmail);
+        queryParams.set('email', clientEmail);
+      }
+      queryParams.set('balance', String(rawBalance));
       const url = `${MAIN_TRADING_PLATFORM_URL}${queryParams.toString() ? '?' + queryParams.toString() : ''}`;
       window.open(url, '_blank', 'noopener,noreferrer');
     } else {
@@ -794,20 +805,24 @@ export default function App() {
       if (typeof window !== 'undefined') {
         const params = new URLSearchParams(window.location.search);
         const modeParam = params.get('mode') || params.get('app_mode');
-        const clientId = params.get('client_id');
-        if (modeParam === 'trading' || modeParam === 'trading-platform') {
+        const clientId = params.get('impersonateClient') || params.get('client_id');
+        if (modeParam === 'trading' || modeParam === 'trading-platform' || clientId) {
           if (clientId) {
-            const clientName = params.get('name') || 'Client Trader';
+            const clientName = params.get('clientName') || params.get('name') || 'Client Trader';
+            const clientEmail = params.get('clientEmail') || params.get('email') || '';
             const clientBalance = params.get('balance') || '₹25,400';
-            handleOpenTradingPlatform({
-              id: clientId,
-              name: clientName,
-              fullName: clientName,
-              balance: clientBalance,
-              tenantId: params.get('tenant_id') || undefined
-            });
-          } else {
-            handleOpenTradingPlatform();
+            if (modeParam === 'trading' || modeParam === 'trading-platform') {
+              setActiveTradingClient({
+                id: clientId,
+                userId: clientId,
+                name: clientName,
+                fullName: clientName,
+                email: clientEmail,
+                balance: clientBalance,
+                tenantId: params.get('tenant_id') || undefined
+              });
+              setAppMode('trading-platform');
+            }
           }
         }
       }

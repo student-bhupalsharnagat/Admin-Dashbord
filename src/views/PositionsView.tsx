@@ -49,13 +49,25 @@ export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify }) => {
         if (Array.isArray(data)) {
           const mapped: PositionItem[] = data.map((p: any, idx: number) => {
             const pnlNum = typeof p.unrealizedPL === 'number' ? p.unrealizedPL : parseFloat(String(p.pnl || p.unrealized_pnl || 0));
+            const qtyNum = parseFloat(String(p.qty || p.quantity || '1')) || 1;
+            const rawCurrent = typeof p.currentPrice === 'number' ? p.currentPrice : parseFloat(String(p.currentPrice || p.last_price || 0));
+            let rawAvg = typeof p.avgPrice === 'number' ? p.avgPrice : parseFloat(String(p.avgPrice || p.averagePrice || p.entryPrice || p.buyPrice || p.buy_price || 0));
+
+            // Bug #29: If avgPrice is 0 while currentPrice & unrealizedPnl are non-zero, derive avgPrice = currentPrice - (unrealizedPnl / qty)
+            if ((!rawAvg || rawAvg === 0) && rawCurrent > 0 && pnlNum !== 0 && qtyNum !== 0) {
+              const derived = rawCurrent - (pnlNum / qtyNum);
+              if (derived > 0) {
+                rawAvg = derived;
+              }
+            }
+
             return {
               id: p.id || `POS-${idx + 1}`,
               client: p.client || p.client_name || 'Retail Client',
               symbol: p.symbol || 'NIFTY50',
               qty: String(p.qty || p.quantity || '1'),
-              avgPrice: typeof p.avgPrice === 'number' ? `₹${p.avgPrice.toLocaleString('en-IN')}` : String(p.avgPrice || p.buy_price || '0'),
-              currentPrice: typeof p.currentPrice === 'number' ? `₹${p.currentPrice.toLocaleString('en-IN')}` : String(p.currentPrice || p.last_price || '0'),
+              avgPrice: rawAvg > 0 ? `₹${rawAvg.toLocaleString('en-IN', { minimumFractionDigits: 1, maximumFractionDigits: 2 })}` : (typeof p.avgPrice === 'number' ? `₹${p.avgPrice.toLocaleString('en-IN')}` : String(p.avgPrice || p.buy_price || '—')),
+              currentPrice: rawCurrent > 0 ? `₹${rawCurrent.toLocaleString('en-IN', { minimumFractionDigits: 1, maximumFractionDigits: 2 })}` : (typeof p.currentPrice === 'number' ? `₹${p.currentPrice.toLocaleString('en-IN')}` : String(p.currentPrice || p.last_price || '0')),
               unrealizedPL: typeof p.unrealizedPL === 'string' ? p.unrealizedPL : `${pnlNum >= 0 ? '+' : ''}₹${pnlNum.toLocaleString('en-IN')}`,
               realizedPL: typeof p.realizedPL === 'string' ? p.realizedPL : '+₹0',
               margin: typeof p.margin === 'string' ? p.margin : `₹${p.margin || '15,000'}`,

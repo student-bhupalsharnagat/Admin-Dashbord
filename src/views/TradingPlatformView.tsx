@@ -250,21 +250,35 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
     return name.slice(0, 2).toUpperCase();
   };
 
+  // Helper to extract URL client params if present
+  const getUrlClientData = () => {
+    if (typeof window === 'undefined') return null;
+    const params = new URLSearchParams(window.location.search);
+    const clientId = params.get('impersonateClient') || params.get('client_id');
+    if (!clientId) return null;
+    const name = params.get('clientName') || params.get('name') || 'Client Trader';
+    const email = params.get('clientEmail') || params.get('email') || `${clientId.toLowerCase()}@client.com`;
+    const balance = params.get('balance');
+    return { id: clientId, userId: clientId, fullName: name, name, email, balance };
+  };
+
+  const effectiveClient = initialClient || getUrlClientData();
+
   // Client Profile state
   const [client, setClient] = useState<ClientAccount>(() => {
-    if (initialClient) {
-      const name = initialClient.fullName || initialClient.name || 'Demo Trader';
+    if (effectiveClient) {
+      const name = effectiveClient.fullName || effectiveClient.name || 'Demo Trader';
       return {
-        id: initialClient.id || 'CLI-9021',
-        userId: initialClient.userId || initialClient.client_code || initialClient.id || 'vtx123',
+        id: effectiveClient.id || 'CLI-9021',
+        userId: effectiveClient.userId || effectiveClient.client_code || effectiveClient.id || 'vtx123',
         fullName: name,
-        email: initialClient.email || 'trader@vertextrading.com',
-        phone: initialClient.phone || '+91 98765 43210',
-        initials: initialClient.initials || getInitials(name),
-        kycStatus: initialClient.kyc || initialClient.kycStatus || 'Verified (MCX & NSE Active)',
+        email: effectiveClient.email || 'trader@vertextrading.com',
+        phone: effectiveClient.phone || '+91 98765 43210',
+        initials: effectiveClient.initials || getInitials(name),
+        kycStatus: effectiveClient.kyc || effectiveClient.kycStatus || 'Verified (MCX & NSE Active)',
         role: 'CLIENT',
-        tenantId: initialClient.tenantId || initialClient.tenant_id || 'TNT-001',
-        tenantName: initialClient.tenantName || initialClient.tenant_name || 'VERTEX Trading',
+        tenantId: effectiveClient.tenantId || effectiveClient.tenant_id || 'TNT-001',
+        tenantName: effectiveClient.tenantName || effectiveClient.tenant_name || 'VERTEX Trading',
         segments: ['NSE Cash', 'NSE F&O', 'MCX Commodity', 'Crypto Derivatives'],
         bankDetails: {
           bankName: 'HDFC Bank Ltd',
@@ -287,13 +301,13 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
   const [orders, setOrders] = useState<ClientOrder[]>(INITIAL_ORDERS);
   const [positions, setPositions] = useState<ClientPosition[]>(INITIAL_POSITIONS);
   const [wallet, setWallet] = useState<ClientWallet>(() => {
-    if (initialClient) {
-      const rawBal = typeof initialClient.balance === 'number'
-        ? initialClient.balance
-        : parseFloat(String(initialClient.balance || '').replace(/[^0-9.-]/g, ''));
-      const rawPl = typeof initialClient.pl === 'number'
-        ? initialClient.pl
-        : parseFloat(String(initialClient.pl || initialClient.netPl || '').replace(/[^0-9.-]/g, ''));
+    if (effectiveClient) {
+      const rawBal = typeof effectiveClient.balance === 'number'
+        ? effectiveClient.balance
+        : parseFloat(String(effectiveClient.balance || '').replace(/[^0-9.-]/g, ''));
+      const rawPl = typeof effectiveClient.pl === 'number'
+        ? effectiveClient.pl
+        : parseFloat(String(effectiveClient.pl || effectiveClient.netPl || '').replace(/[^0-9.-]/g, ''));
       return {
         ...INITIAL_WALLET,
         availableBalance: !isNaN(rawBal) && rawBal > 0 ? rawBal : INITIAL_WALLET.availableBalance,
@@ -822,6 +836,22 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
 
       {/* 3. MAIN WORKSPACE CONTAINER */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-3 sm:p-5 lg:p-6">
+        {/* Client Impersonation & Launch Handoff Banner */}
+        {(effectiveClient || (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('impersonateClient'))) && (
+          <div className="mb-4 p-3 rounded-xl bg-blue-950/60 border border-blue-500/40 flex flex-wrap items-center justify-between gap-2 text-xs text-blue-200">
+            <div className="flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-blue-400 animate-pulse"></span>
+              <span>
+                <strong className="text-white">Client Terminal Session:</strong> Active trading session for{' '}
+                <span className="text-blue-300 font-bold">{client.fullName}</span> ({client.userId}). All portfolio and order actions are mapped to this client account.
+              </span>
+            </div>
+            <span className="px-2.5 py-0.5 rounded-md bg-blue-500/20 text-blue-300 font-mono text-[11px] font-bold">
+              ID: {client.id}
+            </span>
+          </div>
+        )}
+
         {/* Trader Console Banner (User ID, KYC Verified, Market: LIVE IST toggle) */}
         <TraderConsoleBanner
           clientName={client.fullName}

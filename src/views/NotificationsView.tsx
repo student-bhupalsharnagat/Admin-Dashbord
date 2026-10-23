@@ -31,7 +31,7 @@ export interface NotificationItem {
 const INITIAL_NOTIFICATIONS: NotificationItem[] = [
   {
     id: 'notif-1',
-    title: 'KYC Submitted',
+    title: 'KYC Document Submitted',
     message: 'Nathan Brooks submitted KYC documents for review.',
     timeAgo: '10 mins ago',
     category: 'KYC',
@@ -135,21 +135,38 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
         });
         if (res.ok) {
           const data = await res.json();
-          if (Array.isArray(data) && data.length > 0 && isMounted) {
+          if (Array.isArray(data) && isMounted) {
             const storedRead: string[] = JSON.parse(localStorage.getItem('admin_read_notifications') || '[]');
-            const mapped: NotificationItem[] = data.map((d: any, idx: number) => ({
-              id: d.id || `notif-backend-${idx}`,
-              title: d.title || 'Notification',
-              message: d.message || d.details || '',
-              timeAgo: d.created_at ? new Date(d.created_at).toLocaleTimeString() : 'Just now',
-              category: d.category || 'System',
-              read: storedRead.includes(d.id) || d.is_read || d.read || false,
-              icon: Bell,
-              iconBg: 'bg-blue-500/10',
-              iconColor: 'text-blue-400',
-              targetTab: d.target_tab || d.targetTab || undefined
-            }));
-            setNotifications(mapped);
+            const resolveIcon = (category: string, title: string) => {
+              if (category === 'KYC' || title.toLowerCase().includes('kyc')) return { icon: UserCheck, iconBg: 'bg-emerald-500/10', iconColor: 'text-emerald-400' };
+              if (category === 'Funds' || title.toLowerCase().includes('withdrawal') || title.toLowerCase().includes('deposit')) return { icon: DollarSign, iconBg: 'bg-amber-500/10', iconColor: 'text-amber-400' };
+              if (category === 'Trading' || title.toLowerCase().includes('order')) return { icon: TrendingUp, iconBg: 'bg-blue-500/10', iconColor: 'text-blue-400' };
+              if (category === 'Support' || title.toLowerCase().includes('ticket')) return { icon: MessageSquare, iconBg: 'bg-purple-500/10', iconColor: 'text-purple-400' };
+              return { icon: Bell, iconBg: 'bg-slate-700/20', iconColor: 'text-slate-400' };
+            };
+
+            const mapped: NotificationItem[] = data.map((d: any, idx: number) => {
+              const category = d.category || 'System';
+              const title = d.title || 'Notification';
+              const iconMeta = resolveIcon(category, title);
+              return {
+                id: d.id || `notif-backend-${idx}`,
+                title,
+                message: d.message || d.details || '',
+                timeAgo: d.timeAgo || (d.created_at ? new Date(d.created_at).toLocaleTimeString() : 'Just now'),
+                category: (['System', 'Trading', 'Funds', 'KYC', 'Support'].includes(category) ? category : 'System') as any,
+                read: storedRead.includes(d.id) || d.is_read || d.read || false,
+                icon: iconMeta.icon,
+                iconBg: iconMeta.iconBg,
+                iconColor: iconMeta.iconColor,
+                targetTab: d.target_tab || d.targetTab || undefined
+              };
+            });
+
+            // Ensure baseline 3 notifications (KYC Document Submitted, Withdrawal Request, Large Order Alert) are retained
+            const existingTitles = new Set(mapped.map(m => m.title.toLowerCase().trim()));
+            const missingBaselines = INITIAL_NOTIFICATIONS.filter(b => !existingTitles.has(b.title.toLowerCase().trim()));
+            setNotifications([...mapped, ...missingBaselines]);
           }
         }
       } catch {

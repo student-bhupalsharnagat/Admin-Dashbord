@@ -349,7 +349,15 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
   // 5. Add Custom Domain
   const handleAddDomain = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newDomainInput.trim()) return;
+    const domainVal = newDomainInput.trim();
+    if (!domainVal) return;
+
+    const fqdnRegex = /^(?!-)[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$/;
+    if (!fqdnRegex.test(domainVal) || domainVal.includes(' ')) {
+      onNotify?.('Please enter a valid domain name (e.g., trade.example.com)', 'warning');
+      return;
+    }
+
     setAddingDomain(true);
     try {
       const res = await fetch('/api/admin/white-label/domains', {
@@ -357,7 +365,7 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           tenantId: selectedTenantId,
-          domain: newDomainInput.trim(),
+          domain: domainVal,
           domainType: newDomainType,
           isPrimary: newDomainType === 'PRIMARY'
         })

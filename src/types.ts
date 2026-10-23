@@ -162,6 +162,8 @@ export interface Client {
 export interface Trade {
   id: string;
   trade_id: string;
+  order_id?: string;
+  orderRef?: string;
   client_id: string;
   client_name: string;
   tenant_id: string;

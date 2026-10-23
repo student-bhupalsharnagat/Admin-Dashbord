@@ -388,14 +388,14 @@ const normalizeMaster = (m: any) => ({
   ...m,
   id: String(m.id || `MST-${Math.random().toString().slice(2, 6)}`),
   name: m.name || m.tenant_name || 'Master Admin',
-  company: m.company || m.tenant_name || m.name || 'Master Corp',
+  company: m.company || m.companyName || m.tenant_name || (m.name ? `${m.name} Capital Ltd` : 'Master Corp'),
   email: m.email || 'master@tradematrix.io',
   brokers: typeof m.brokers === 'number' ? m.brokers : (m.brokers_count ?? 0),
   clients: typeof m.clients === 'number' ? m.clients : (m.clients_count ?? 0),
   turnover: m.turnover || '₹0',
   commission: m.commission || m.commission_earned || '₹0',
   status: (m.status || 'ACTIVE').toUpperCase(),
-  created: m.created || m.created_at || '2023-01-15',
+  created: m.created || m.created_at || m.createdDate || new Date().toISOString().split('T')[0],
   region: m.region || 'North India',
   phone: m.phone || '+91 98000 00000',
   tenant_id: m.tenant_id,
@@ -406,16 +406,17 @@ const normalizeBroker = (b: any) => ({
   ...b,
   id: String(b.id || `BRK-${Math.random().toString().slice(2, 6)}`),
   name: b.name || 'Broker Admin',
-  master: b.master || b.master_name || b.parent_master_name || 'Master Admin',
-  master_id: b.master_id,
-  company: b.company || b.tenant_name || b.name || 'Broker Services',
+  master: b.master || b.masterName || b.master_name || b.parent_master_name || 'Master Admin',
+  masterId: b.masterId || b.master_id,
+  master_id: b.masterId || b.master_id,
+  company: b.company || b.companyName || b.tenant_name || b.name || 'Broker Services',
   email: b.email || 'broker@tradematrix.io',
   subBrokers: typeof b.subBrokers === 'number' ? b.subBrokers : (b.sub_brokers_count ?? 0),
   clients: typeof b.clients === 'number' ? b.clients : (b.clients_count ?? 0),
   turnover: b.turnover || '₹0',
   commission: b.commission || b.commission_earned || '₹0',
   status: (b.status || 'ACTIVE').toUpperCase(),
-  created: b.created || b.created_at || '2023-01-15',
+  created: b.created || b.created_at || b.createdDate || new Date().toISOString().split('T')[0],
   phone: b.phone || '+91 98000 00000',
   tenant_id: b.tenant_id,
   tenant_name: b.tenant_name
@@ -425,39 +426,49 @@ const normalizeSubBroker = (sb: any) => ({
   ...sb,
   id: String(sb.id || `SBRK-${Math.random().toString().slice(2, 6)}`),
   name: sb.name || 'Sub-Broker Admin',
-  parentBroker: sb.parentBroker || sb.broker_name || sb.parent_broker_name || 'Broker Admin',
-  broker_id: sb.broker_id,
+  parentBroker: sb.parentBroker || sb.brokerName || sb.broker_name || sb.parent_broker_name || 'Broker Admin',
+  brokerId: sb.brokerId || sb.broker_id,
+  broker_id: sb.brokerId || sb.broker_id,
   email: sb.email || 'subbroker@tradematrix.io',
   clients: typeof sb.clients === 'number' ? sb.clients : (sb.clients_count ?? 0),
   turnover: sb.turnover || '₹0',
   commission: sb.commission || sb.commission_earned || '₹0',
   status: (sb.status || 'ACTIVE').toUpperCase(),
-  created: sb.created || sb.created_at || '2023-01-15',
+  created: sb.created || sb.created_at || sb.createdDate || new Date().toISOString().split('T')[0],
   phone: sb.phone || '+91 98000 00000',
   tenant_id: sb.tenant_id,
   tenant_name: sb.tenant_name
 });
 
-const normalizeClient = (c: any) => ({
-  ...c,
-  id: String(c.id || `CLI-${Math.random().toString().slice(2, 6)}`),
-  name: c.name || 'Client Trader',
-  email: c.email || 'trader@tradematrix.io',
-  phone: c.phone || '+91 98000 00000',
-  master: c.master || c.master_name || 'Master Admin',
-  broker: c.broker || c.broker_name || 'Broker Admin',
-  subBroker: c.subBroker || c.sub_broker_name || c.parent_sub_broker_name || 'Sub-Broker Admin',
-  account: (c.account || c.status || 'ACTIVE').toUpperCase(),
-  kyc: (c.kyc || c.kyc_status || 'PENDING').toUpperCase(),
-  balance: c.balance || (c.wallet_balance !== undefined ? `₹${Number(c.wallet_balance).toLocaleString('en-IN')}` : '₹0'),
-  equity: c.equity || (c.available_margin !== undefined ? `₹${Number(c.available_margin).toLocaleString('en-IN')}` : '₹0'),
-  margin: c.margin || '₹0',
-  pl: c.pl || (c.todays_pl !== undefined ? (c.todays_pl >= 0 ? `+₹${c.todays_pl}` : `-₹${Math.abs(c.todays_pl)}`) : '+₹0'),
-  trades: typeof c.trades === 'number' ? c.trades : (c.open_positions_count ?? 0),
-  joined: c.joined || c.created_at || '2023-01-15',
-  tenant_id: c.tenant_id,
-  tenant_name: c.tenant_name
-});
+const normalizeClient = (c: any) => {
+  const cleanEmail = (c.email || 'trader@tradematrix.io')
+    .replace(/^usr-[a-zA-Z0-9]+-[a-zA-Z0-9]+-/i, '')
+    .replace(/^usr-tnt-\d+-/i, '');
+  const cleanPhone = (c.phone || '+91 98000 00000')
+    .replace(/^usr-[a-zA-Z0-9]+-[a-zA-Z0-9]+-/i, '')
+    .replace(/^usr-tnt-\d+-/i, '');
+
+  return {
+    ...c,
+    id: String(c.id || `CLI-${Math.random().toString().slice(2, 6)}`),
+    name: c.name || 'Client Trader',
+    email: cleanEmail,
+    phone: cleanPhone,
+    master: c.master || c.masterName || c.master_name || 'Master Admin',
+    broker: c.broker || c.brokerName || c.broker_name || 'Broker Admin',
+    subBroker: c.subBroker || c.sub_broker_name || c.parent_sub_broker_name || 'Sub-Broker Admin',
+    account: (c.account || c.status || 'ACTIVE').toUpperCase(),
+    kyc: (c.kyc || c.kyc_status || 'PENDING').toUpperCase(),
+    balance: c.balance || (c.wallet_balance !== undefined ? `₹${Number(c.wallet_balance).toLocaleString('en-IN')}` : '₹0'),
+    equity: c.equity || (c.available_margin !== undefined ? `₹${Number(c.available_margin).toLocaleString('en-IN')}` : '₹0'),
+    margin: c.margin || '₹0',
+    pl: c.pl || (c.todays_pl !== undefined ? (c.todays_pl >= 0 ? `+₹${c.todays_pl}` : `-₹${Math.abs(c.todays_pl)}`) : '+₹0'),
+    trades: typeof c.trades === 'number' ? c.trades : (c.open_positions_count ?? 0),
+    joined: c.joined || c.created_at || c.created || new Date().toISOString().split('T')[0],
+    tenant_id: c.tenant_id,
+    tenant_name: c.tenant_name
+  };
+};
 
 export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
   level,

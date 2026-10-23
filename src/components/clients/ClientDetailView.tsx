@@ -98,18 +98,25 @@ export const ClientDetailView: React.FC<ClientDetailViewProps> = ({
             : (String(rawPl).startsWith('₹') || String(rawPl).startsWith('+') || String(rawPl).startsWith('-') ? String(rawPl) : `+₹${rawPl}`))
         : '+₹0';
 
+    const cleanEmail = (c?.email || 'client@mail.com')
+      .replace(/^usr-[a-zA-Z0-9]+-[a-zA-Z0-9]+-/i, '')
+      .replace(/^usr-tnt-\d+-/i, '');
+    const cleanPhone = (c?.phone || '+91 98765 43210')
+      .replace(/^usr-[a-zA-Z0-9]+-[a-zA-Z0-9]+-/i, '')
+      .replace(/^usr-tnt-\d+-/i, '');
+
     return {
       name: c?.name || c?.fullName || 'Client',
-      email: c?.email || 'client@mail.com',
-      phone: c?.phone || '+91 98765 43210',
+      email: cleanEmail,
+      phone: cleanPhone,
       master: c?.master || c?.masterName || c?.master_name || c?.parentMaster || 'Unassigned',
       broker: c?.broker || c?.brokerName || c?.broker_name || c?.parentBroker || 'Unassigned',
       subBroker: c?.subBroker || c?.sub_broker || 'Unassigned',
       id: c?.id || c?.client_code || 'CLT001',
       balance: resolvedBalance,
       netPl: resolvedNetPl,
-      totalOrders: c?.totalOrders !== undefined ? c.totalOrders : (c?.orders_count !== undefined ? c.orders_count : 2),
-      totalTrades: c?.totalTrades !== undefined ? c.totalTrades : (c?.trades_count !== undefined ? c.trades_count : 2),
+      totalOrders: c?.totalOrders !== undefined ? c.totalOrders : (c?.orders_count !== undefined ? c.orders_count : 0),
+      totalTrades: c?.totalTrades !== undefined ? c.totalTrades : (c?.trades_count !== undefined ? c.trades_count : 0),
       joined: c?.joined || c?.created || c?.created_at || '2023-04-01',
       kyc: (c?.kyc || c?.kyc_status || c?.kycStatus || 'APPROVED').toUpperCase()
     };
@@ -228,13 +235,19 @@ export const ClientDetailView: React.FC<ClientDetailViewProps> = ({
     openOrdersCount: 0
   });
 
+  const isBaselineDemoClient = (cId?: string, cName?: string) => {
+    const idStr = String(cId || '').toLowerCase();
+    const nameStr = String(cName || '').toLowerCase();
+    return idStr === 'clt001' || idStr === 'clt-001' || idStr.includes('vtx_demo') || nameStr.includes('arjun patel');
+  };
+
   const [liveOrders, setLiveOrders] = useState<any[]>(() =>
-    client.totalOrders >= 2 || (client.id && (client.id === 'CLT001' || String(client.id).includes('demo') || String(client.id).includes('vtx')))
+    isBaselineDemoClient(client.id, client.name)
       ? getBaselineDemoOrders(client.id, client.name || 'Client')
       : []
   );
   const [liveTrades, setLiveTrades] = useState<any[]>(() =>
-    client.totalTrades >= 2 || (client.id && (client.id === 'CLT001' || String(client.id).includes('demo') || String(client.id).includes('vtx')))
+    isBaselineDemoClient(client.id, client.name)
       ? getBaselineDemoTrades(client.id, client.name || 'Client')
       : []
   );
@@ -278,22 +291,30 @@ export const ClientDetailView: React.FC<ClientDetailViewProps> = ({
         const ords = await ordRes.value.json();
         if (Array.isArray(ords) && ords.length > 0) {
           setLiveOrders(ords);
-        } else if (clientData.totalOrders >= 2 || !ords || ords.length === 0) {
+        } else if (isBaselineDemoClient(client.id, clientData.name)) {
           setLiveOrders(getBaselineDemoOrders(client.id, clientData.name));
+        } else {
+          setLiveOrders([]);
         }
-      } else if (clientData.totalOrders >= 2) {
+      } else if (isBaselineDemoClient(client.id, clientData.name)) {
         setLiveOrders(getBaselineDemoOrders(client.id, clientData.name));
+      } else {
+        setLiveOrders([]);
       }
 
       if (trdRes.status === 'fulfilled' && trdRes.value.ok) {
         const trds = await trdRes.value.json();
         if (Array.isArray(trds) && trds.length > 0) {
           setLiveTrades(trds);
-        } else if (clientData.totalTrades >= 2 || !trds || trds.length === 0) {
+        } else if (isBaselineDemoClient(client.id, clientData.name)) {
           setLiveTrades(getBaselineDemoTrades(client.id, clientData.name));
+        } else {
+          setLiveTrades([]);
         }
-      } else if (clientData.totalTrades >= 2) {
+      } else if (isBaselineDemoClient(client.id, clientData.name)) {
         setLiveTrades(getBaselineDemoTrades(client.id, clientData.name));
+      } else {
+        setLiveTrades([]);
       }
 
       if (posRes.status === 'fulfilled' && posRes.value.ok) {
@@ -403,7 +424,7 @@ export const ClientDetailView: React.FC<ClientDetailViewProps> = ({
 
   const avatarInitial = (clientData.name || 'A').charAt(0).toUpperCase();
   const LIVE_TRADING_PLATFORM_URL = 'https://trading-platform-2t6r.onrender.com';
-  const tradingPlatformDirectUrl = `${LIVE_TRADING_PLATFORM_URL}?client_id=${encodeURIComponent(clientData.id)}&client_code=${encodeURIComponent(clientData.id)}&name=${encodeURIComponent(clientData.name)}&balance=${encodeURIComponent(clientData.balance)}&email=${encodeURIComponent(clientData.email)}`;
+  const tradingPlatformDirectUrl = `${LIVE_TRADING_PLATFORM_URL}?impersonateClient=${encodeURIComponent(clientData.id)}&client_id=${encodeURIComponent(clientData.id)}&clientName=${encodeURIComponent(clientData.name)}&name=${encodeURIComponent(clientData.name)}&balance=${encodeURIComponent(clientData.balance || 0)}&clientEmail=${encodeURIComponent(clientData.email || '')}&email=${encodeURIComponent(clientData.email || '')}`;
 
   return (
     <div className="space-y-5 animate-in fade-in duration-150">
@@ -1507,11 +1528,22 @@ export const ClientDetailView: React.FC<ClientDetailViewProps> = ({
                 Cancel
               </button>
               <button
-                onClick={() => {
+                onClick={async () => {
+                  try {
+                    await fetch(`/api/admin/clients/${clientData.id}`, {
+                      method: 'PUT',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        name: clientData.name,
+                        email: clientData.email,
+                        phone: clientData.phone
+                      })
+                    });
+                  } catch {}
                   setShowEditModal(false);
                   notify(`Client ${clientData.name} updated successfully.`, 'success');
                 }}
-                className="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-semibold"
+                className="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-semibold cursor-pointer"
               >
                 Save Changes
               </button>

@@ -17,6 +17,7 @@ export const CreateMasterModal: React.FC<CreateMasterModalProps> = ({
 }) => {
   const [tenantId, setTenantId] = useState(tenants[0]?.id || '');
   const [name, setName] = useState('');
+  const [company, setCompany] = useState('');
   const [code, setCode] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
@@ -32,6 +33,7 @@ export const CreateMasterModal: React.FC<CreateMasterModalProps> = ({
       await onSubmit({
         tenant_id: tenantId,
         name,
+        company: company || (name ? `${name} Capital Ltd` : 'Master Corp'),
         code,
         email,
         phone,
@@ -101,16 +103,27 @@ export const CreateMasterModal: React.FC<CreateMasterModalProps> = ({
               />
             </div>
             <div>
-              <label className="block font-medium text-slate-300 mb-1.5">Master Code</label>
+              <label className="block font-medium text-slate-300 mb-1.5">Company Name</label>
               <input
                 type="text"
-                value={code}
-                onChange={e => setCode(e.target.value)}
-                placeholder="e.g. MST-MUM-06"
+                value={company}
+                onChange={e => setCompany(e.target.value)}
+                placeholder="e.g. Deshmukh Capital Ltd"
                 className="w-full px-3 py-2 bg-[#121c33] border border-[#1e2f52] rounded-lg text-slate-200 focus:outline-none focus:border-blue-500"
-                required
               />
             </div>
+          </div>
+
+          <div>
+            <label className="block font-medium text-slate-300 mb-1.5">Master Code</label>
+            <input
+              type="text"
+              value={code}
+              onChange={e => setCode(e.target.value)}
+              placeholder="e.g. MST-MUM-06"
+              className="w-full px-3 py-2 bg-[#121c33] border border-[#1e2f52] rounded-lg text-slate-200 focus:outline-none focus:border-blue-500"
+              required
+            />
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

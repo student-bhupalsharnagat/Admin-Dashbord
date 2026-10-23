@@ -592,8 +592,36 @@ export const SystemToolsView: React.FC<SystemToolsViewProps> = ({
                   <p className="text-[11px] text-slate-400">Every privileged modification across Masters, Brokers, and Risk caps is permanently recorded.</p>
                 </div>
                 <button
-                  onClick={() => onNotify?.('Exporting audit trail archive to CSV...', 'info')}
-                  className="px-3 py-1.5 rounded-lg bg-[#111c34] hover:bg-blue-600 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                  onClick={() => {
+                    try {
+                      const headers = ['AUDIT ID', 'ACTOR', 'OPERATION', 'TARGET ENTITY', 'CLIENT IP', 'TIMESTAMP'];
+                      const rows = auditLogs.map(l => [
+                        l.id || '',
+                        l.actor || '',
+                        l.action || '',
+                        l.target || '',
+                        l.ip || '',
+                        l.timestamp || ''
+                      ]);
+                      const csvContent = [
+                        headers.join(','),
+                        ...rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))
+                      ].join('\n');
+                      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                      const url = URL.createObjectURL(blob);
+                      const link = document.createElement('a');
+                      link.setAttribute('href', url);
+                      link.setAttribute('download', 'audit-trail-export.csv');
+                      document.body.appendChild(link);
+                      link.click();
+                      document.body.removeChild(link);
+                      URL.revokeObjectURL(url);
+                      onNotify?.('Audit trail CSV downloaded successfully', 'success');
+                    } catch (err: any) {
+                      onNotify?.('Failed to download audit trail CSV', 'warning');
+                    }
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-[#111c34] hover:bg-blue-600 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
                 >
                   <Download size={13} /> Export CSV
                 </button>

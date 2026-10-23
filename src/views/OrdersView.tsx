@@ -66,20 +66,30 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data)) {
-          const mapped: OrderItem[] = data.map((o: any, idx: number) => ({
-            orderId: o.orderId || o.order_id || o.id || `ORD-${String(idx + 1).padStart(3, '0')}`,
-            client: o.client || o.client_name || 'Retail Client',
-            clientId: o.clientId || o.client_id,
-            symbol: o.symbol || 'NIFTY50',
-            side: ((o.side || 'BUY').toUpperCase() === 'SELL' ? 'SELL' : 'BUY') as 'BUY' | 'SELL',
-            quantity: String(o.quantity || o.qty || '1'),
-            type: (o.type || o.order_type || 'Market') as any,
-            price: typeof o.price === 'number' ? `₹${o.price.toLocaleString('en-IN')}` : String(o.price || 'Market'),
-            status: ((o.status || 'PENDING').toUpperCase() === 'EXECUTED' ? 'FILLED' : (o.status?.toUpperCase() || 'PENDING')) as 'FILLED' | 'PENDING' | 'CANCELLED',
-            created: o.created || (o.created_at ? o.created_at.slice(0, 19).replace('T', ' ') : new Date().toISOString().slice(0, 19).replace('T', ' ')),
-            filledQty: o.filledQty || o.filled_quantity,
-            exchange: o.exchange || 'NSE'
-          }));
+          const mapped: OrderItem[] = data.map((o: any, idx: number): OrderItem => {
+            const rawStatus = (o.status || 'PENDING').toUpperCase();
+            const status = (rawStatus === 'EXECUTED' ? 'FILLED' : rawStatus) as 'FILLED' | 'PENDING' | 'CANCELLED';
+            const isCancelledOrRejected = status === 'CANCELLED' || rawStatus === 'REJECTED';
+            const rawFilled = o.filledQty ?? o.filled_quantity ?? o.executedQty ?? o.executed_quantity;
+            const resolvedFilledQty = isCancelledOrRejected
+              ? String(rawFilled !== undefined && rawFilled !== null && rawFilled !== '' ? rawFilled : '0')
+              : (rawFilled !== undefined && rawFilled !== null && rawFilled !== '' ? String(rawFilled) : (status === 'FILLED' ? String(o.quantity || o.qty || '1') : '0'));
+
+            return {
+              orderId: o.orderId || o.order_id || o.id || `ORD-${String(idx + 1).padStart(3, '0')}`,
+              client: o.client || o.client_name || 'Retail Client',
+              clientId: o.clientId || o.client_id,
+              symbol: o.symbol || 'NIFTY50',
+              side: ((o.side || 'BUY').toUpperCase() === 'SELL' ? 'SELL' : 'BUY') as 'BUY' | 'SELL',
+              quantity: String(o.quantity || o.qty || '1'),
+              type: (o.type || o.order_type || 'Market') as any,
+              price: typeof o.price === 'number' ? `₹${o.price.toLocaleString('en-IN')}` : String(o.price || 'Market'),
+              status,
+              created: o.created || (o.created_at ? o.created_at.slice(0, 19).replace('T', ' ') : new Date().toISOString().slice(0, 19).replace('T', ' ')),
+              filledQty: resolvedFilledQty,
+              exchange: o.exchange || 'NSE'
+            };
+          });
           setOrders(mapped);
         }
       }
@@ -427,7 +437,11 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
                 </div>
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-slate-400">Filled Quantity</span>
-                  <span className="font-bold text-emerald-400">{selectedOrder.filledQty || selectedOrder.quantity}</span>
+                  <span className="font-bold text-emerald-400">
+                    {selectedOrder.status === 'CANCELLED'
+                      ? (selectedOrder.filledQty !== undefined ? selectedOrder.filledQty : '0')
+                      : (selectedOrder.filledQty || (selectedOrder.status === 'FILLED' ? selectedOrder.quantity : '0'))}
+                  </span>
                 </div>
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-slate-400">Limit / Exec Price</span>
@@ -547,7 +561,11 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-400">Filled Qty</span>
-                  <span className="text-emerald-400 font-bold">{tradeModalOrder.quantity}</span>
+                  <span className="text-emerald-400 font-bold">
+                    {tradeModalOrder.status === 'CANCELLED'
+                      ? (tradeModalOrder.filledQty !== undefined ? tradeModalOrder.filledQty : '0')
+                      : (tradeModalOrder.filledQty || (tradeModalOrder.status === 'FILLED' ? tradeModalOrder.quantity : '0'))}
+                  </span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-400">Settlement</span>

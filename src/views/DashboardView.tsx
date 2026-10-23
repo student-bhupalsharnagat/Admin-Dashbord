@@ -88,6 +88,57 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const currencySymbol = currency === 'USD' ? '$' : '₹';
+  const USD_INR_RATE = 84;
+
+  const formatCurrencyValue = (raw: string | number | undefined | null, targetCurrency: 'USD' | 'INR'): string => {
+    if (raw === undefined || raw === null || raw === '' || raw === '—') return '—';
+    if (typeof raw === 'number') {
+      if (targetCurrency === 'USD') {
+        const usdVal = raw / USD_INR_RATE;
+        return `$${usdVal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      }
+      return `₹${raw.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    }
+
+    const str = String(raw).trim();
+    if (str === '—' || str === '0') {
+      return targetCurrency === 'USD' ? '$0.00' : '₹0.00';
+    }
+
+    const isNegative = str.includes('-') || str.startsWith('(');
+    const cleanNumeric = str.replace(/[^0-9.]/g, '');
+    const num = parseFloat(cleanNumeric);
+
+    if (isNaN(num)) {
+      return str;
+    }
+
+    const sign = isNegative ? '-' : '';
+    const val = isNegative ? -num : num;
+
+    if (targetCurrency === 'USD') {
+      const isAlreadyUSD = str.includes('$');
+      const usdVal = isAlreadyUSD ? val : val / USD_INR_RATE;
+      const absVal = Math.abs(usdVal);
+      const formatted = absVal >= 1000000
+        ? `$${(absVal / 1000000).toFixed(2)}M`
+        : absVal >= 1000
+        ? `$${absVal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        : `$${absVal.toFixed(2)}`;
+      return `${sign}${formatted}`;
+    } else {
+      const isUSD = str.includes('$');
+      const inrVal = isUSD ? val * USD_INR_RATE : val;
+      const absVal = Math.abs(inrVal);
+      const formatted = absVal >= 10000000
+        ? `₹${(absVal / 10000000).toFixed(2)} Cr`
+        : absVal >= 100000
+        ? `₹${(absVal / 100000).toFixed(2)} L`
+        : `₹${absVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      return `${sign}${formatted}`;
+    }
+  };
+
   const activeKpis = kpis !== null && kpis !== undefined ? kpis : DEFAULT_UNAVAILABLE_KPIS;
   const isUnavailable = kpis === null || hasError;
 
@@ -259,7 +310,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 sm:gap-4">
         <KPICard
           title="TODAY'S TURNOVER"
-          value={activeKpis.todays_turnover?.value || '₹0'}
+          value={formatCurrencyValue(activeKpis.todays_turnover?.value || '0', currency)}
           subtitle={activeKpis.todays_turnover?.subtitle || 'Today'}
           icon={TrendingUp}
           iconColor="text-amber-400"
@@ -269,7 +320,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         <KPICard
           title="TOTAL TURNOVER"
-          value={activeKpis.total_turnover?.value || activeKpis.todays_turnover?.value || '₹0'}
+          value={formatCurrencyValue(activeKpis.total_turnover?.value || activeKpis.todays_turnover?.value || '0', currency)}
           subtitle={activeKpis.total_turnover?.subtitle || 'Total Executed'}
           icon={BarChart3}
           iconColor="text-blue-400"
@@ -279,7 +330,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         <KPICard
           title="NET P&L"
-          value={activeKpis.net_pl?.value || activeKpis.total_pl?.value || '₹0'}
+          value={formatCurrencyValue(activeKpis.net_pl?.value || activeKpis.total_pl?.value || '0', currency)}
           subtitle={activeKpis.net_pl?.subtitle || activeKpis.total_pl?.subtitle || 'Unrealized + Realized'}
           icon={DollarSign}
           iconColor="text-emerald-400"
@@ -289,7 +340,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         <KPICard
           title="COMMISSION EARNED"
-          value={activeKpis.commission_earned?.value ? `${activeKpis.commission_earned.value}` : '₹0'}
+          value={formatCurrencyValue(activeKpis.commission_earned?.value || '0', currency)}
           subtitle={activeKpis.commission_earned?.subtitle || 'Actual rules'}
           icon={Coins}
           iconColor="text-purple-400"

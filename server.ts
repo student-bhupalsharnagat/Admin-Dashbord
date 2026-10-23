@@ -1036,17 +1036,17 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/tenants', authenticate, requirePermission('tenants.create'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER']), async (req, res) => {
+  app.post(['/api/admin/tenants', '/api/tenants'], authenticate, requirePermission('tenants.create'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'ADMIN', 'TENANT_ADMIN']), async (req, res) => {
     try {
       const tenant = await activeTradingDataProvider.createTenant(req.body);
       await writeSecurityAuditLog({
         tenantId: tenant.id,
-        userName: req.user!.name,
+        userName: req.user?.name || 'Admin',
         action: 'TENANT_CREATED',
         module: 'TENANTS',
         details: `Created new tenant: ${tenant.name} (${tenant.id})`,
         ipAddress: req.ip
-      });
+      }).catch(() => {});
       res.status(201).json(tenant);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -2040,7 +2040,7 @@ async function startServer() {
     }
   });
 
-  app.post(['/api/admin/support/:id/reply', '/api/support/:id/reply'], authenticate, async (req, res) => {
+  app.post(['/api/admin/support/:id/reply', '/api/support/:id/reply', '/api/admin/tickets/:id/reply', '/api/tickets/:id/reply'], authenticate, async (req, res) => {
     try {
       const ticketId = req.params.id;
       const { message } = req.body;
@@ -2488,7 +2488,12 @@ async function startServer() {
       if (!tenantId || !domain) {
         return res.status(400).json({ error: 'tenantId and domain are required' });
       }
-      const newDomain = await activeTradingDataProvider.addTenantDomain(tenantId, { domain, domain_type: domainType, is_primary: isPrimary }, user?.name || 'Admin');
+      const domainVal = domain.toString().trim();
+      const fqdnRegex = /^(?!-)[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$/;
+      if (!fqdnRegex.test(domainVal) || domainVal.includes(' ')) {
+        return res.status(400).json({ error: 'Please enter a valid domain name (e.g., trade.example.com)' });
+      }
+      const newDomain = await activeTradingDataProvider.addTenantDomain(tenantId, { domain: domainVal, domain_type: domainType, is_primary: isPrimary }, user?.name || 'Admin');
       res.status(201).json(newDomain);
     } catch (err: any) {
       res.status(400).json({ error: err.message });
@@ -2674,7 +2679,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/support/:id/reply', authMiddleware, async (req, res) => {
+  app.post(['/api/admin/support/:id/reply', '/api/support/:id/reply', '/api/admin/tickets/:id/reply', '/api/tickets/:id/reply'], authMiddleware, async (req, res) => {
     try {
       const { message } = req.body;
       const user = (req as any).user;
