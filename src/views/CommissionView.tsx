@@ -252,6 +252,16 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
     let isMounted = true;
     const fetchCommissionData = async () => {
       try {
+        let localPlans: CommissionPlanItem[] = [];
+        try {
+          localPlans = JSON.parse(localStorage.getItem('admin_commission_plans') || '[]');
+        } catch {}
+
+        let localRules: CommissionRuleItem[] = [];
+        try {
+          localRules = JSON.parse(localStorage.getItem('admin_commission_rules') || '[]');
+        } catch {}
+
         const [plansRes, rulesRes, txnsRes] = await Promise.all([
           fetch('/api/admin/commercial/commission-plans', { credentials: 'include' }),
           fetch('/api/admin/commercial/commission-rules', { credentials: 'include' }),
@@ -262,19 +272,30 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
           const plansData = await plansRes.json();
           if (isMounted && Array.isArray(plansData)) {
             const mappedPlans: CommissionPlanItem[] = plansData.map((p: any) => ({
-              planId: p.id,
-              planName: p.name,
-              type: (p.plan_type === 'TIERED' ? 'TIERED' : (p.plan_type === 'FIXED' ? 'FIXED' : 'PERCENTAGE')) as any,
+              planId: p.id || p.planId,
+              planName: p.name || p.planName,
+              type: (p.plan_type === 'TIERED' || p.type === 'TIERED' ? 'TIERED' : (p.plan_type === 'FIXED' || p.type === 'FIXED' ? 'FIXED' : 'PERCENTAGE')) as any,
               rate: p.rate_value ? `${p.rate_value}%` : (p.rate || '0.05%'),
               instruments: p.instruments || 'All',
               users: p.users_count || p.users || 0,
               status: p.status === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE',
               description: p.description || '',
-              masterShare: p.master_share || '40%',
-              brokerShare: p.broker_share || '60%'
+              masterShare: p.master_share || p.masterShare || '40%',
+              brokerShare: p.broker_share || p.brokerShare || '60%'
             }));
+
+            // Merge with local plans
+            const seenIds = new Set(mappedPlans.map(p => p.planId));
+            for (const lp of localPlans) {
+              if (!seenIds.has(lp.planId)) {
+                mappedPlans.push(lp);
+                seenIds.add(lp.planId);
+              }
+            }
             setPlans(mappedPlans);
           }
+        } else if (localPlans.length > 0) {
+          setPlans(localPlans);
         }
 
         if (rulesRes.ok) {
@@ -285,24 +306,36 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
               name: r.name || `Rule ${r.id}`,
               condition: r.condition || `Asset Class: ${r.asset_class || 'EQUITY'}`,
               split: r.split || 'Master: 40%, Broker: 40%, Sub-Broker: 20%',
-              masterShare: r.master_share || '40%',
-              brokerShare: r.broker_share || '40%',
-              subBrokerShare: r.sub_broker_share || '20%',
-              baseRate: r.base_rate || `₹${r.rate_value || '25,000'}`,
-              overrideMargin: r.override_margin || '+15.0%',
-              enforcedAccounts: r.enforced_accounts || 100,
-              activeSlabs: r.active_slabs || 2,
+              masterShare: r.master_share || r.masterShare || '40%',
+              brokerShare: r.broker_share || r.brokerShare || '40%',
+              subBrokerShare: r.sub_broker_share || r.subBrokerShare || '20%',
+              baseRate: r.base_rate || r.baseRate || `₹${r.rate_value || '25,000'}`,
+              overrideMargin: r.override_margin || r.overrideMargin || '+15.0%',
+              enforcedAccounts: r.enforced_accounts || r.enforcedAccounts || 100,
+              activeSlabs: r.active_slabs || r.activeSlabs || 2,
               instruments: r.asset_class || r.instruments || 'All Instruments',
               status: r.status === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE',
-              joined: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : '2026-01-01',
-              policyType: r.rate_type || 'Turnover Slab Incentive',
+              joined: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : (r.joined || '2026-01-01'),
+              policyType: r.rate_type || r.policyType || 'Turnover Slab Incentive',
               description: r.description || 'Commission policy rule'
             }));
+
+            // Merge with local rules
+            const seenRuleIds = new Set(mappedRules.map(r => r.id));
+            for (const lr of localRules) {
+              if (!seenRuleIds.has(lr.id)) {
+                mappedRules.push(lr);
+                seenRuleIds.add(lr.id);
+              }
+            }
             setRulesList(mappedRules);
             if (mappedRules.length > 0) {
               setSelectedRule(mappedRules[0]);
             }
           }
+        } else if (localRules.length > 0) {
+          setRulesList(localRules);
+          setSelectedRule(localRules[0]);
         }
 
         if (txnsRes.ok) {
@@ -328,7 +361,7 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
     notify(`Rule ${selectedRule.id} status changed to ${updatedStatus}`, updatedStatus === 'ACTIVE' ? 'success' : 'warning');
   };
 
-  const handleCreateRule = (e: React.FormEvent) => {
+  const handleCreateRule = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newRuleName.trim() || !newRuleCondition.trim()) {
       notify('Please enter rule name and trigger condition', 'warning');
@@ -354,6 +387,23 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
       policyType: newRulePolicyType,
       description: `Custom policy rule governing ${newRuleCondition}`
     };
+
+    try {
+      await fetch('/api/admin/commercial/commission-rules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(newRule)
+      });
+    } catch (err) {
+      console.warn('Failed to persist commission rule:', err);
+    }
+
+    try {
+      const stored = JSON.parse(localStorage.getItem('admin_commission_rules') || '[]');
+      stored.push(newRule);
+      localStorage.setItem('admin_commission_rules', JSON.stringify(stored));
+    } catch {}
 
     setRulesList(prev => [...prev, newRule]);
     setSelectedRule(newRule);
@@ -390,7 +440,7 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
     return null;
   };
 
-  const handleCreatePlan = (e: React.FormEvent) => {
+  const handleCreatePlan = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newPlanName.trim() || !newPlanRate.trim()) {
       notify('Please enter plan name and rate', 'warning');
@@ -410,6 +460,23 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
       masterShare: '35%',
       brokerShare: '65%'
     };
+
+    try {
+      await fetch('/api/admin/commercial/commission-plans', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(newPlan)
+      });
+    } catch (err) {
+      console.warn('Failed to persist commission plan:', err);
+    }
+
+    try {
+      const stored = JSON.parse(localStorage.getItem('admin_commission_plans') || '[]');
+      stored.push(newPlan);
+      localStorage.setItem('admin_commission_plans', JSON.stringify(stored));
+    } catch {}
 
     setPlans(prev => [...prev, newPlan]);
     notify(`Commission plan ${newPlanName} (${newId}) created successfully!`, 'success');
@@ -477,7 +544,13 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
         <h1 className="text-xl font-bold text-white tracking-tight">Commission Management</h1>
 
         <button
-          onClick={() => setShowCreateModal(true)}
+          onClick={() => {
+            if (activeTab === 'rules') {
+              setShowCreateRuleModal(true);
+            } else {
+              setShowCreateModal(true);
+            }
+          }}
           className="flex items-center gap-1.5 px-3.5 py-2 bg-[#2563eb] hover:bg-blue-600 text-white font-medium text-xs rounded-lg transition-colors shadow-sm cursor-pointer"
         >
           <Plus size={14} />

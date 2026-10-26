@@ -217,7 +217,32 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ onNotify, currentUser 
         if (!res.ok) return [];
         const clients = await res.json();
         if (!Array.isArray(clients) || clients.length === 0) return [];
-        return clients.map((c: any) => {
+
+        let filteredClients = clients;
+
+        if (selectedMaster && selectedMaster !== 'All Masters') {
+          const matchCode = selectedMaster.match(/\(([^)]+)\)/);
+          const masterCode = (matchCode ? matchCode[1] : selectedMaster).toLowerCase().trim();
+          const masterName = selectedMaster.replace(/\s*\([^)]*\)/, '').trim().toLowerCase();
+
+          filteredClients = filteredClients.filter((c: any) => {
+            const m = (c.master || c.master_name || c.master_code || c.master_id || '').toString().toLowerCase();
+            return m.includes(masterCode) || m.includes(masterName) || masterCode.includes(m) || masterName.includes(m);
+          });
+        }
+
+        if (selectedBroker && selectedBroker !== 'All Brokers') {
+          const matchCode = selectedBroker.match(/\(([^)]+)\)/);
+          const brokerCode = (matchCode ? matchCode[1] : selectedBroker).toLowerCase().trim();
+          const brokerName = selectedBroker.replace(/\s*\([^)]*\)/, '').trim().toLowerCase();
+
+          filteredClients = filteredClients.filter((c: any) => {
+            const b = (c.broker || c.broker_name || c.broker_code || c.broker_id || '').toString().toLowerCase();
+            return b.includes(brokerCode) || b.includes(brokerName) || brokerCode.includes(b) || brokerName.includes(b);
+          });
+        }
+
+        return filteredClients.map((c: any) => {
           const code = c.code || c.id || '';
           const name = (c.name || 'Client').replace(/"/g, '""');
           const realized = `₹${Number(c.realized_pl || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;

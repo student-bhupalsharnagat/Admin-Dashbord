@@ -1015,7 +1015,7 @@ async function startServer() {
   // ----------------------------------------------------
   // TENANTS MANAGEMENT (SUPER_ADMIN only)
   // ----------------------------------------------------
-  app.get('/api/admin/tenants', authenticate, requirePermission('tenants.view'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER']), async (req, res) => {
+  app.get('/api/admin/tenants', authenticate, requirePermission('tenants.view'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'ADMIN', 'TENANT_ADMIN']), async (req, res) => {
     try {
       const search = req.query.search as string;
       const status = req.query.status as string;
@@ -1481,6 +1481,18 @@ async function startServer() {
     }
   });
 
+  app.get(['/api/admin/clients/:id/ledger', '/api/clients/:id/ledger'], authenticate, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const ledger = typeof (activeTradingDataProvider as any).getClientLedger === 'function'
+        ? await (activeTradingDataProvider as any).getClientLedger(id, req.user?.tenant_id)
+        : [];
+      res.json(ledger);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
 
 
   app.post('/api/admin/clients/:id/positions/:posId/square-off', authenticate, async (req, res) => {
@@ -1939,6 +1951,32 @@ async function startServer() {
     }
   });
 
+  app.post('/api/admin/commercial/commission-plans', authenticate, requirePermission('commission.manage'), async (req, res) => {
+    try {
+      const tenantScope = resolveStrictTenantScope(req) || 'TNT-001';
+      if (typeof (activeTradingDataProvider as any).createCommissionPlan === 'function') {
+        const plan = await (activeTradingDataProvider as any).createCommissionPlan({ ...req.body, tenant_id: tenantScope });
+        return res.status(201).json(plan);
+      }
+      res.status(201).json({ id: `CP00${Date.now().toString().slice(-3)}`, ...req.body });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/admin/commercial/commission-rules', authenticate, requirePermission('commission.manage'), async (req, res) => {
+    try {
+      const tenantScope = resolveStrictTenantScope(req) || 'TNT-001';
+      if (typeof (activeTradingDataProvider as any).createCommissionRule === 'function') {
+        const rule = await (activeTradingDataProvider as any).createCommissionRule({ ...req.body, tenant_id: tenantScope });
+        return res.status(201).json(rule);
+      }
+      res.status(201).json({ id: `RUL-${Date.now().toString().slice(-4)}`, ...req.body });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get('/api/admin/commercial/commission-transactions', authenticate, requirePermission('commission.view'), async (req, res) => {
     try {
       const tenantScope = resolveStrictTenantScope(req);
@@ -1994,6 +2032,33 @@ async function startServer() {
       const tenantScope = resolveStrictTenantScope(req);
       const events = await activeTradingDataProvider.getRiskEvents(tenantScope);
       res.json(events);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/admin/risk/profiles', authenticate, requirePermission('risk.manage'), async (req, res) => {
+    try {
+      const tenantScope = resolveStrictTenantScope(req) || 'TNT-001';
+      if (typeof (activeTradingDataProvider as any).createRiskProfile === 'function') {
+        const profile = await (activeTradingDataProvider as any).createRiskProfile({ ...req.body, tenant_id: tenantScope });
+        return res.status(201).json(profile);
+      }
+      res.status(201).json({ id: `RP00${Date.now().toString().slice(-3)}`, ...req.body });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/admin/risk/events/:id/resolve', authenticate, requirePermission('risk.manage'), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const status = req.body?.status || 'RESOLVED';
+      if (typeof (activeTradingDataProvider as any).resolveRiskEvent === 'function') {
+        const updated = await (activeTradingDataProvider as any).resolveRiskEvent(id, status);
+        return res.json(updated);
+      }
+      res.json({ success: true, id, status });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -2071,6 +2136,21 @@ async function startServer() {
       const orders = await activeTradingDataProvider.getOrders(tenantScope);
       const scoped = await filterClientScopedItems(orders, req.user!);
       res.json(scoped);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post(['/api/admin/orders/:id/cancel', '/api/orders/:id/cancel'], authenticate, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const user = (req as any).user;
+      const reason = req.body?.reason || 'Order cancelled by Admin';
+      if (typeof (activeTradingDataProvider as any).cancelOrder === 'function') {
+        const result = await (activeTradingDataProvider as any).cancelOrder(id, reason, user?.name || 'Admin');
+        return res.json({ success: true, message: `Order ${id} cancelled.`, ...result });
+      }
+      res.json({ success: true, id, status: 'CANCELLED' });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -2481,7 +2561,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/white-label/domains', authMiddleware, requireRoles(['SUPER_ADMIN', 'TENANT_ADMIN']), async (req, res) => {
+  app.post('/api/admin/white-label/domains', authMiddleware, requireRoles(['SUPER_ADMIN', 'PLATFORM_OWNER', 'ADMIN', 'TENANT_ADMIN']), async (req, res) => {
     try {
       const user = (req as any).user;
       const { tenantId, domain, domainType, isPrimary } = req.body;
@@ -2490,7 +2570,7 @@ async function startServer() {
       }
       const domainVal = domain.toString().trim();
       const fqdnRegex = /^(?!-)[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$/;
-      if (!fqdnRegex.test(domainVal) || domainVal.includes(' ')) {
+      if (!fqdnRegex.test(domainVal) || domainVal.includes(' ') || !domainVal.includes('.')) {
         return res.status(400).json({ error: 'Please enter a valid domain name (e.g., trade.example.com)' });
       }
       const newDomain = await activeTradingDataProvider.addTenantDomain(tenantId, { domain: domainVal, domain_type: domainType, is_primary: isPrimary }, user?.name || 'Admin');
@@ -2500,7 +2580,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/admin/white-label/domains/:id', authMiddleware, requireRoles(['SUPER_ADMIN', 'TENANT_ADMIN']), async (req, res) => {
+  app.patch('/api/admin/white-label/domains/:id', authMiddleware, requireRoles(['SUPER_ADMIN', 'PLATFORM_OWNER', 'ADMIN', 'TENANT_ADMIN']), async (req, res) => {
     try {
       const user = (req as any).user;
       const updated = await activeTradingDataProvider.updateTenantDomain(req.params.id, req.body, user?.name || 'Admin');
@@ -2510,7 +2590,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/white-label/domains/:id/verify', authMiddleware, requireRoles(['SUPER_ADMIN', 'TENANT_ADMIN']), async (req, res) => {
+  app.post('/api/admin/white-label/domains/:id/verify', authMiddleware, requireRoles(['SUPER_ADMIN', 'PLATFORM_OWNER', 'ADMIN', 'TENANT_ADMIN']), async (req, res) => {
     try {
       const user = (req as any).user;
       const verified = await activeTradingDataProvider.verifyTenantDomain(req.params.id, user?.name || 'Admin');
@@ -2520,7 +2600,7 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/admin/white-label/domains/:id', authMiddleware, requireRoles(['SUPER_ADMIN', 'TENANT_ADMIN']), async (req, res) => {
+  app.delete('/api/admin/white-label/domains/:id', authMiddleware, requireRoles(['SUPER_ADMIN', 'PLATFORM_OWNER', 'ADMIN', 'TENANT_ADMIN']), async (req, res) => {
     try {
       const user = (req as any).user;
       const success = await activeTradingDataProvider.deleteTenantDomain(req.params.id, user?.name || 'Admin');
@@ -2717,7 +2797,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/emergency-controls/trading', authMiddleware, requireRoles(['SUPER_ADMIN', 'PLATFORM_OWNER']), async (req, res) => {
+  app.post('/api/admin/emergency-controls/trading', authMiddleware, requireRoles(['SUPER_ADMIN', 'PLATFORM_OWNER', 'ADMIN', 'TENANT_ADMIN']), async (req, res) => {
     try {
       const { active, paused, reason } = req.body;
       const effectiveActive = active !== undefined ? Boolean(active) : (paused !== undefined ? !paused : false);
@@ -2732,7 +2812,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/emergency-controls/cancel-all-orders', authMiddleware, requireRoles(['SUPER_ADMIN', 'PLATFORM_OWNER']), async (req, res) => {
+  app.post('/api/admin/emergency-controls/cancel-all-orders', authMiddleware, requireRoles(['SUPER_ADMIN', 'PLATFORM_OWNER', 'ADMIN', 'TENANT_ADMIN']), async (req, res) => {
     try {
       const user = (req as any).user;
       const reason = req.body?.reason || 'Emergency Mass Order Cancellation by Super Admin';
@@ -2746,7 +2826,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/emergency-controls/kill-switch', authMiddleware, requireRoles(['SUPER_ADMIN', 'PLATFORM_OWNER']), async (req, res) => {
+  app.post('/api/admin/emergency-controls/kill-switch', authMiddleware, requireRoles(['SUPER_ADMIN', 'PLATFORM_OWNER', 'ADMIN', 'TENANT_ADMIN']), async (req, res) => {
     try {
       const { action, reason } = req.body;
       const user = (req as any).user;

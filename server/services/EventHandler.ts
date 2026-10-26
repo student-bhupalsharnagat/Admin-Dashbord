@@ -1212,29 +1212,36 @@ export class EventHandler {
 
     // If approved, update client balance and ledger if not already recorded
     if (status === 'COMPLETED' && amount > 0) {
-      const clientBalRes = await query<{ balance: string }>(
-        `UPDATE clients SET balance = balance + $1, equity = equity + $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND tenant_id = $3 RETURNING balance`,
-        [amount, clientId, event.tenantId]
-      );
-      const newBal = parseFloat(clientBalRes.rows[0]?.balance || '0');
+      const existingLedger = await query(
+        `SELECT id FROM ledger_entries WHERE reference_id = $1 OR reference_id = $2 OR id = $3 LIMIT 1`,
+        [depId, transactionRef, `LEDGER-${depId}`]
+      ).catch(() => ({ rows: [] }));
 
-      await query(
-        `INSERT INTO ledger_entries (
-          id, tenant_id, client_id, client_code, client_name, entry_type, debit, credit, balance_after, reference_id, description, is_finalized, created_at
-        ) VALUES ($1, $2, $3, $4, $5, 'DEPOSIT', 0.00, $6, $7, $8, $9, true, CURRENT_TIMESTAMP)
-        ON CONFLICT (id) DO NOTHING`,
-        [
-          `LEDGER-${depId}`,
-          event.tenantId,
-          clientId,
-          clientCode,
-          clientName,
-          amount,
-          newBal,
-          depId,
-          `Deposit credited via ${paymentMethod}`
-        ]
-      );
+      if (existingLedger.rows.length === 0) {
+        const clientBalRes = await query<{ balance: string }>(
+          `UPDATE clients SET balance = balance + $1, equity = equity + $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND tenant_id = $3 RETURNING balance`,
+          [amount, clientId, event.tenantId]
+        );
+        const newBal = parseFloat(clientBalRes.rows[0]?.balance || '0');
+
+        await query(
+          `INSERT INTO ledger_entries (
+            id, tenant_id, client_id, client_code, client_name, entry_type, debit, credit, balance_after, reference_id, description, is_finalized, created_at
+          ) VALUES ($1, $2, $3, $4, $5, 'DEPOSIT', 0.00, $6, $7, $8, $9, true, CURRENT_TIMESTAMP)
+          ON CONFLICT (id) DO NOTHING`,
+          [
+            `LEDGER-${depId}`,
+            event.tenantId,
+            clientId,
+            clientCode,
+            clientName,
+            amount,
+            newBal,
+            depId,
+            `Deposit credited via ${paymentMethod}`
+          ]
+        );
+      }
     }
   }
 

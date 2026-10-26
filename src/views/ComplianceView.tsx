@@ -185,6 +185,14 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
     }
   };
 
+  const isIfscCode = (ref?: string) => Boolean(ref && /^[A-Z]{4}0[A-Z0-9]{6}$/.test(ref.trim()));
+  const cleanTxnRef = (ref?: string, fallbackId?: string) => {
+    if (!ref || ref === '—' || isIfscCode(ref)) {
+      return fallbackId || '—';
+    }
+    return ref;
+  };
+
   const fetchFundsData = async () => {
     try {
       const statusParam = fundsStatusFilter && fundsStatusFilter !== 'All Status' ? `?status=${fundsStatusFilter}` : '';
@@ -194,11 +202,19 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
       ]);
       if (depRes.ok) {
         const depData = await depRes.json();
-        setDepositsList(depData);
+        const mappedDep = (Array.isArray(depData) ? depData : []).map(d => ({
+          ...d,
+          reference: cleanTxnRef(d.reference, d.transaction_ref || d.txnId || d.id)
+        }));
+        setDepositsList(mappedDep);
       }
       if (wdrRes.ok) {
         const wdrData = await wdrRes.json();
-        setWithdrawalsList(wdrData);
+        const mappedWdr = (Array.isArray(wdrData) ? wdrData : []).map(w => ({
+          ...w,
+          reference: cleanTxnRef(w.reference, w.transaction_ref || w.txnId || w.id)
+        }));
+        setWithdrawalsList(mappedWdr);
       }
     } catch (e) {
       console.error('Error fetching funds:', e);
@@ -250,7 +266,8 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
         for (const item of (Array.isArray(data) ? data : [])) {
           const account = resolveAccountName(item);
           const txnId = item.txnId || item.id || item.reference_id || item.referenceId || '';
-          const ref = item.reference || item.reference_id || item.referenceId || txnId;
+          const rawRef = item.reference || item.reference_id || item.referenceId;
+          const ref = cleanTxnRef(rawRef, txnId);
           const type = (item.type || item.entry_type || '').toUpperCase();
           const cr = item.credit || '';
           const db = item.debit || '';
@@ -262,6 +279,7 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
           deduped.push({
             ...item,
             txnId,
+            reference: ref,
             account
           });
         }
@@ -1114,7 +1132,7 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
                     <td className="py-3.5 px-4 font-bold text-white">{item.client}</td>
                     <td className="py-3.5 px-4 font-mono font-bold text-[#34d399]">{item.amount}</td>
                     <td className="py-3.5 px-4 text-slate-300">{item.method}</td>
-                    <td className="py-3.5 px-4 font-mono text-slate-400">{item.reference}</td>
+                    <td className="py-3.5 px-4 font-mono text-slate-400">{cleanTxnRef(item.reference, item.txnId)}</td>
                     <td className="py-3.5 px-4">{renderStatusBadge(item.status)}</td>
                     <td className="py-3.5 px-4 font-mono text-slate-400">{item.date}</td>
                     <td className="py-3.5 px-4">
@@ -1207,7 +1225,7 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
                   <div>
                     <h3 className="text-sm font-bold text-white">Financial Transaction Receipt</h3>
                     <p className="text-[11px] text-slate-400">
-                      {selectedTxnDetail.txnId} • {selectedTxnDetail.reference}
+                      {selectedTxnDetail.txnId} • {cleanTxnRef(selectedTxnDetail.reference, selectedTxnDetail.txnId)}
                     </p>
                   </div>
                 </div>
@@ -1239,7 +1257,7 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-slate-400">UTR / Reference No</span>
-                    <span className="font-mono text-cyan-400">{selectedTxnDetail.reference}</span>
+                    <span className="font-mono text-cyan-400">{cleanTxnRef(selectedTxnDetail.reference, selectedTxnDetail.txnId)}</span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-slate-400">Date Logged</span>
@@ -1657,7 +1675,7 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
                   <div className="bg-[#091122] border border-[#131e36] rounded-xl p-3.5">
                     <span className="text-[11px] text-slate-400 font-medium block">Reference</span>
                     <p className="text-xs sm:text-sm font-bold text-white mt-1 truncate">
-                      {selectedDrawerTxn.reference}
+                      {cleanTxnRef(selectedDrawerTxn.reference, selectedDrawerTxn.txnId)}
                     </p>
                   </div>
 
@@ -1778,7 +1796,7 @@ Type           : ${selectedDrawerTxn.type}
 Credit         : ${selectedDrawerTxn.credit}
 Debit          : ${selectedDrawerTxn.debit}
 Balance After  : ${selectedDrawerTxn.balance}
-Reference      : ${selectedDrawerTxn.reference}
+Reference      : ${cleanTxnRef(selectedDrawerTxn.reference, selectedDrawerTxn.txnId)}
 Status         : ${selectedDrawerTxn.status}
 Issued By      : TradeMatrix Admin Central Liquidity & Clearing
 Generated At   : ${new Date().toISOString()}

@@ -43,6 +43,8 @@ export interface HierarchyViewsProps {
   onNotify?: (message: string, type?: 'info' | 'success' | 'warning') => void;
   onOpenTradingPlatform?: (clientData?: any) => void;
   onRefresh?: () => Promise<void> | void;
+  selectedClient?: any;
+  onClearSelectedClient?: () => void;
 }
 
 // Initial screenshot dataset for Masters
@@ -483,14 +485,22 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
   onToggleStatus,
   onNotify,
   onOpenTradingPlatform,
-  onRefresh
+  onRefresh,
+  selectedClient: propSelectedClient,
+  onClearSelectedClient
 }) => {
   // Local state for entities ensuring live PostgreSQL data and empty states are synchronized
   const [mastersList, setMastersList] = useState(() => (propMasters || []).map(normalizeMaster));
   const [brokersList, setBrokersList] = useState(() => (propBrokers || []).map(normalizeBroker));
   const [subBrokersList, setSubBrokersList] = useState(() => (propSubBrokers || []).map(normalizeSubBroker));
   const [clientsList, setClientsList] = useState(() => (propClients || []).map(normalizeClient));
-  const [activeClientDetail, setActiveClientDetail] = useState<any | null>(null);
+  const [activeClientDetail, setActiveClientDetail] = useState<any | null>(() => propSelectedClient || null);
+
+  React.useEffect(() => {
+    if (propSelectedClient) {
+      setActiveClientDetail(propSelectedClient);
+    }
+  }, [propSelectedClient]);
 
   // Synchronize state with real API data passed via props
   React.useEffect(() => {
@@ -1026,12 +1036,16 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
     return (
       <ClientDetailView
         client={activeClientDetail}
-        onBack={() => setActiveClientDetail(null)}
+        onBack={() => {
+          setActiveClientDetail(null);
+          onClearSelectedClient?.();
+        }}
         onNavigateDashboard={() => {
           if (onNavigateTab) {
             onNavigateTab('dashboard');
           } else {
             setActiveClientDetail(null);
+            onClearSelectedClient?.();
           }
         }}
         onNotify={notify}
@@ -1787,7 +1801,7 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
 
             <div className="p-4 border-t border-[#142340] bg-[#091122] flex items-center justify-between">
               <span className="text-[11px] text-slate-500 font-mono">
-                Created: {selectedEntity.created || '2023-01-15'}
+                Created: {selectedEntity.created || selectedEntity.created_at || selectedEntity.joined || new Date().toISOString().split('T')[0]}
               </span>
               <div className="flex items-center gap-2">
                 <button

@@ -100,6 +100,7 @@ export const DEFAULT_ROLE_PERMISSIONS_MAP: Record<UserRole, Permission[]> = {
   ADMIN: [
     'dashboard.view',
     'tenants.view',
+    'tenants.create',
     'tenants.update',
     'masters.view',
     'masters.create',
@@ -123,12 +124,17 @@ export const DEFAULT_ROLE_PERMISSIONS_MAP: Record<UserRole, Permission[]> = {
     'trades.view',
     'positions.view',
     'commission.view',
+    'commission.manage',
     'risk.view',
+    'risk.manage',
     'reports.view',
     'notifications.view',
     'support.view',
     'subscriptions.view',
     'white_label.view',
+    'white_label.manage',
+    'emergency.view',
+    'emergency.execute',
     'monitoring.view',
     'audit_logs.view'
   ],
@@ -136,6 +142,7 @@ export const DEFAULT_ROLE_PERMISSIONS_MAP: Record<UserRole, Permission[]> = {
   TENANT_ADMIN: [
     'dashboard.view',
     'tenants.view',
+    'tenants.create',
     'tenants.update',
     'masters.view',
     'masters.create',
@@ -167,6 +174,8 @@ export const DEFAULT_ROLE_PERMISSIONS_MAP: Record<UserRole, Permission[]> = {
     'support.view',
     'white_label.view',
     'white_label.manage',
+    'emergency.view',
+    'emergency.execute',
     'audit_logs.view'
   ],
 

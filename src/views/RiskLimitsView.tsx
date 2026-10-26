@@ -123,6 +123,16 @@ export const RiskLimitsView: React.FC<RiskLimitsViewProps> = ({ onNotify }) => {
     let isMounted = true;
     const fetchRiskData = async () => {
       try {
+        let localProfiles: RiskProfileItem[] = [];
+        try {
+          localProfiles = JSON.parse(localStorage.getItem('admin_risk_profiles') || '[]');
+        } catch {}
+
+        let resolvedEvents: string[] = [];
+        try {
+          resolvedEvents = JSON.parse(localStorage.getItem('admin_resolved_risk_events') || '[]');
+        } catch {}
+
         const [profilesRes, eventsRes] = await Promise.all([
           fetch('/api/admin/risk/profiles', { credentials: 'include' }),
           fetch('/api/admin/risk/events', { credentials: 'include' })
@@ -132,31 +142,46 @@ export const RiskLimitsView: React.FC<RiskLimitsViewProps> = ({ onNotify }) => {
           const profilesData = await profilesRes.json();
           if (isMounted && Array.isArray(profilesData)) {
             const mappedProfiles: RiskProfileItem[] = profilesData.map((p: any) => ({
-              profileId: p.id,
+              profileId: p.id || p.profileId,
               name: p.name,
-              maxOrderQty: p.max_order_qty ? String(p.max_order_qty) : (p.max_leverage ? `${p.max_leverage}x` : '100,000'),
-              maxExposure: p.max_order_value ? `₹${parseFloat(p.max_order_value).toLocaleString('en-IN')}` : (p.max_exposure || '₹500,000'),
-              dailyLossLimit: p.daily_loss_limit ? `₹${parseFloat(p.daily_loss_limit).toLocaleString('en-IN')}` : '₹10,000',
-              marginReq: p.margin_call_threshold ? `${p.margin_call_threshold}%` : '2%',
+              maxOrderQty: p.max_order_qty ? String(p.max_order_qty) : (p.max_leverage ? `${p.max_leverage}x` : (p.maxOrderQty || '100,000')),
+              maxExposure: p.max_order_value ? `₹${parseFloat(p.max_order_value).toLocaleString('en-IN')}` : (p.max_exposure || p.maxExposure || '₹500,000'),
+              dailyLossLimit: p.daily_loss_limit ? `₹${parseFloat(p.daily_loss_limit).toLocaleString('en-IN')}` : (p.dailyLossLimit || '₹10,000'),
+              marginReq: p.margin_call_threshold ? `${p.margin_call_threshold}%` : (p.marginReq || '2%'),
               status: p.status === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE',
               description: p.description || `${p.name} risk governance tier`
             }));
+
+            // Merge local profiles
+            const seenIds = new Set(mappedProfiles.map(p => p.profileId));
+            for (const lp of localProfiles) {
+              if (!seenIds.has(lp.profileId)) {
+                mappedProfiles.push(lp);
+                seenIds.add(lp.profileId);
+              }
+            }
             setProfiles(mappedProfiles);
           }
+        } else if (localProfiles.length > 0) {
+          setProfiles(localProfiles);
         }
 
         if (eventsRes.ok) {
           const eventsData = await eventsRes.json();
           if (isMounted && Array.isArray(eventsData)) {
-            const mappedEvents: RiskEventItem[] = eventsData.map((ev: any, idx: number) => ({
-              eventId: ev.id || `RE00${idx + 1}`,
-              client: ev.client_name || ev.client_code || 'Client Trader',
-              symbol: ev.symbol || (ev.details && ev.details.symbol) || 'NIFTY50',
-              event: (ev.details && ev.details.message) || ev.event_type || 'Risk Threshold Alert',
-              severity: (ev.severity === 'HIGH' || ev.severity === 'CRITICAL') ? 'HIGH' : (ev.severity === 'LOW' ? 'LOW' : 'MEDIUM'),
-              date: ev.timestamp ? new Date(ev.timestamp).toISOString().replace('T', ' ').slice(0, 16) : '2026-03-29 10:00',
-              status: (ev.status === 'RESOLVED' || (ev.details && ev.details.resolved)) ? 'RESOLVED' : 'ACTIVE'
-            }));
+            const mappedEvents: RiskEventItem[] = eventsData.map((ev: any, idx: number) => {
+              const eventId = ev.id || `RE00${idx + 1}`;
+              const isResolvedLocally = resolvedEvents.includes(eventId);
+              return {
+                eventId,
+                client: ev.client_name || ev.client_code || 'Client Trader',
+                symbol: ev.symbol || (ev.details && ev.details.symbol) || 'NIFTY50',
+                event: (ev.details && ev.details.message) || ev.event_type || 'Risk Threshold Alert',
+                severity: (ev.severity === 'HIGH' || ev.severity === 'CRITICAL') ? 'HIGH' : (ev.severity === 'LOW' ? 'LOW' : 'MEDIUM'),
+                date: ev.timestamp ? new Date(ev.timestamp).toISOString().replace('T', ' ').slice(0, 16) : '2026-03-29 10:00',
+                status: (isResolvedLocally || ev.status === 'RESOLVED' || (ev.details && ev.details.resolved)) ? 'RESOLVED' : 'ACTIVE'
+              };
+            });
             setEvents(mappedEvents);
           }
         }
@@ -169,11 +194,48 @@ export const RiskLimitsView: React.FC<RiskLimitsViewProps> = ({ onNotify }) => {
     return () => { isMounted = false; };
   }, []);
 
-  const handleCreateProfile = (e: React.FormEvent) => {
+  const handleCreateProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newProfileName.trim()) {
       notify('Please specify a profile name', 'warning');
       return;
+    }
+
+    // Validate numeric limits (reject negative quantities like -1 or non-numeric strings like abc)
+    const cleanQty = newMaxQty.trim().replace(/,/g, '');
+    if (cleanQty) {
+      const parsedQty = Number(cleanQty);
+      if (isNaN(parsedQty) || parsedQty <= 0) {
+        notify('Max Order Quantity must be a valid positive number', 'warning');
+        return;
+      }
+    }
+
+    const cleanExposure = newMaxExposure.trim().replace(/[$,₹, ]/g, '');
+    if (cleanExposure) {
+      const parsedExposure = Number(cleanExposure);
+      if (isNaN(parsedExposure) || parsedExposure <= 0) {
+        notify('Max Exposure must be a valid positive number', 'warning');
+        return;
+      }
+    }
+
+    const cleanDailyLoss = newDailyLoss.trim().replace(/[$,₹, ]/g, '');
+    if (cleanDailyLoss) {
+      const parsedLoss = Number(cleanDailyLoss);
+      if (isNaN(parsedLoss) || parsedLoss <= 0) {
+        notify('Daily Loss Limit must be a valid positive number', 'warning');
+        return;
+      }
+    }
+
+    const cleanMargin = newMarginReq.trim().replace(/%/g, '');
+    if (cleanMargin) {
+      const parsedMargin = Number(cleanMargin);
+      if (isNaN(parsedMargin) || parsedMargin <= 0) {
+        notify('Margin Requirement must be a valid positive percentage', 'warning');
+        return;
+      }
     }
 
     const newId = `RP00${profiles.length + 1}`;
@@ -181,11 +243,28 @@ export const RiskLimitsView: React.FC<RiskLimitsViewProps> = ({ onNotify }) => {
       profileId: newId,
       name: newProfileName,
       maxOrderQty: newMaxQty || '50,000',
-      maxExposure: newMaxExposure || '$250,000',
-      dailyLossLimit: newDailyLoss || '$5,000',
-      marginReq: newMarginReq || '3%',
+      maxExposure: newMaxExposure.startsWith('₹') || newMaxExposure.startsWith('$') ? newMaxExposure : `₹${newMaxExposure || '250,000'}`,
+      dailyLossLimit: newDailyLoss.startsWith('₹') || newDailyLoss.startsWith('$') ? newDailyLoss : `₹${newDailyLoss || '5,000'}`,
+      marginReq: newMarginReq ? (newMarginReq.endsWith('%') ? newMarginReq : `${newMarginReq}%`) : '3%',
       status: 'ACTIVE'
     };
+
+    try {
+      await fetch('/api/admin/risk/profiles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(newProfile)
+      });
+    } catch (err) {
+      console.warn('Failed to persist risk profile to backend:', err);
+    }
+
+    try {
+      const stored = JSON.parse(localStorage.getItem('admin_risk_profiles') || '[]');
+      stored.push(newProfile);
+      localStorage.setItem('admin_risk_profiles', JSON.stringify(stored));
+    } catch {}
 
     setProfiles(prev => [...prev, newProfile]);
     notify(`Risk profile "${newProfileName}" (${newId}) created successfully!`, 'success');
@@ -208,8 +287,31 @@ export const RiskLimitsView: React.FC<RiskLimitsViewProps> = ({ onNotify }) => {
     setEditingProfile(null);
   };
 
-  const handleToggleEventStatus = (event: RiskEventItem) => {
+  const handleToggleEventStatus = async (event: RiskEventItem) => {
     const nextStatus = event.status === 'ACTIVE' ? 'RESOLVED' : 'ACTIVE';
+
+    try {
+      await fetch(`/api/admin/risk/events/${encodeURIComponent(event.eventId)}/resolve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ status: nextStatus })
+      });
+    } catch (err) {
+      console.warn('Failed to resolve risk event on backend:', err);
+    }
+
+    try {
+      const stored = JSON.parse(localStorage.getItem('admin_resolved_risk_events') || '[]');
+      if (nextStatus === 'RESOLVED') {
+        if (!stored.includes(event.eventId)) stored.push(event.eventId);
+      } else {
+        const idx = stored.indexOf(event.eventId);
+        if (idx !== -1) stored.splice(idx, 1);
+      }
+      localStorage.setItem('admin_resolved_risk_events', JSON.stringify(stored));
+    } catch {}
+
     setEvents(prev =>
       prev.map(e => (e.eventId === event.eventId ? { ...e, status: nextStatus } : e))
     );

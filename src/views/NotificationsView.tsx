@@ -105,11 +105,13 @@ const INITIAL_NOTIFICATIONS: NotificationItem[] = [
 interface NotificationsViewProps {
   onNotify?: (msg: string, type?: 'info' | 'success' | 'warning') => void;
   onNavigateTab?: (tab: NavigationTab) => void;
+  onNavigateFunds?: (tab: 'deposits' | 'withdrawals', status?: string) => void;
 }
 
 export const NotificationsView: React.FC<NotificationsViewProps> = ({
   onNotify,
-  onNavigateTab
+  onNavigateTab,
+  onNavigateFunds
 }) => {
   const [notifications, setNotifications] = useState<NotificationItem[]>(() => {
     try {
@@ -234,6 +236,11 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
       handleToggleRead(item.id);
     }
     // navigate if targetTab available
+    if (item.targetTab === 'funds' && onNavigateFunds) {
+      const isWithdrawal = item.title?.toLowerCase().includes('withdrawal') || item.message?.toLowerCase().includes('withdrawal');
+      onNavigateFunds(isWithdrawal ? 'withdrawals' : 'deposits', 'PENDING');
+      return;
+    }
     if (item.targetTab && onNavigateTab) {
       onNavigateTab(item.targetTab);
     }

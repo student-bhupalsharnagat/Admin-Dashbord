@@ -145,7 +145,7 @@ export const SystemToolsView: React.FC<SystemToolsViewProps> = ({
       })
       .catch(() => {});
 
-    fetch('/api/admin/emergency-controls/trading')
+    fetch('/api/admin/emergency-controls/trading', { credentials: 'include' })
       .then(res => res.ok ? res.json() : null)
       .then(data => {
         if (data) {
@@ -178,6 +178,7 @@ export const SystemToolsView: React.FC<SystemToolsViewProps> = ({
     try {
       const res = await fetch('/api/admin/emergency-controls/trading', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ active: !nextPaused, paused: nextPaused, reason: 'Super Admin emergency toggle' })
       });
@@ -199,6 +200,7 @@ export const SystemToolsView: React.FC<SystemToolsViewProps> = ({
     try {
       const res = await fetch('/api/admin/emergency-controls/cancel-all-orders', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reason: 'Emergency Mass Cancel initiated from Admin console' })
       });
@@ -219,12 +221,15 @@ export const SystemToolsView: React.FC<SystemToolsViewProps> = ({
       try {
         const res = await fetch('/api/admin/emergency-controls/kill-switch', {
           method: 'POST',
+          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action: 'RESET', reason: 'Manual circuit breaker reset by Super Admin' })
         });
         if (res.ok) {
           setKillSwitchActive(false);
           onNotify?.('Emergency Kill Switch Disarmed & Reset', 'success');
+        } else {
+          onNotify?.('Failed to reset kill switch', 'warning');
         }
       } catch {
         onNotify?.('Failed to reset kill switch', 'warning');
@@ -234,12 +239,15 @@ export const SystemToolsView: React.FC<SystemToolsViewProps> = ({
       try {
         const res = await fetch('/api/admin/emergency-controls/kill-switch', {
           method: 'POST',
+          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action: 'TRIGGER', reason: 'Manual circuit breaker triggered by Super Admin' })
         });
         if (res.ok) {
           setKillSwitchActive(true);
           onNotify?.('CRITICAL: Kill Switch Activated! All pending orders cancelled.', 'warning');
+        } else {
+          onNotify?.('Failed to trigger kill switch', 'warning');
         }
       } catch {
         onNotify?.('Failed to trigger kill switch', 'warning');
@@ -252,6 +260,7 @@ export const SystemToolsView: React.FC<SystemToolsViewProps> = ({
     try {
       const res = await fetch('/api/admin/emergency-controls/registrations', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: next })
       });
@@ -269,6 +278,7 @@ export const SystemToolsView: React.FC<SystemToolsViewProps> = ({
     try {
       const res = await fetch('/api/admin/emergency-controls/api-access', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: next })
       });
@@ -286,6 +296,7 @@ export const SystemToolsView: React.FC<SystemToolsViewProps> = ({
     try {
       const res = await fetch('/api/admin/emergency-controls/account-action', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           entityType: freezeEntityType,

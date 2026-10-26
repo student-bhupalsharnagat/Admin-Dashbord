@@ -124,6 +124,7 @@ export default function App() {
   const [trades, setTrades] = useState<Trade[]>([]);
   const [kycRecords, setKycRecords] = useState<KYCRecord[]>([]);
   const [selectedTradeForDetail, setSelectedTradeForDetail] = useState<any | null>(null);
+  const [selectedClientForDetail, setSelectedClientForDetail] = useState<any | null>(null);
 
   // Modals state
   const [showCreateMasterModal, setShowCreateMasterModal] = useState(false);
@@ -402,10 +403,10 @@ export default function App() {
                 todays_pl: 0,
                 open_positions_count: 0,
                 tenant_id: event.tenantId,
-                tenant_name: p.tenantName || 'Alpha Prime Capital',
+                tenant_name: p.tenantName || 'VERTEX Trading',
                 sub_broker_name: 'Apex Direct',
                 broker_name: 'Apex Broking',
-                master_name: 'Alpha Prime Master',
+                master_name: 'Apex Capital Group',
                 created_at: new Date().toISOString().split('T')[0]
               };
               setClients(prev => [newClient, ...prev.filter(c => c.id !== clientId && c.client_code !== clientCode)]);
@@ -433,7 +434,7 @@ export default function App() {
                   id: event.payload.id || `trd_${Date.now()}`,
                   trade_id: event.payload.tradeId || `TRD-${Date.now()}`,
                   tenant_id: event.tenantId,
-                  tenant_name: event.payload.tenantName || 'Alpha Prime Capital',
+                  tenant_name: event.payload.tenantName || 'VERTEX Trading',
                   client_id: event.payload.clientId || event.payload.tradingUserId || 'CLI-001',
                   client_name: event.payload.clientName || 'Live Client',
                   symbol: event.payload.symbol || 'NIFTY50',
@@ -922,6 +923,10 @@ export default function App() {
           clients={clients}
           orders={(dashboardData as any)?.orders || (dashboardData as any)?.recent_orders || []}
           onNavigateTab={(tab: string) => setActiveTab(tab as any)}
+          onSelectClient={(client: any) => {
+            setSelectedClientForDetail(client);
+            setActiveTab('clients');
+          }}
         />
 
         {/* Scrollable View Container */}
@@ -1071,6 +1076,8 @@ export default function App() {
                   onToggleStatus={handleToggleEntityStatus}
                   onNotify={showToast}
                   onOpenTradingPlatform={handleOpenTradingPlatform}
+                  selectedClient={selectedClientForDetail}
+                  onClearSelectedClient={() => setSelectedClientForDetail(null)}
                   onRefresh={async () => {
                     await loadHierarchyData();
                     await loadDashboardData();
@@ -1100,6 +1107,7 @@ export default function App() {
               {activeTab === 'notifications' && (
                 <NotificationsView
                   onNotify={showToast}
+                  onNavigateFunds={handleNavigateFunds}
                   onNavigateTab={tab => {
                     if (tab === 'funds') {
                       handleNavigateFunds('withdrawals', 'PENDING');

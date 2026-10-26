@@ -39,6 +39,7 @@ interface AdminHeaderProps {
   clients?: any[];
   orders?: any[];
   onNavigateTab?: (tab: string) => void;
+  onSelectClient?: (client: any) => void;
 }
 
 export const AdminHeader: React.FC<AdminHeaderProps> = ({
@@ -57,7 +58,8 @@ export const AdminHeader: React.FC<AdminHeaderProps> = ({
   onOpenTradingPlatform,
   clients = [],
   orders = [],
-  onNavigateTab
+  onNavigateTab,
+  onSelectClient
 }) => {
   const { theme, toggleTheme } = useTheme();
   const [showProfileMenu, setShowProfileMenu] = useState(false);
@@ -212,6 +214,7 @@ export const AdminHeader: React.FC<AdminHeaderProps> = ({
                           key={c.id || c.client_code}
                           onClick={() => {
                             setSearchFocused(false);
+                            onSelectClient?.(c);
                             onNavigateTab?.('clients');
                           }}
                           className="w-full flex items-center justify-between px-3 py-1.5 text-left hover:bg-[#13203c] transition-colors"
@@ -714,6 +717,7 @@ export const AdminHeader: React.FC<AdminHeaderProps> = ({
                           key={c.id || c.client_code}
                           onClick={() => {
                             setMobileSearchOpen(false);
+                            onSelectClient?.(c);
                             onNavigateTab?.('clients');
                           }}
                           className="w-full flex items-center justify-between px-3 py-1.5 text-left hover:bg-[#13203c]"

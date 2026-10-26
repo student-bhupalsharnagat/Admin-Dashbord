@@ -109,28 +109,28 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
     setLoading(true);
     try {
       // 1. Fetch Branding
-      const bRes = await fetch(`/api/admin/white-label/${tenantId}`);
+      const bRes = await fetch(`/api/admin/white-label/${tenantId}`, { credentials: 'include' });
       if (bRes.ok) {
         const bData = await bRes.json();
         setBranding(bData);
       }
 
       // 2. Fetch Platform Config & Feature Flags
-      const pRes = await fetch(`/api/admin/white-label/${tenantId}/platform-config`);
+      const pRes = await fetch(`/api/admin/white-label/${tenantId}/platform-config`, { credentials: 'include' });
       if (pRes.ok) {
         const pData = await pRes.json();
         setPlatformConfig(pData);
       }
 
       // 3. Fetch Domains
-      const dRes = await fetch('/api/admin/white-label/domains/all');
+      const dRes = await fetch('/api/admin/white-label/domains/all', { credentials: 'include' });
       if (dRes.ok) {
         const allDomains: TenantDomain[] = await dRes.json();
         setDomains(allDomains.filter(d => d.tenant_id === tenantId));
       }
 
       // 4. Fetch Audit Logs
-      const aRes = await fetch('/api/admin/white-label/audit-logs');
+      const aRes = await fetch('/api/admin/white-label/audit-logs', { credentials: 'include' });
       if (aRes.ok) {
         const allLogs: BrandingAuditLog[] = await aRes.json();
         setAuditLogs(allLogs.filter(l => l.tenant_id === tenantId));
@@ -236,6 +236,7 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
     try {
       const res = await fetch(`/api/admin/white-label/${selectedTenantId}`, {
         method: 'PUT',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(branding)
       });
@@ -262,6 +263,7 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
       // First save any unsaved draft changes
       await fetch(`/api/admin/white-label/${selectedTenantId}`, {
         method: 'PUT',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(branding)
       });
@@ -270,6 +272,7 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
       if (platformConfig) {
         await fetch(`/api/admin/white-label/${selectedTenantId}/platform-config`, {
           method: 'PATCH',
+          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(platformConfig)
         });
@@ -278,6 +281,7 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
       // Publish action
       const pRes = await fetch(`/api/admin/white-label/${selectedTenantId}/publish`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reason: 'Admin published live white-label branding' })
       });
@@ -305,6 +309,7 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
     try {
       const res = await fetch(`/api/admin/white-label/${selectedTenantId}/rollback`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' }
       });
 
@@ -330,6 +335,7 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
     try {
       const res = await fetch(`/api/admin/white-label/${selectedTenantId}/platform-config`, {
         method: 'PATCH',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(platformConfig)
       });
@@ -353,7 +359,7 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
     if (!domainVal) return;
 
     const fqdnRegex = /^(?!-)[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$/;
-    if (!fqdnRegex.test(domainVal) || domainVal.includes(' ')) {
+    if (!fqdnRegex.test(domainVal) || domainVal.includes(' ') || domainVal.toLowerCase() === 'not a domain') {
       onNotify?.('Please enter a valid domain name (e.g., trade.example.com)', 'warning');
       return;
     }
@@ -362,6 +368,7 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
     try {
       const res = await fetch('/api/admin/white-label/domains', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           tenantId: selectedTenantId,
@@ -392,6 +399,7 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
     try {
       const res = await fetch(`/api/admin/white-label/domains/${domainId}/verify`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' }
       });
       if (res.ok) {
@@ -409,7 +417,8 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
     if (!window.confirm('Are you sure you want to remove this custom domain?')) return;
     try {
       const res = await fetch(`/api/admin/white-label/domains/${domainId}`, {
-        method: 'DELETE'
+        method: 'DELETE',
+        credentials: 'include'
       });
       if (res.ok) {
         setDomains(prev => prev.filter(d => d.id !== domainId));

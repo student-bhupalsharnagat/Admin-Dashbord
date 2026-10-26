@@ -252,6 +252,7 @@ export const ClientDetailView: React.FC<ClientDetailViewProps> = ({
       : []
   );
   const [livePositions, setLivePositions] = useState<any[]>([]);
+  const [clientLedger, setClientLedger] = useState<any[]>([]);
   const [squaringOffId, setSquaringOffId] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
 
@@ -267,11 +268,12 @@ export const ClientDetailView: React.FC<ClientDetailViewProps> = ({
   const refreshClientTradingData = async () => {
     setIsSyncing(true);
     try {
-      const [accRes, ordRes, trdRes, posRes] = await Promise.allSettled([
+      const [accRes, ordRes, trdRes, posRes, ledRes] = await Promise.allSettled([
         fetch(`/api/admin/clients/${client.id}/trading-account`),
         fetch(`/api/admin/clients/${client.id}/orders`),
         fetch(`/api/admin/clients/${client.id}/trades`),
-        fetch(`/api/admin/clients/${client.id}/positions`)
+        fetch(`/api/admin/clients/${client.id}/positions`),
+        fetch(`/api/admin/clients/${client.id}/ledger`)
       ]);
 
       if (accRes.status === 'fulfilled' && accRes.value.ok) {
@@ -323,6 +325,35 @@ export const ClientDetailView: React.FC<ClientDetailViewProps> = ({
           setLivePositions(poss);
         }
       }
+
+      if (ledRes.status === 'fulfilled' && ledRes.value.ok) {
+        const led = await ledRes.value.json();
+        if (Array.isArray(led) && led.length > 0) {
+          setClientLedger(led.map((entry: any) => ({
+            date: entry.created_at ? entry.created_at.substring(0, 10) : (entry.date || new Date().toISOString().substring(0, 10)),
+            txnId: entry.id || entry.txnId || `LED-${client.id}`,
+            type: entry.entry_type || entry.type || 'TRADE',
+            credit: entry.credit ? `+₹${Number(entry.credit).toLocaleString('en-IN')}` : (entry.credit_str || '—'),
+            debit: entry.debit ? `-₹${Number(entry.debit).toLocaleString('en-IN')}` : (entry.debit_str || '—'),
+            balance: entry.balance ? `₹${Number(entry.balance).toLocaleString('en-IN')}` : (entry.balance_str || clientData.balance),
+            ref: entry.description || entry.reference_id || entry.ref || 'Trading Activity',
+            status: entry.status || 'COMPLETED'
+          })));
+        } else {
+          setClientLedger([
+            {
+              date: clientData.joined ? String(clientData.joined).substring(0, 10) : new Date().toISOString().substring(0, 10),
+              txnId: `TXN-${client.id}-INIT`,
+              type: 'OPENING_BALANCE',
+              credit: clientData.balance,
+              debit: '—',
+              balance: clientData.balance,
+              ref: 'Account Opening Allocation',
+              status: 'COMPLETED'
+            }
+          ]);
+        }
+      }
     } catch (e) {
       console.warn('Trading platform sync error:', e);
     } finally {
@@ -331,6 +362,29 @@ export const ClientDetailView: React.FC<ClientDetailViewProps> = ({
   };
 
   useEffect(() => {
+    const isDemo = isBaselineDemoClient(client.id, client.name);
+    setLiveOrders(isDemo ? getBaselineDemoOrders(client.id, client.name || 'Client') : []);
+    setLiveTrades(isDemo ? getBaselineDemoTrades(client.id, client.name || 'Client') : []);
+    setLivePositions([]);
+    setTradingAccountData({
+      accountNumber: `TRD-${client.id || 'CLT001'}`,
+      dematNumber: `IN300128-${client.id || 'CLT001'}`,
+      tradingPlatformUrl: 'https://trading-platform-2t6r.onrender.com',
+      status: (client.status || 'ACTIVE').toUpperCase(),
+      s2sStatus: 'CONNECTED',
+      availableMargin: typeof client.balance === 'number' ? `₹${client.balance.toLocaleString('en-IN')}` : (client.balance || '₹0'),
+      utilizedMargin: typeof client.margin_used === 'number' ? `₹${client.margin_used.toLocaleString('en-IN')}` : '₹0',
+      totalBalance: typeof client.balance === 'number' ? `₹${client.balance.toLocaleString('en-IN')}` : (client.balance || '₹0'),
+      buyingPower: typeof client.balance === 'number' ? `₹${(client.balance * 5).toLocaleString('en-IN')}` : '₹0',
+      marginHealth: '100%',
+      dayPL: '+₹0',
+      realizedPL: '+₹0',
+      unrealizedPL: '+₹0',
+      leverage: '5x Intraday / 1x Delivery',
+      segments: ['NSE EQ', 'NSE FO', 'MCX Commodity', 'Currency FX'],
+      activePositionsCount: 0,
+      openOrdersCount: 0
+    });
     refreshClientTradingData();
   }, [client.id]);
 
@@ -386,11 +440,7 @@ export const ClientDetailView: React.FC<ClientDetailViewProps> = ({
     }, 450);
   };
 
-  const clientLedger = [
-    { date: '2023-06-10', txnId: 'WDR-001', type: 'WITHDRAWAL', credit: '—', debit: '-₹5,000', balance: '₹25,400', ref: 'Bank Transfer', status: 'COMPLETED' },
-    { date: '2023-06-01', txnId: 'TXN-8821-A', type: 'DEPOSIT', credit: '+₹10,000', debit: '—', balance: '₹30,400', ref: 'Bank Transfer', status: 'COMPLETED' },
-    { date: '2023-05-28', txnId: 'COM-0528', type: 'COMMISSION', credit: '+₹120', debit: '—', balance: '₹20,400', ref: 'Monthly Commission', status: 'COMPLETED' }
-  ];
+
 
   // Custom Tooltip for Portfolio Chart
   const CustomPortfolioTooltip = ({ active, payload, label }: any) => {
@@ -1124,7 +1174,7 @@ export const ClientDetailView: React.FC<ClientDetailViewProps> = ({
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-bold text-white tracking-tight">KYC Verification Documents</h2>
             <span className="px-2.5 py-1 rounded bg-[#06261f] border border-[#065f46] text-[#34d399] font-bold text-[11px]">
-              VERIFIED & APPROVED
+              {clientData.kyc || 'APPROVED'}
             </span>
           </div>
 
@@ -1132,8 +1182,8 @@ export const ClientDetailView: React.FC<ClientDetailViewProps> = ({
             <div className="p-3.5 bg-[#091122] border border-[#131e36] rounded-lg flex items-center justify-between">
               <div>
                 <span className="text-[11px] text-slate-400 block">Identity Document</span>
-                <p className="font-bold text-white mt-0.5">Passport (International)</p>
-                <span className="text-[10px] text-emerald-400 font-mono mt-1 block">Verified on 2023-04-02</span>
+                <p className="font-bold text-white mt-0.5">Passport / National ID</p>
+                <span className="text-[10px] text-emerald-400 font-mono mt-1 block">Verified on {clientData.joined ? String(clientData.joined).substring(0, 10) : 'Active'}</span>
               </div>
               <CheckCircle size={18} className="text-emerald-400 shrink-0" />
             </div>
@@ -1141,8 +1191,8 @@ export const ClientDetailView: React.FC<ClientDetailViewProps> = ({
             <div className="p-3.5 bg-[#091122] border border-[#131e36] rounded-lg flex items-center justify-between">
               <div>
                 <span className="text-[11px] text-slate-400 block">Proof of Address</span>
-                <p className="font-bold text-white mt-0.5">Utility Statement (Electric)</p>
-                <span className="text-[10px] text-emerald-400 font-mono mt-1 block">Verified on 2023-04-02</span>
+                <p className="font-bold text-white mt-0.5">Utility Statement / Bank Record</p>
+                <span className="text-[10px] text-emerald-400 font-mono mt-1 block">Verified on {clientData.joined ? String(clientData.joined).substring(0, 10) : 'Active'}</span>
               </div>
               <CheckCircle size={18} className="text-emerald-400 shrink-0" />
             </div>
@@ -1151,7 +1201,7 @@ export const ClientDetailView: React.FC<ClientDetailViewProps> = ({
               <div>
                 <span className="text-[11px] text-slate-400 block">Tax Registration</span>
                 <p className="font-bold text-white mt-0.5">PAN / TIN Document</p>
-                <span className="text-[10px] text-emerald-400 font-mono mt-1 block">Verified on 2023-04-03</span>
+                <span className="text-[10px] text-emerald-400 font-mono mt-1 block">Verified on {clientData.joined ? String(clientData.joined).substring(0, 10) : 'Active'}</span>
               </div>
               <CheckCircle size={18} className="text-emerald-400 shrink-0" />
             </div>
@@ -1172,7 +1222,7 @@ export const ClientDetailView: React.FC<ClientDetailViewProps> = ({
             </div>
             <div className="p-4 bg-[#091122] border border-[#131e36] rounded-lg">
               <span className="text-slate-400 text-[11px]">Utilized Margin</span>
-              <p className="text-2xl font-bold font-mono text-blue-400 mt-1">₹14,200</p>
+              <p className="text-2xl font-bold font-mono text-blue-400 mt-1">{tradingAccountData.utilizedMargin || '₹0'}</p>
             </div>
             <div className="p-4 bg-[#091122] border border-[#131e36] rounded-lg">
               <span className="text-slate-400 text-[11px]">Unsettled Trading P&amp;L</span>

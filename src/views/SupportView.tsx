@@ -126,6 +126,26 @@ export const SupportView: React.FC<SupportViewProps> = ({ onNotify, currentUser 
     }
   };
 
+  const dedupeMessages = (existing: any[], extra: any[]): any[] => {
+    const seen = new Set<string>();
+    const result: any[] = [];
+    for (const m of existing) {
+      const key = `${m.sender || ''}-${(m.text || '').trim()}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        result.push(m);
+      }
+    }
+    for (const m of extra) {
+      const key = `${m.sender || ''}-${(m.text || '').trim()}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        result.push(m);
+      }
+    }
+    return result;
+  };
+
   const [tickets, setTickets] = useState<SupportTicketItem[]>(() => {
     try {
       const storedResolved: string[] = JSON.parse(localStorage.getItem('admin_resolved_tickets') || '[]');
@@ -133,10 +153,11 @@ export const SupportView: React.FC<SupportViewProps> = ({ onNotify, currentUser 
       return INITIAL_TICKETS.map(t => {
         const extraReplies = storedReplies[t.id] || storedReplies[t.ticketId] || [];
         const isResolved = storedResolved.includes(t.ticketId) || storedResolved.includes(t.id);
+        const merged = dedupeMessages(t.messages || [], extraReplies);
         return {
           ...t,
           status: isResolved ? ('RESOLVED' as const) : (extraReplies.length > 0 && t.status === 'OPEN' ? ('IN PROGRESS' as const) : t.status),
-          messages: [...(t.messages || []), ...extraReplies]
+          messages: merged
         };
       });
     } catch {
@@ -173,14 +194,7 @@ export const SupportView: React.FC<SupportViewProps> = ({ onNotify, currentUser 
               }
             ];
 
-            // Filter out duplicates between baseMsgs and extraReplies
-            const existingTexts = new Set(baseMsgs.map((m: any) => `${m.sender}-${m.text}`));
-            const mergedMsgs = [...baseMsgs];
-            for (const r of extraReplies) {
-              if (!existingTexts.has(`${r.sender}-${r.text}`)) {
-                mergedMsgs.push(r);
-              }
-            }
+            const mergedMsgs = dedupeMessages(baseMsgs, extraReplies);
 
             return {
               id: d.id,
@@ -280,9 +294,12 @@ export const SupportView: React.FC<SupportViewProps> = ({ onNotify, currentUser 
 
     try {
       const stored = getStoredReplies();
-      const keys = [selectedTicketForDetail.id, selectedTicketForDetail.ticketId].filter(Boolean);
+      const keys = Array.from(new Set([selectedTicketForDetail.id, selectedTicketForDetail.ticketId].filter(Boolean)));
       for (const k of keys) {
-        stored[k] = [...(stored[k] || []), newMessage];
+        const currentList = stored[k] || [];
+        if (!currentList.some((m: any) => m.text?.trim() === messageText)) {
+          stored[k] = [...currentList, newMessage];
+        }
       }
       localStorage.setItem('admin_ticket_replies', JSON.stringify(stored));
     } catch {}
@@ -293,7 +310,7 @@ export const SupportView: React.FC<SupportViewProps> = ({ onNotify, currentUser 
           ? {
               ...t,
               status: t.status === 'OPEN' ? 'IN PROGRESS' : t.status,
-              messages: [...(t.messages || []), newMessage]
+              messages: dedupeMessages(t.messages || [], [newMessage])
             }
           : t
       )
@@ -304,7 +321,7 @@ export const SupportView: React.FC<SupportViewProps> = ({ onNotify, currentUser 
         ? {
             ...prev,
             status: prev.status === 'OPEN' ? 'IN PROGRESS' : prev.status,
-            messages: [...(prev.messages || []), newMessage]
+            messages: dedupeMessages(prev.messages || [], [newMessage])
           }
         : null
     );
@@ -337,9 +354,12 @@ export const SupportView: React.FC<SupportViewProps> = ({ onNotify, currentUser 
 
     try {
       const stored = getStoredReplies();
-      const keys = [ticketForReply.id, ticketForReply.ticketId].filter(Boolean);
+      const keys = Array.from(new Set([ticketForReply.id, ticketForReply.ticketId].filter(Boolean)));
       for (const k of keys) {
-        stored[k] = [...(stored[k] || []), newMessage];
+        const currentList = stored[k] || [];
+        if (!currentList.some((m: any) => m.text?.trim() === messageText)) {
+          stored[k] = [...currentList, newMessage];
+        }
       }
       localStorage.setItem('admin_ticket_replies', JSON.stringify(stored));
     } catch {}
@@ -350,7 +370,7 @@ export const SupportView: React.FC<SupportViewProps> = ({ onNotify, currentUser 
           ? {
               ...t,
               status: 'IN PROGRESS',
-              messages: [...(t.messages || []), newMessage]
+              messages: dedupeMessages(t.messages || [], [newMessage])
             }
           : t
       )
@@ -362,7 +382,7 @@ export const SupportView: React.FC<SupportViewProps> = ({ onNotify, currentUser 
           ? {
               ...prev,
               status: 'IN PROGRESS',
-              messages: [...(prev.messages || []), newMessage]
+              messages: dedupeMessages(prev.messages || [], [newMessage])
             }
           : null
       );

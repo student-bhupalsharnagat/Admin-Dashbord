@@ -110,8 +110,14 @@ export interface ITradingDataProvider {
   getCommissionRules(tenantId?: string, planId?: string): Promise<any[]>;
   getCommissionTransactions?(tenantId?: string): Promise<any[]>;
   createCommissionTransaction?(data: any): Promise<any>;
+  createCommissionPlan?(data: any): Promise<any>;
+  createCommissionRule?(data: any): Promise<any>;
   getRiskProfiles(tenantId?: string): Promise<any[]>;
+  createRiskProfile?(data: any): Promise<any>;
   getRiskEvents(tenantId?: string): Promise<any[]>;
+  resolveRiskEvent?(id: string, status?: string): Promise<any>;
+  cancelOrder?(id: string, reason?: string, actor?: string): Promise<any>;
+  getClientLedger?(clientId: string, tenantId?: string): Promise<any[]>;
   getNotifications(tenantId?: string): Promise<any[]>;
   markNotificationRead(id: string): Promise<any>;
   
@@ -4572,6 +4578,30 @@ export class MockTradingDataProvider implements ITradingDataProvider {
 
   async markNotificationRead(id: string): Promise<any> {
     return { success: true, id, is_read: true };
+  }
+
+  async cancelOrder(id: string, reason?: string, _actor?: string): Promise<any> {
+    return { success: true, id, status: 'CANCELLED', reason };
+  }
+
+  async getClientLedger(_clientId: string, _tenantId?: string): Promise<any[]> {
+    return [];
+  }
+
+  async createCommissionPlan(data: any): Promise<any> {
+    return { id: data.id || 'plan-new', ...data };
+  }
+
+  async createCommissionRule(data: any): Promise<any> {
+    return { id: data.id || 'rule-new', ...data };
+  }
+
+  async createRiskProfile(data: any): Promise<any> {
+    return { id: data.id || 'rp-new', ...data };
+  }
+
+  async resolveRiskEvent(id: string, status?: string): Promise<any> {
+    return { success: true, id, status: status || 'RESOLVED' };
   }
 }
 

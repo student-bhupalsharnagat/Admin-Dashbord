@@ -66,17 +66,24 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data)) {
+          let storedCancelled: string[] = [];
+          try {
+            storedCancelled = JSON.parse(localStorage.getItem('admin_cancelled_orders') || '[]');
+          } catch {}
+
           const mapped: OrderItem[] = data.map((o: any, idx: number): OrderItem => {
-            const rawStatus = (o.status || 'PENDING').toUpperCase();
+            const orderId = o.orderId || o.order_id || o.id || `ORD-${String(idx + 1).padStart(3, '0')}`;
+            const isLocallyCancelled = storedCancelled.includes(orderId);
+            const rawStatus = (isLocallyCancelled ? 'CANCELLED' : (o.status || 'PENDING')).toUpperCase();
             const status = (rawStatus === 'EXECUTED' ? 'FILLED' : rawStatus) as 'FILLED' | 'PENDING' | 'CANCELLED';
             const isCancelledOrRejected = status === 'CANCELLED' || rawStatus === 'REJECTED';
-            const rawFilled = o.filledQty ?? o.filled_quantity ?? o.executedQty ?? o.executed_quantity;
+            const rawFilled = isLocallyCancelled ? '0' : (o.filledQty ?? o.filled_quantity ?? o.executedQty ?? o.executed_quantity);
             const resolvedFilledQty = isCancelledOrRejected
               ? String(rawFilled !== undefined && rawFilled !== null && rawFilled !== '' ? rawFilled : '0')
               : (rawFilled !== undefined && rawFilled !== null && rawFilled !== '' ? String(rawFilled) : (status === 'FILLED' ? String(o.quantity || o.qty || '1') : '0'));
 
             return {
-              orderId: o.orderId || o.order_id || o.id || `ORD-${String(idx + 1).padStart(3, '0')}`,
+              orderId,
               client: o.client || o.client_name || 'Retail Client',
               clientId: o.clientId || o.client_id,
               symbol: o.symbol || 'NIFTY50',
@@ -148,13 +155,32 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
     }
   };
 
-  const handleCancelOrder = (order: OrderItem) => {
+  const handleCancelOrder = async (order: OrderItem) => {
+    try {
+      await fetch(`/api/admin/orders/${encodeURIComponent(order.orderId)}/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ reason: 'Cancelled by Admin' })
+      });
+    } catch (e) {
+      console.error('Failed to cancel order on backend:', e);
+    }
+
+    try {
+      const stored = JSON.parse(localStorage.getItem('admin_cancelled_orders') || '[]');
+      if (!stored.includes(order.orderId)) {
+        stored.push(order.orderId);
+        localStorage.setItem('admin_cancelled_orders', JSON.stringify(stored));
+      }
+    } catch {}
+
     setOrders(prev =>
-      prev.map(o => (o.orderId === order.orderId ? { ...o, status: 'CANCELLED' } : o))
+      prev.map(o => (o.orderId === order.orderId ? { ...o, status: 'CANCELLED', filledQty: '0' } : o))
     );
     notify(`Order ${order.orderId} cancelled. Unfilled funds returned to client balance.`, 'warning');
     if (selectedOrder?.orderId === order.orderId) {
-      setSelectedOrder({ ...selectedOrder, status: 'CANCELLED' });
+      setSelectedOrder({ ...selectedOrder, status: 'CANCELLED', filledQty: '0' });
     }
   };
 
