@@ -108,7 +108,12 @@ export class LocalAssetStorageProvider implements IAssetStorageProvider {
           throw new Error('File size exceeds the 5MB maximum limit.');
         }
 
-        publicUrl = `/api/assets/${id}`;
+        // Return portable data URI as publicUrl when reasonable (< 1.5MB) to avoid cross-domain 404s
+        if (contentBase64OrUrl.startsWith('data:') && contentBuffer.length <= 1.5 * 1024 * 1024) {
+          publicUrl = contentBase64OrUrl;
+        } else {
+          publicUrl = `/api/assets/${id}`;
+        }
       } catch (err: any) {
         if (err.message?.includes('File size exceeds')) throw err;
         publicUrl = contentBase64OrUrl;

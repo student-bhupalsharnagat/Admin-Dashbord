@@ -2660,16 +2660,42 @@ async function startServer() {
   // Serve stored branding assets (logo, favicon, etc.) as clean URLs
   app.get('/api/assets/:id', async (req, res) => {
     try {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
       const asset = await assetStorage.getAsset(req.params.id);
-      if (!asset) return res.status(404).send('Asset not found');
-      if (asset.contentBuffer) {
-        res.setHeader('Content-Type', asset.mime_type || 'image/png');
-        res.setHeader('Cache-Control', 'public, max-age=86400');
-        return res.send(asset.contentBuffer);
+      if (asset) {
+        if (asset.contentBuffer) {
+          res.setHeader('Content-Type', asset.mime_type || 'image/png');
+          res.setHeader('Cache-Control', 'public, max-age=86400');
+          return res.send(asset.contentBuffer);
+        }
+        if (asset.public_url && asset.public_url.startsWith('data:')) {
+          const parts = asset.public_url.split(',');
+          const mime = parts[0].match(/:(.*?);/)?.[1] || 'image/png';
+          const buf = Buffer.from(parts[1], 'base64');
+          res.setHeader('Content-Type', mime);
+          res.setHeader('Cache-Control', 'public, max-age=86400');
+          return res.send(buf);
+        }
+        if (asset.public_url && (asset.public_url.startsWith('http://') || asset.public_url.startsWith('https://'))) {
+          return res.redirect(asset.public_url);
+        }
       }
-      if (asset.public_url && (asset.public_url.startsWith('http://') || asset.public_url.startsWith('https://'))) {
-        return res.redirect(asset.public_url);
-      }
+
+      // Fallback: If memory was reset, check database tenant_branding for matching logo
+      try {
+        const { query } = await import('./server/db/connection.ts');
+        const dbRes = await query('SELECT logo_url FROM tenant_branding WHERE logo_url LIKE $1 LIMIT 1', [`%${req.params.id}%`]);
+        if (dbRes.rows.length > 0 && dbRes.rows[0].logo_url?.startsWith('data:')) {
+          const parts = dbRes.rows[0].logo_url.split(',');
+          const mime = parts[0].match(/:(.*?);/)?.[1] || 'image/png';
+          const buf = Buffer.from(parts[1], 'base64');
+          res.setHeader('Content-Type', mime);
+          res.setHeader('Cache-Control', 'public, max-age=86400');
+          return res.send(buf);
+        }
+      } catch {}
+
       res.status(404).send('Asset not found');
     } catch (err: any) {
       res.status(500).send(err.message);

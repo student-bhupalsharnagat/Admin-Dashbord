@@ -4056,6 +4056,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       last_published_at: r.last_published_at,
       last_published_by: r.last_published_by,
       ...draft,
+      logo_url: draft.logo_url || draft.logoUrl || r.logo_url || 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=120&auto=format&fit=crop&q=80',
       version: finalVersion,
       status: (r.publish_status || 'DRAFT') as any
     };
@@ -4102,8 +4103,8 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       data.company_name || data.tenant_name || 'Brand Corp',
       data.brand_name || data.short_name || 'Brand Portal',
       data.tagline || 'Leading Multi-Asset Trading',
-      data.logo_url || null,
-      data.favicon_url || null,
+      data.logo_url || (data as any).logoUrl || null,
+      data.favicon_url || (data as any).faviconUrl || null,
       data.primary_color || '#3b82f6',
       data.accent_color || '#10b981',
       data.support_email || 'support@tenant.com',

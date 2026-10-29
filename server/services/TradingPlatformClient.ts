@@ -772,11 +772,30 @@ export class TradingPlatformClient {
   ): Promise<S2SResponse> {
     const outboundTenantId = await this.resolveOutboundTenantId(tenantId);
 
+    let resolvedLogoUrl = config.logo_url || config.logoUrl;
+    if (resolvedLogoUrl && typeof resolvedLogoUrl === 'string' && resolvedLogoUrl.startsWith('/api/assets/')) {
+      try {
+        const assetId = resolvedLogoUrl.replace('/api/assets/', '').trim();
+        const { assetStorage } = await import('../providers/AssetStorageProvider.ts');
+        const asset = await assetStorage.getAsset(assetId);
+        if (asset && asset.contentBuffer) {
+          resolvedLogoUrl = `data:${asset.mime_type || 'image/png'};base64,${asset.contentBuffer.toString('base64')}`;
+        } else if (asset && asset.public_url && asset.public_url.startsWith('data:')) {
+          resolvedLogoUrl = asset.public_url;
+        } else {
+          const publicOrigin = process.env.ADMIN_PANEL_PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || 'https://admin-dashbord-wxcq.onrender.com';
+          resolvedLogoUrl = `${publicOrigin.replace(/\/$/, '')}${resolvedLogoUrl}`;
+        }
+      } catch (resErr: any) {
+        console.warn('[TradingPlatformClient] Logo resolution notice:', resErr?.message);
+      }
+    }
+
     const brandingPayload = {
       brandName: config.brand_name || config.brandName,
       shortName: config.short_name || config.shortName,
       tagline: config.tagline,
-      logoUrl: config.logo_url || config.logoUrl,
+      logoUrl: resolvedLogoUrl,
       faviconUrl: config.favicon_url || config.faviconUrl || '/favicon.ico',
       primaryColor: config.primary_color || config.primaryColor,
       secondaryColor: config.secondary_color || config.secondaryColor,
@@ -840,7 +859,7 @@ export class TradingPlatformClient {
         tenantId: outboundTenantId,
         adminTenantId: tenantId,
         version,
-        branding: config,
+        branding: { ...config, logo_url: resolvedLogoUrl, logoUrl: resolvedLogoUrl },
         publishedBy: options?.actor || 'CentralAdmin',
         publishedAt: new Date().toISOString()
       },

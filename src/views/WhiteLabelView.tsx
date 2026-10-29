@@ -187,7 +187,42 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
     try {
       const reader = new FileReader();
       reader.onload = async () => {
-        const base64Url = reader.result as string;
+        let base64Url = reader.result as string;
+
+        // If raster image, optimize to logo bounds (max 400x160) for fast transmission and cross-platform reliability
+        if (file.type && file.type.startsWith('image/') && !file.type.includes('svg')) {
+          try {
+            base64Url = await new Promise<string>((resolve) => {
+              const img = new Image();
+              img.onload = () => {
+                const MAX_W = 400;
+                const MAX_H = 160;
+                let w = img.width;
+                let h = img.height;
+                if (w > MAX_W || h > MAX_H) {
+                  const scale = Math.min(MAX_W / w, MAX_H / h);
+                  w = Math.round(w * scale);
+                  h = Math.round(h * scale);
+                }
+                const canvas = document.createElement('canvas');
+                canvas.width = w;
+                canvas.height = h;
+                const ctx = canvas.getContext('2d');
+                if (ctx) {
+                  ctx.drawImage(img, 0, 0, w, h);
+                  resolve(canvas.toDataURL(file.type || 'image/png', 0.92));
+                } else {
+                  resolve(base64Url);
+                }
+              };
+              img.onerror = () => resolve(base64Url);
+              img.src = base64Url;
+            });
+          } catch {
+            // Keep original base64Url if canvas scaling encounters any issue
+          }
+        }
+
         try {
           const token = localStorage.getItem('token') || sessionStorage.getItem('token');
           // Upload to AssetStorageProvider backend endpoint with auth and credentials
@@ -209,7 +244,9 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
 
           if (res.ok) {
             const stored = await res.json();
-            const finalUrl = stored.publicUrl || stored.public_url || base64Url;
+            const finalUrl = (stored.publicUrl && !stored.publicUrl.startsWith('/api/assets/'))
+              ? stored.publicUrl
+              : base64Url;
             handleBrandingChange('logo_url', finalUrl);
             onNotify?.(`Platform logo "${file.name}" uploaded successfully!`, 'success');
           } else {
