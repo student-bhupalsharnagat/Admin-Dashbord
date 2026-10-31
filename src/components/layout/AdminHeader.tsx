@@ -270,66 +270,78 @@ export const AdminHeader: React.FC<AdminHeaderProps> = ({
         </button>
 
         {/* Multi-Tenant Scope Switcher */}
-        <div className="relative" ref={tenantMenuRef}>
-          <button
-            onClick={() => {
-              setShowTenantMenu(!showTenantMenu);
-              setShowNotificationsMenu(false);
-              setShowProfileMenu(false);
-            }}
-            className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-2.5 py-1.5 rounded-lg bg-[#0e1629] border border-[#18243e] hover:border-blue-500/50 text-xs font-medium text-slate-300 transition-colors"
-            title="Switch Tenant Scope"
-          >
-            <Building size={14} className="text-blue-400 shrink-0" />
-            <span className="max-w-[70px] sm:max-w-[120px] truncate">
-              {activeTenant ? activeTenant.name : 'All Tenants'}
-            </span>
-            <ChevronDown size={13} className="text-slate-500 shrink-0" />
-          </button>
+        {currentUser?.role === 'SUPER_ADMIN' || currentUser?.role === 'PLATFORM_OWNER' ? (
+          <div className="relative" ref={tenantMenuRef}>
+            <button
+              onClick={() => {
+                setShowTenantMenu(!showTenantMenu);
+                setShowNotificationsMenu(false);
+                setShowProfileMenu(false);
+              }}
+              className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-2.5 py-1.5 rounded-lg bg-[#0e1629] border border-[#18243e] hover:border-blue-500/50 text-xs font-medium text-slate-300 transition-colors cursor-pointer"
+              title="Switch Tenant Scope"
+            >
+              <Building size={14} className="text-blue-400 shrink-0" />
+              <span className="max-w-[70px] sm:max-w-[120px] truncate">
+                {activeTenant ? activeTenant.name : 'All Tenants'}
+              </span>
+              <ChevronDown size={13} className="text-slate-500 shrink-0" />
+            </button>
 
-          {showTenantMenu && (
-            <div className="absolute right-0 mt-2 w-64 max-w-[calc(100vw-1.5rem)] bg-[#0d162b] border border-[#1c2c4d] rounded-xl shadow-xl shadow-black/60 py-1.5 z-50 text-xs">
-              <div className="px-3 py-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-[#18243e]">
-                Tenant Filter Scope
-              </div>
-              <button
-                onClick={() => {
-                  onSelectTenantScope(null);
-                  setShowTenantMenu(false);
-                }}
-                className={`w-full flex items-center justify-between px-3 py-2 text-left hover:bg-[#131f3b] ${
-                  selectedTenantId === null ? 'text-blue-400 font-semibold bg-blue-500/10' : 'text-slate-300'
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-blue-400" />
-                  <span>Global (All Tenants)</span>
+            {showTenantMenu && (
+              <div className="absolute right-0 mt-2 w-64 max-w-[calc(100vw-1.5rem)] bg-[#0d162b] border border-[#1c2c4d] rounded-xl shadow-xl shadow-black/60 py-1.5 z-50 text-xs">
+                <div className="px-3 py-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-[#18243e]">
+                  Tenant Filter Scope
                 </div>
-                {selectedTenantId === null && <Check size={14} />}
-              </button>
-              {tenants.map(t => (
                 <button
-                  key={t.id}
                   onClick={() => {
-                    onSelectTenantScope(t.id);
+                    onSelectTenantScope(null);
                     setShowTenantMenu(false);
                   }}
-                  className={`w-full flex items-center justify-between px-3 py-2 text-left hover:bg-[#131f3b] ${
-                    selectedTenantId === t.id ? 'text-blue-400 font-semibold bg-blue-500/10' : 'text-slate-300'
+                  className={`w-full flex items-center justify-between px-3 py-2 text-left hover:bg-[#131f3b] cursor-pointer ${
+                    selectedTenantId === null ? 'text-blue-400 font-semibold bg-blue-500/10' : 'text-slate-300'
                   }`}
                 >
-                  <div className="flex items-center gap-2 truncate">
-                    <span className="text-[10px] font-mono px-1 py-0.5 rounded bg-slate-800 text-slate-400 shrink-0">
-                      {t.code}
-                    </span>
-                    <span className="truncate">{t.name}</span>
+                  <div className="flex items-center gap-2">
+                    <div className="w-2 h-2 rounded-full bg-blue-400" />
+                    <span>Global (All Tenants)</span>
                   </div>
-                  {selectedTenantId === t.id && <Check size={14} className="shrink-0" />}
+                  {selectedTenantId === null && <Check size={14} />}
                 </button>
-              ))}
-            </div>
-          )}
-        </div>
+                {tenants.map(t => (
+                  <button
+                    key={t.id}
+                    onClick={() => {
+                      onSelectTenantScope(t.id);
+                      setShowTenantMenu(false);
+                    }}
+                    className={`w-full flex items-center justify-between px-3 py-2 text-left hover:bg-[#131f3b] cursor-pointer ${
+                      selectedTenantId === t.id ? 'text-blue-400 font-semibold bg-blue-500/10' : 'text-slate-300'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 truncate">
+                      <span className="text-[10px] font-mono px-1 py-0.5 rounded bg-slate-800 text-slate-400 shrink-0">
+                        {t.code}
+                      </span>
+                      <span className="truncate">{t.name}</span>
+                    </div>
+                    {selectedTenantId === t.id && <Check size={14} className="shrink-0" />}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#0e1629] border border-[#18243e] text-xs font-medium text-slate-400 select-none"
+            title={`Tenant Scope: ${activeTenant ? activeTenant.name : (currentUser?.tenant_id || 'Isolated Organization')}`}
+          >
+            <Building size={14} className="text-slate-500 shrink-0" />
+            <span className="max-w-[70px] sm:max-w-[120px] truncate">
+              {activeTenant ? activeTenant.name : (currentUser?.tenant_id || 'Alpha Prime')}
+            </span>
+          </div>
+        )}
 
         {/* Live Active Traders Telemetry Indicator */}
         <div

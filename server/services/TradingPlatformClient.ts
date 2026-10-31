@@ -1308,6 +1308,20 @@ export class TradingPlatformClient {
   }
 
   /**
+   * Canonical alias for cancel single order endpoint: POST /api/internal/v1/trading/orders/:orderId/cancel
+   */
+  public async cancelOrder(orderId: string, reason?: string, tenantId?: string): Promise<S2SResponse> {
+    const outboundTenantId = await this.resolveOutboundTenantId(tenantId);
+    return this.request({
+      method: 'POST',
+      path: `/api/internal/v1/trading/orders/${orderId}/cancel`,
+      tenantId: outboundTenantId,
+      body: { orderId, reason: reason || 'Cancelled by Admin', tenantId: outboundTenantId },
+      idempotencyKey: `cancel_order_${orderId}_${Date.now()}`
+    });
+  }
+
+  /**
    * 13. Health & Status
    */
   public async checkHealth(): Promise<S2SResponse> {

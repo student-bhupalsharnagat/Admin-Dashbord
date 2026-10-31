@@ -754,18 +754,53 @@ export default function App() {
     }
   };
 
-  const handleSwitchUserRole = (newRole: UserRole) => {
+  const handleSwitchUserRole = async (newRole: UserRole) => {
     if (currentUser) {
-      setCurrentUser({
+      let hierarchyId = currentUser.hierarchyId;
+      let hierarchyLevel = currentUser.hierarchyLevel;
+      if (newRole === 'MASTER') {
+        hierarchyId = 'MST-001';
+        hierarchyLevel = 'MASTER';
+      } else if (newRole === 'BROKER') {
+        hierarchyId = 'BRK-001';
+        hierarchyLevel = 'BROKER';
+      } else if (newRole === 'SUB_BROKER') {
+        hierarchyId = 'SBRK-001';
+        hierarchyLevel = 'SUB_BROKER';
+      } else if (newRole === 'CLIENT') {
+        hierarchyId = 'CLT-001';
+        hierarchyLevel = 'CLIENT';
+      } else if (newRole === 'SUPER_ADMIN' || newRole === 'PLATFORM_OWNER') {
+        hierarchyId = undefined;
+        hierarchyLevel = 'PLATFORM';
+      } else {
+        hierarchyLevel = 'TENANT';
+      }
+
+      const updatedUser = {
         ...currentUser,
         role: newRole,
-        roleName: newRole.replace(/_/g, ' ')
-      });
+        roleName: newRole.replace(/_/g, ' '),
+        hierarchyId,
+        hierarchyLevel
+      };
+      setCurrentUser(updatedUser);
       showToast(`Active session role switched to ${newRole.replace(/_/g, ' ')}`, 'info');
+
+      try {
+        await fetch('/api/auth/switch-role', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ role: newRole, hierarchyId, hierarchyLevel })
+        });
+      } catch {}
+
       // If the current tab cannot be accessed by the new role, redirect gracefully to dashboard
       if (!canAccessTab(newRole, activeTab)) {
         setActiveTab('dashboard');
       }
+      loadHierarchyData();
+      loadDashboardData();
     }
   };
 
@@ -1082,6 +1117,7 @@ export default function App() {
                     await loadHierarchyData();
                     await loadDashboardData();
                   }}
+                  currentUser={currentUser}
                 />
               )}
 
@@ -1095,6 +1131,7 @@ export default function App() {
                   kycRecords={kycRecords}
                   onReviewKYC={kyc => setSelectedKycForReview(kyc)}
                   onNotify={showToast}
+                  currentUser={currentUser}
                 />
               )}
 

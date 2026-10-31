@@ -216,12 +216,12 @@ export async function requireHierarchyAccess(
       if (entityType === 'client') {
         const { rows } = await query(
           `SELECT b.master_id FROM clients c
-           JOIN sub_brokers sb ON c.sub_broker_id = sb.id
-           JOIN brokers b ON sb.broker_id = b.id
-           WHERE c.id = $1`,
-          [targetEntityId]
+           LEFT JOIN sub_brokers sb ON c.sub_broker_id = sb.id
+           JOIN brokers b ON (sb.broker_id = b.id OR c.broker_code = b.code)
+           WHERE (c.id = $1 OR c.client_code = $1) AND b.master_id = $2`,
+          [targetEntityId, user.hierarchy_id]
         );
-        return rows.length > 0 && rows[0].master_id === user.hierarchy_id;
+        return rows.length > 0;
       }
     }
 
@@ -233,13 +233,15 @@ export async function requireHierarchyAccess(
         return rows.length > 0 && rows[0].broker_id === user.hierarchy_id;
       }
       if (entityType === 'client') {
+        const { rows: bRows } = await query<{ id: string; code?: string }>('SELECT id, code FROM brokers WHERE id = $1', [user.hierarchy_id]);
+        const brokerCode = bRows[0]?.code;
         const { rows } = await query(
-          `SELECT sb.broker_id FROM clients c
-           JOIN sub_brokers sb ON c.sub_broker_id = sb.id
-           WHERE c.id = $1`,
-          [targetEntityId]
+          `SELECT c.id FROM clients c
+           LEFT JOIN sub_brokers sb ON c.sub_broker_id = sb.id
+           WHERE (c.id = $1 OR c.client_code = $1) AND (sb.broker_id = $2 OR c.broker_code = $3)`,
+          [targetEntityId, user.hierarchy_id, brokerCode || '']
         );
-        return rows.length > 0 && rows[0].broker_id === user.hierarchy_id;
+        return rows.length > 0;
       }
     }
 
@@ -247,13 +249,13 @@ export async function requireHierarchyAccess(
       if (entityType === 'master' || entityType === 'broker') return false;
       if (entityType === 'sub_broker') return targetEntityId === user.hierarchy_id;
       if (entityType === 'client') {
-        const { rows } = await query('SELECT sub_broker_id FROM clients WHERE id = $1', [targetEntityId]);
+        const { rows } = await query('SELECT sub_broker_id FROM clients WHERE id = $1 OR client_code = $1', [targetEntityId]);
         return rows.length > 0 && rows[0].sub_broker_id === user.hierarchy_id;
       }
     }
 
     if (user.role === 'CLIENT') {
-      return entityType === 'client' && targetEntityId === user.hierarchy_id;
+      return entityType === 'client' && (targetEntityId === user.hierarchy_id || targetEntityId === user.id);
     }
 
     return false;
@@ -261,6 +263,83 @@ export async function requireHierarchyAccess(
     console.error('[requireHierarchyAccess] DB query error:', err);
     return false;
   }
+}
+
+/**
+ * Express middleware to enforce hierarchy authorization on a route param
+ */
+export function requireHierarchyEntity(
+  entityType: 'master' | 'broker' | 'sub_broker' | 'client',
+  paramName = 'id'
+) {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const user = req.user;
+    if (!user) {
+      return res.status(401).json({ error: 'UNAUTHORIZED', message: 'Authentication required' });
+    }
+    const targetId = req.params[paramName];
+    if (!targetId) {
+      return next();
+    }
+    const hasAccess = await requireHierarchyAccess(entityType, targetId, user);
+    if (!hasAccess) {
+      await writeSecurityAuditLog({
+        tenantId: user.tenant_id,
+        userName: user.name,
+        action: 'CROSS_HIERARCHY_ACCESS_BLOCKED',
+        module: 'SECURITY',
+        details: `Role ${user.role} (${user.id}) attempted unauthorized access to ${entityType} '${targetId}' on ${req.method} ${req.path}`,
+        ipAddress: req.ip || req.socket.remoteAddress
+      }).catch(() => {});
+      return res.status(403).json({
+        error: 'FORBIDDEN',
+        message: `Access denied. You do not have permission to access or modify this ${entityType}.`
+      });
+    }
+    next();
+  };
+}
+
+/**
+ * Express middleware to verify downline hierarchy ownership on fund deposit/withdrawal actions
+ */
+export function requireFundTransactionEntity(table: 'fund_deposits' | 'fund_withdrawals', paramName = 'id') {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const user = req.user;
+    if (!user) {
+      return res.status(401).json({ error: 'UNAUTHORIZED', message: 'Authentication required' });
+    }
+    if (['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN', 'COMPLIANCE_OFFICER'].includes(user.role)) {
+      return next();
+    }
+    const txnId = req.params[paramName];
+    if (!txnId) return next();
+
+    try {
+      const { rows } = await query<{ client_id: string }>(`SELECT client_id FROM ${table} WHERE id = $1`, [txnId]);
+      if (rows.length > 0) {
+        const hasAccess = await requireHierarchyAccess('client', rows[0].client_id, user);
+        if (!hasAccess) {
+          await writeSecurityAuditLog({
+            tenantId: user.tenant_id,
+            userName: user.name,
+            action: 'CROSS_HIERARCHY_FUNDS_BLOCKED',
+            module: 'FUNDS',
+            details: `Role ${user.role} attempted unauthorized action on transaction ${txnId} for client ${rows[0].client_id}`,
+            ipAddress: req.ip || req.socket.remoteAddress
+          }).catch(() => {});
+          return res.status(403).json({
+            error: 'FORBIDDEN',
+            message: 'Access denied. You can only approve or reject fund requests for clients in your organization tree.'
+          });
+        }
+      }
+      next();
+    } catch (err: any) {
+      console.error('[requireFundTransactionEntity] Error:', err);
+      next();
+    }
+  };
 }
 
 /**

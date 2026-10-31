@@ -50,6 +50,10 @@ export interface AuthUser {
   phone?: string;
   permissions?: string[];
   simulated_tenant_id?: string | null;
+  hierarchyId?: string;
+  hierarchyLevel?: string;
+  hierarchy_id?: string | null;
+  hierarchy_level?: string | null;
 }
 
 export interface Tenant {

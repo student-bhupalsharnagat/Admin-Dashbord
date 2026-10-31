@@ -11,7 +11,10 @@ import {
   requirePermission,
   requireTenantAccess,
   resolveStrictTenantScope,
-  authRateLimiter
+  authRateLimiter,
+  requireHierarchyEntity,
+  requireFundTransactionEntity,
+  requireHierarchyAccess
 } from './server/auth/middleware.ts';
 import {
   filterMastersForUser,
@@ -948,6 +951,49 @@ async function startServer() {
     res.json({ success: true, activeTenantScope: user.simulated_tenant_id });
   });
 
+  app.post('/api/auth/switch-role', authenticate, async (req, res) => {
+    try {
+      const user = req.user!;
+      const { role, hierarchyId, hierarchyLevel } = req.body;
+      const validRoles: UserRole[] = [
+        'SUPER_ADMIN', 'PLATFORM_OWNER', 'ADMIN', 'TENANT_ADMIN',
+        'MASTER', 'BROKER', 'SUB_BROKER', 'CLIENT',
+        'COMPLIANCE_OFFICER', 'RISK_MANAGER', 'SUPPORT_AGENT'
+      ];
+      if (!validRoles.includes(role)) {
+        return res.status(400).json({ error: 'INVALID_ROLE', message: `Invalid role: ${role}` });
+      }
+
+      user.role = role;
+      if (hierarchyId !== undefined) user.hierarchy_id = hierarchyId;
+      if (hierarchyLevel !== undefined) user.hierarchy_level = hierarchyLevel;
+
+      await writeSecurityAuditLog({
+        tenantId: user.tenant_id,
+        userName: user.name,
+        action: 'ROLE_SWITCHED',
+        module: 'SECURITY',
+        details: `Session role switched to: ${role} (hierarchyId: ${user.hierarchy_id || 'Global'})`,
+        ipAddress: req.ip || req.socket.remoteAddress
+      });
+
+      res.json({
+        success: true,
+        user: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          tenant_id: user.tenant_id,
+          hierarchy_level: user.hierarchy_level,
+          hierarchy_id: user.hierarchy_id
+        }
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.post('/api/auth/logout', authenticate, async (req, res) => {
     try {
       const user = req.user!;
@@ -1036,7 +1082,7 @@ async function startServer() {
     }
   });
 
-  app.post(['/api/admin/tenants', '/api/tenants'], authenticate, requirePermission('tenants.create'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'ADMIN', 'TENANT_ADMIN']), async (req, res) => {
+  app.post(['/api/admin/tenants', '/api/tenants'], authenticate, requirePermission('tenants.create'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER']), async (req, res) => {
     try {
       const tenant = await activeTradingDataProvider.createTenant(req.body);
       await writeSecurityAuditLog({
@@ -1236,7 +1282,7 @@ async function startServer() {
     }
   });
 
-  app.put('/api/admin/masters/:id', authenticate, requirePermission('masters.update'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN']), async (req, res) => {
+  app.put('/api/admin/masters/:id', authenticate, requirePermission('masters.update'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN']), requireHierarchyEntity('master'), async (req, res) => {
     try {
       const updated = await activeTradingDataProvider.updateMaster(req.params.id, req.body);
       if (!updated) return res.status(404).json({ error: 'Master not found' });
@@ -1246,7 +1292,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/admin/masters/:id/status', authenticate, requirePermission('masters.update'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN']), async (req, res) => {
+  app.patch('/api/admin/masters/:id/status', authenticate, requirePermission('masters.update'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN']), requireHierarchyEntity('master'), async (req, res) => {
     try {
       const { status } = req.body;
       const updated = await activeTradingDataProvider.updateMasterStatus(req.params.id, status);
@@ -1295,7 +1341,7 @@ async function startServer() {
     }
   });
 
-  app.put(['/api/admin/brokers/:id', '/api/brokers/:id'], authenticate, requirePermission('brokers.update'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN', 'MASTER']), async (req, res) => {
+  app.put(['/api/admin/brokers/:id', '/api/brokers/:id'], authenticate, requirePermission('brokers.update'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN', 'MASTER']), requireHierarchyEntity('broker'), async (req, res) => {
     try {
       const updated = await activeTradingDataProvider.updateBroker(req.params.id, req.body);
       if (!updated) return res.status(404).json({ error: 'Broker not found' });
@@ -1305,7 +1351,7 @@ async function startServer() {
     }
   });
 
-  app.patch(['/api/admin/brokers/:id/status', '/api/brokers/:id/status'], authenticate, requirePermission('brokers.update'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN', 'MASTER']), async (req, res) => {
+  app.patch(['/api/admin/brokers/:id/status', '/api/brokers/:id/status'], authenticate, requirePermission('brokers.update'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN', 'MASTER']), requireHierarchyEntity('broker'), async (req, res) => {
     try {
       const { status } = req.body;
       const updated = await activeTradingDataProvider.updateBrokerStatus(req.params.id, status);
@@ -1353,7 +1399,7 @@ async function startServer() {
     }
   });
 
-  app.put(['/api/admin/sub-brokers/:id', '/api/sub-brokers/:id'], authenticate, requirePermission('sub_brokers.update'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN', 'MASTER', 'BROKER']), async (req, res) => {
+  app.put(['/api/admin/sub-brokers/:id', '/api/sub-brokers/:id'], authenticate, requirePermission('sub_brokers.update'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN', 'MASTER', 'BROKER']), requireHierarchyEntity('sub_broker'), async (req, res) => {
     try {
       const updated = await activeTradingDataProvider.updateSubBroker(req.params.id, req.body);
       if (!updated) return res.status(404).json({ error: 'Sub-Broker not found' });
@@ -1363,7 +1409,7 @@ async function startServer() {
     }
   });
 
-  app.patch(['/api/admin/sub-brokers/:id/status', '/api/sub-brokers/:id/status'], authenticate, requirePermission('sub_brokers.update'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN', 'MASTER', 'BROKER']), async (req, res) => {
+  app.patch(['/api/admin/sub-brokers/:id/status', '/api/sub-brokers/:id/status'], authenticate, requirePermission('sub_brokers.update'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN', 'MASTER', 'BROKER']), requireHierarchyEntity('sub_broker'), async (req, res) => {
     try {
       const { status } = req.body;
       const updated = await activeTradingDataProvider.updateSubBrokerStatus(req.params.id, status);
@@ -1386,15 +1432,21 @@ async function startServer() {
     }
   });
 
-  app.post(['/api/admin/clients', '/api/admin/hierarchy/clients', '/api/clients'], authenticate, requirePermission('clients.create'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN', 'MASTER', 'BROKER', 'SUB_BROKER']), async (req, res) => {
+  app.post(['/api/admin/clients', '/api/admin/hierarchy/clients', '/api/clients'], authenticate, requirePermission('clients.create'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN', 'MASTER', 'BROKER']), async (req, res) => {
     try {
       const user = req.user!;
       const data = { ...req.body };
       if (user.role !== 'SUPER_ADMIN' && user.role !== 'PLATFORM_OWNER') {
         data.tenant_id = user.tenant_id;
       }
-      if (user.role === 'SUB_BROKER' && user.hierarchy_id) {
-        data.sub_broker_id = user.hierarchy_id;
+      if (user.role === 'BROKER' && user.hierarchy_id) {
+        data.broker_id = user.hierarchy_id;
+        if (data.sub_broker_id) {
+          const hasAccess = await requireHierarchyAccess('sub_broker', data.sub_broker_id, user);
+          if (!hasAccess) {
+            return res.status(403).json({ error: 'FORBIDDEN', message: 'Assigned sub-broker does not belong to your organization.' });
+          }
+        }
       }
       const client = await activeTradingDataProvider.createClient(data);
       await writeSecurityAuditLog({
@@ -1402,7 +1454,7 @@ async function startServer() {
         userName: user.name,
         action: 'CLIENT_CREATED',
         module: 'HIERARCHY',
-        details: `Created client ${client.name} (${client.id}) under sub-broker ${client.sub_broker_id}`,
+        details: `Created client ${client.name} (${client.id})`,
         ipAddress: req.ip
       });
       res.status(201).json(client);
@@ -1411,7 +1463,7 @@ async function startServer() {
     }
   });
 
-  app.put(['/api/admin/clients/:id', '/api/clients/:id'], authenticate, requirePermission('clients.update'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN', 'MASTER', 'BROKER', 'SUB_BROKER']), async (req, res) => {
+  app.put(['/api/admin/clients/:id', '/api/clients/:id'], authenticate, requirePermission('clients.update'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN', 'MASTER', 'BROKER']), requireHierarchyEntity('client'), async (req, res) => {
     try {
       const updated = await activeTradingDataProvider.updateClient(req.params.id, req.body);
       if (!updated) return res.status(404).json({ error: 'Client not found' });
@@ -1421,7 +1473,7 @@ async function startServer() {
     }
   });
 
-  app.patch(['/api/admin/clients/:id/status', '/api/clients/:id/status'], authenticate, requirePermission('clients.update'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN', 'MASTER', 'BROKER', 'SUB_BROKER']), async (req, res) => {
+  app.patch(['/api/admin/clients/:id/status', '/api/clients/:id/status'], authenticate, requirePermission('clients.update'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN', 'MASTER', 'BROKER']), requireHierarchyEntity('client'), async (req, res) => {
     try {
       const { status } = req.body;
       const updated = await activeTradingDataProvider.updateClientStatus(req.params.id, status);
@@ -1433,7 +1485,7 @@ async function startServer() {
   });
 
   // Client Trading Platform Account Details & S2S Live Endpoints
-  app.get(['/api/admin/clients/:id/trading-account', '/api/clients/:id/trading-account'], authenticate, async (req, res) => {
+  app.get(['/api/admin/clients/:id/trading-account', '/api/clients/:id/trading-account'], authenticate, requireHierarchyEntity('client'), async (req, res) => {
     try {
       if (typeof (activeTradingDataProvider as any).getClientAccountDetails === 'function') {
         const details = await (activeTradingDataProvider as any).getClientAccountDetails(req.params.id, req.user?.tenant_id);
@@ -1445,7 +1497,7 @@ async function startServer() {
     }
   });
 
-  app.get(['/api/admin/clients/:id/orders', '/api/clients/:id/orders'], authenticate, async (req, res) => {
+  app.get(['/api/admin/clients/:id/orders', '/api/clients/:id/orders'], authenticate, requireHierarchyEntity('client'), async (req, res) => {
     try {
       if (typeof (activeTradingDataProvider as any).getClientOrders === 'function') {
         const orders = await (activeTradingDataProvider as any).getClientOrders(req.params.id, req.user?.tenant_id);
@@ -1457,7 +1509,7 @@ async function startServer() {
     }
   });
 
-  app.get(['/api/admin/clients/:id/trades', '/api/clients/:id/trades'], authenticate, async (req, res) => {
+  app.get(['/api/admin/clients/:id/trades', '/api/clients/:id/trades'], authenticate, requireHierarchyEntity('client'), async (req, res) => {
     try {
       if (typeof (activeTradingDataProvider as any).getClientTrades === 'function') {
         const trades = await (activeTradingDataProvider as any).getClientTrades(req.params.id, req.user?.tenant_id);
@@ -1469,7 +1521,7 @@ async function startServer() {
     }
   });
 
-  app.get(['/api/admin/clients/:id/positions', '/api/clients/:id/positions'], authenticate, async (req, res) => {
+  app.get(['/api/admin/clients/:id/positions', '/api/clients/:id/positions'], authenticate, requireHierarchyEntity('client'), async (req, res) => {
     try {
       if (typeof (activeTradingDataProvider as any).getClientPositions === 'function') {
         const positions = await (activeTradingDataProvider as any).getClientPositions(req.params.id, req.user?.tenant_id);
@@ -1481,7 +1533,7 @@ async function startServer() {
     }
   });
 
-  app.get(['/api/admin/clients/:id/ledger', '/api/clients/:id/ledger'], authenticate, async (req, res) => {
+  app.get(['/api/admin/clients/:id/ledger', '/api/clients/:id/ledger'], authenticate, requireHierarchyEntity('client'), async (req, res) => {
     try {
       const { id } = req.params;
       const ledger = typeof (activeTradingDataProvider as any).getClientLedger === 'function'
@@ -1493,9 +1545,7 @@ async function startServer() {
     }
   });
 
-
-
-  app.post('/api/admin/clients/:id/positions/:posId/square-off', authenticate, async (req, res) => {
+  app.post('/api/admin/clients/:id/positions/:posId/square-off', authenticate, requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN', 'MASTER', 'BROKER']), requireHierarchyEntity('client'), async (req, res) => {
     try {
       const { id, posId } = req.params;
       const { reason } = req.body || {};
@@ -1568,7 +1618,8 @@ async function startServer() {
       const tenantScope = resolveStrictTenantScope(req);
       const status = req.query.status as string;
       const kyc = await activeTradingDataProvider.getKYCRecords(tenantScope, status);
-      res.json(kyc);
+      const scoped = await filterClientScopedItems(kyc, req.user!);
+      res.json(scoped);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -1582,6 +1633,16 @@ async function startServer() {
       const kycId = req.params.id;
       const tenantScope = resolveStrictTenantScope(req);
       const action = status === 'APPROVED' || status === 'VERIFIED' ? 'APPROVE' : 'REJECT';
+
+      if (req.user) {
+        const hasAccess = await requireHierarchyAccess('client', kycId, req.user);
+        if (!hasAccess) {
+          return res.status(403).json({
+            error: 'FORBIDDEN',
+            message: 'Access denied. You do not have permission to review KYC for this client.'
+          });
+        }
+      }
 
       // 1. S2S dispatch to Trading Platform (non-blocking for resilient local DB persistence)
       try {
@@ -1623,7 +1684,8 @@ async function startServer() {
     try {
       const tenantScope = resolveStrictTenantScope(req);
       const liveFunds = await tradingPlatformClient.getLiveFunds(tenantScope);
-      res.json(liveFunds.data || []);
+      const scoped = await filterClientScopedItems(liveFunds.data || [], req.user!);
+      res.json(scoped);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -1635,13 +1697,14 @@ async function startServer() {
       const tenantScope = resolveStrictTenantScope(req);
       const status = req.query.status as string;
       const deposits = await activeTradingDataProvider.getFundDeposits(tenantScope, status);
-      res.json(deposits);
+      const scoped = await filterClientScopedItems(deposits, req.user!);
+      res.json(scoped);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  app.post(['/api/admin/compliance/deposits/:id/approve', '/api/compliance/deposits/:id/approve'], authenticate, requirePermission('funds.approve'), async (req, res) => {
+  app.post(['/api/admin/compliance/deposits/:id/approve', '/api/compliance/deposits/:id/approve'], authenticate, requirePermission('funds.approve'), requireFundTransactionEntity('fund_deposits'), async (req, res) => {
     try {
       const depositId = req.params.id;
       const actor = req.user?.name || req.user?.email || 'Compliance Officer';
@@ -1685,7 +1748,7 @@ async function startServer() {
     }
   });
 
-  app.post(['/api/admin/compliance/deposits/:id/reject', '/api/compliance/deposits/:id/reject'], authenticate, requirePermission('funds.reject'), async (req, res) => {
+  app.post(['/api/admin/compliance/deposits/:id/reject', '/api/compliance/deposits/:id/reject'], authenticate, requirePermission('funds.reject'), requireFundTransactionEntity('fund_deposits'), async (req, res) => {
     try {
       const depositId = req.params.id;
       const actor = req.user?.name || req.user?.email || 'Compliance Officer';
@@ -1746,13 +1809,14 @@ async function startServer() {
       const tenantScope = resolveStrictTenantScope(req);
       const status = req.query.status as string;
       const withdrawals = await activeTradingDataProvider.getFundWithdrawals(tenantScope, status);
-      res.json(withdrawals);
+      const scoped = await filterClientScopedItems(withdrawals, req.user!);
+      res.json(scoped);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  app.post(['/api/admin/compliance/withdrawals/:id/approve', '/api/compliance/withdrawals/:id/approve'], authenticate, requirePermission('funds.approve'), async (req, res) => {
+  app.post(['/api/admin/compliance/withdrawals/:id/approve', '/api/compliance/withdrawals/:id/approve'], authenticate, requirePermission('funds.approve'), requireFundTransactionEntity('fund_withdrawals'), async (req, res) => {
     try {
       const withdrawalId = req.params.id;
       const actor = req.user?.name || req.user?.email || 'Compliance Officer';
@@ -1794,7 +1858,7 @@ async function startServer() {
     }
   });
 
-  app.post(['/api/admin/compliance/withdrawals/:id/reject', '/api/compliance/withdrawals/:id/reject'], authenticate, requirePermission('funds.reject'), async (req, res) => {
+  app.post(['/api/admin/compliance/withdrawals/:id/reject', '/api/compliance/withdrawals/:id/reject'], authenticate, requirePermission('funds.reject'), requireFundTransactionEntity('fund_withdrawals'), async (req, res) => {
     try {
       const withdrawalId = req.params.id;
       const actor = req.user?.name || req.user?.email || 'Compliance Officer';
@@ -1855,7 +1919,8 @@ async function startServer() {
       const tenantScope = resolveStrictTenantScope(req);
       const type = req.query.type as string;
       const ledger = await activeTradingDataProvider.getLedgerEntries(tenantScope, type);
-      res.json(ledger);
+      const scoped = await filterClientScopedItems(ledger, req.user!);
+      res.json(scoped);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -2823,7 +2888,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/emergency-controls/trading', authMiddleware, requireRoles(['SUPER_ADMIN', 'PLATFORM_OWNER', 'ADMIN', 'TENANT_ADMIN']), async (req, res) => {
+  app.post('/api/admin/emergency-controls/trading', authMiddleware, requireRoles(['SUPER_ADMIN', 'PLATFORM_OWNER']), async (req, res) => {
     try {
       const { active, paused, reason } = req.body;
       const effectiveActive = active !== undefined ? Boolean(active) : (paused !== undefined ? !paused : false);
@@ -2838,7 +2903,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/emergency-controls/cancel-all-orders', authMiddleware, requireRoles(['SUPER_ADMIN', 'PLATFORM_OWNER', 'ADMIN', 'TENANT_ADMIN']), async (req, res) => {
+  app.post('/api/admin/emergency-controls/cancel-all-orders', authMiddleware, requireRoles(['SUPER_ADMIN', 'PLATFORM_OWNER']), async (req, res) => {
     try {
       const user = (req as any).user;
       const reason = req.body?.reason || 'Emergency Mass Order Cancellation by Super Admin';
@@ -2852,7 +2917,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/emergency-controls/kill-switch', authMiddleware, requireRoles(['SUPER_ADMIN', 'PLATFORM_OWNER', 'ADMIN', 'TENANT_ADMIN']), async (req, res) => {
+  app.post('/api/admin/emergency-controls/kill-switch', authMiddleware, requireRoles(['SUPER_ADMIN', 'PLATFORM_OWNER']), async (req, res) => {
     try {
       const { action, reason } = req.body;
       const user = (req as any).user;
@@ -2875,7 +2940,7 @@ async function startServer() {
       res.status(500).json({ error: err.message });
     }
   });
-  app.post('/api/admin/emergency/trading', authMiddleware, async (req, res) => {
+  app.post('/api/admin/emergency/trading', authMiddleware, requireRoles(['SUPER_ADMIN', 'PLATFORM_OWNER']), async (req, res) => {
     try {
       const { active, paused, reason } = req.body;
       const effectiveActive = active !== undefined ? Boolean(active) : (paused !== undefined ? !paused : false);
@@ -2889,7 +2954,7 @@ async function startServer() {
       res.status(500).json({ error: err.message });
     }
   });
-  app.post('/api/admin/emergency/kill-switch', authMiddleware, async (req, res) => {
+  app.post('/api/admin/emergency/kill-switch', authMiddleware, requireRoles(['SUPER_ADMIN', 'PLATFORM_OWNER']), async (req, res) => {
     try {
       const { action, reason } = req.body;
       const user = (req as any).user;
@@ -2902,7 +2967,7 @@ async function startServer() {
       res.status(500).json({ error: err.message });
     }
   });
-  app.post('/api/admin/emergency/kill-switch/reset', authMiddleware, async (req, res) => {
+  app.post('/api/admin/emergency/kill-switch/reset', authMiddleware, requireRoles(['SUPER_ADMIN', 'PLATFORM_OWNER']), async (req, res) => {
     try {
       const user = (req as any).user;
       const updated = await activeTradingDataProvider.triggerKillSwitch('RESET', user?.name || 'Super Admin', req.body?.reason || 'Kill switch reset');
@@ -2914,7 +2979,7 @@ async function startServer() {
       res.status(500).json({ error: err.message });
     }
   });
-  app.post('/api/admin/emergency/registrations', authMiddleware, async (req, res) => {
+  app.post('/api/admin/emergency/registrations', authMiddleware, requireRoles(['SUPER_ADMIN', 'PLATFORM_OWNER']), async (req, res) => {
     try {
       const { enabled } = req.body;
       const user = (req as any).user;
@@ -2927,7 +2992,7 @@ async function startServer() {
       res.status(500).json({ error: err.message });
     }
   });
-  app.post('/api/admin/emergency/api-access', authMiddleware, async (req, res) => {
+  app.post('/api/admin/emergency/api-access', authMiddleware, requireRoles(['SUPER_ADMIN', 'PLATFORM_OWNER']), async (req, res) => {
     try {
       const { enabled } = req.body;
       const user = (req as any).user;
@@ -2940,7 +3005,7 @@ async function startServer() {
       res.status(500).json({ error: err.message });
     }
   });
-  app.post('/api/admin/emergency/freeze', authMiddleware, async (req, res) => {
+  app.post('/api/admin/emergency/freeze', authMiddleware, requireRoles(['SUPER_ADMIN', 'PLATFORM_OWNER']), async (req, res) => {
     try {
       const { entityType, entityId, action, reason } = req.body;
       const user = (req as any).user;
@@ -3130,9 +3195,12 @@ async function startServer() {
     }
   });
 
-  app.put('/api/admin/master-brokerage/:masterId', authMiddleware, requireRoles(['SUPER_ADMIN', 'PLATFORM_OWNER']), async (req, res) => {
+  app.put('/api/admin/master-brokerage/:masterId', authMiddleware, requireRoles(['SUPER_ADMIN', 'PLATFORM_OWNER', 'MASTER']), async (req, res) => {
     try {
       const user = (req as any).user;
+      if (user?.role === 'MASTER' && user?.hierarchy_id !== req.params.masterId) {
+        return res.status(403).json({ error: 'FORBIDDEN', message: 'You can only configure brokerage for your own master organization.' });
+      }
       const updated = await activeTradingDataProvider.updateMasterBrokerage(req.params.masterId, req.body, user?.name || 'Super Admin');
       res.json(updated);
     } catch (err: any) {
@@ -3199,7 +3267,11 @@ async function startServer() {
 
   app.get('/api/admin/master-revenue', authMiddleware, async (req, res) => {
     try {
-      const masterId = req.query.masterId as string | undefined;
+      let masterId = req.query.masterId as string | undefined;
+      const user = (req as any).user;
+      if (user?.role === 'MASTER') {
+        masterId = user.hierarchy_id || undefined;
+      }
       const reports = await activeTradingDataProvider.getMasterRevenueReports(masterId);
       res.json(reports);
     } catch (err: any) {

@@ -33,6 +33,7 @@ interface ComplianceViewProps {
   kycRecords?: KYCRecord[];
   onReviewKYC?: (kyc: any) => void;
   onNotify?: (message: string, type?: 'info' | 'success' | 'warning') => void;
+  currentUser?: any;
 }
 
 // ----------------------------------------------------------------------
@@ -107,8 +108,21 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
   initialFundsStatus,
   fundsNavigationNonce,
   onReviewKYC,
-  onNotify
+  onNotify,
+  currentUser
 }) => {
+  const canApproveFunds = React.useMemo(() => {
+    if (!currentUser) return true;
+    const role = currentUser.role;
+    return role === 'SUPER_ADMIN' || role === 'PLATFORM_OWNER' || role === 'ADMIN' || role === 'TENANT_ADMIN' || role === 'BROKER' || role === 'COMPLIANCE_OFFICER' || role === 'FINANCE_ADMIN';
+  }, [currentUser?.role]);
+
+  const canReviewKyc = React.useMemo(() => {
+    if (!currentUser) return true;
+    const role = currentUser.role;
+    return role !== 'SUB_BROKER' && role !== 'CLIENT';
+  }, [currentUser?.role]);
+
   // Shared notification helper
   const notify = (msg: string, type: 'info' | 'success' | 'warning' = 'info') => {
     if (onNotify) onNotify(msg, type);
@@ -671,7 +685,7 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
                         </button>
 
                         {/* Interactive actions for PENDING */}
-                        {item.status === 'PENDING' && (
+                        {item.status === 'PENDING' && canReviewKyc && (
                           <>
                             <button
                               onClick={() => handleApproveKyc(item)}
@@ -814,7 +828,7 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
               </div>
 
               <div className="p-4 bg-[#080e1c] border-t border-[#162238] flex items-center justify-end gap-2">
-                {selectedKycDetail.status === 'PENDING' ? (
+                {selectedKycDetail.status === 'PENDING' && canReviewKyc ? (
                   <>
                     <button
                       onClick={() => handleRejectKyc(selectedKycDetail)}
@@ -1147,7 +1161,7 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
                         </button>
 
                         {/* Interactive actions for PENDING */}
-                        {item.status === 'PENDING' && (
+                        {item.status === 'PENDING' && canApproveFunds && (
                           <>
                             <button
                               onClick={() => handleApproveFunds(item, isDeposits)}
@@ -1267,7 +1281,7 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
               </div>
 
               <div className="p-4 bg-[#080e1c] border-t border-[#162238] flex items-center justify-end gap-2">
-                {selectedTxnDetail.status === 'PENDING' ? (
+                {selectedTxnDetail.status === 'PENDING' && canApproveFunds ? (
                   <>
                     <button
                       onClick={() => handleRejectFunds(selectedTxnDetail, selectedTxnDetail.isDeposit)}

@@ -45,6 +45,7 @@ export interface HierarchyViewsProps {
   onRefresh?: () => Promise<void> | void;
   selectedClient?: any;
   onClearSelectedClient?: () => void;
+  currentUser?: any;
 }
 
 // Initial screenshot dataset for Masters
@@ -487,8 +488,28 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
   onOpenTradingPlatform,
   onRefresh,
   selectedClient: propSelectedClient,
-  onClearSelectedClient
+  onClearSelectedClient,
+  currentUser
 }) => {
+  const canCreate = React.useMemo(() => {
+    const role = currentUser?.role || 'SUPER_ADMIN';
+    if (role === 'SUPER_ADMIN' || role === 'PLATFORM_OWNER' || role === 'ADMIN' || role === 'TENANT_ADMIN') {
+      return true;
+    }
+    if (role === 'MASTER') {
+      return level === 'brokers' || level === 'sub-brokers' || level === 'clients';
+    }
+    if (role === 'BROKER') {
+      return level === 'sub-brokers' || level === 'clients';
+    }
+    return false;
+  }, [currentUser?.role, level]);
+
+  const canManageStatus = React.useMemo(() => {
+    const role = currentUser?.role || 'SUPER_ADMIN';
+    return role !== 'SUB_BROKER' && role !== 'CLIENT';
+  }, [currentUser?.role]);
+
   // Local state for entities ensuring live PostgreSQL data and empty states are synchronized
   const [mastersList, setMastersList] = useState(() => (propMasters || []).map(normalizeMaster));
   const [brokersList, setBrokersList] = useState(() => (propBrokers || []).map(normalizeBroker));
@@ -555,6 +576,10 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
   };
 
   const executeToggleStatus = async (entity: any) => {
+    if (!canManageStatus) {
+      notify('You do not have permission to modify status.', 'warning');
+      return;
+    }
     const current = entity.status || entity.account || 'ACTIVE';
     const nextStatus = current === 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE';
     try {
@@ -786,6 +811,10 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
 
   // Open Create Modal
   const handleOpenCreate = () => {
+    if (!canCreate) {
+      notify('You do not have permission to create this entity.', 'warning');
+      return;
+    }
     if (level === 'masters' && onCreateMaster) {
       // Also provide local form support if needed
       setFormData({
@@ -1075,7 +1104,7 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
           </p>
         </div>
 
-        {level !== 'tree' && (
+        {level !== 'tree' && canCreate && (
           <button
             onClick={handleOpenCreate}
             className="flex items-center gap-1.5 px-3.5 py-1.5 bg-[#1d4ed8] hover:bg-blue-600 font-semibold text-xs text-white rounded-lg transition-colors shadow-sm cursor-pointer"
@@ -1804,17 +1833,19 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
                 Created: {selectedEntity.created || selectedEntity.created_at || selectedEntity.joined || new Date().toISOString().split('T')[0]}
               </span>
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => executeToggleStatus(selectedEntity)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
-                    (selectedEntity.status === 'ACTIVE' || selectedEntity.account === 'ACTIVE')
-                      ? 'bg-rose-950/60 hover:bg-rose-900 border border-rose-600/40 text-rose-300'
-                      : 'bg-emerald-950/60 hover:bg-emerald-900 border border-emerald-600/40 text-emerald-300'
-                  }`}
-                >
-                  {(selectedEntity.status === 'ACTIVE' || selectedEntity.account === 'ACTIVE') ? 'Suspend Entity' : 'Activate Entity'}
-                </button>
+                {canManageStatus && (
+                  <button
+                    type="button"
+                    onClick={() => executeToggleStatus(selectedEntity)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                      (selectedEntity.status === 'ACTIVE' || selectedEntity.account === 'ACTIVE')
+                        ? 'bg-rose-950/60 hover:bg-rose-900 border border-rose-600/40 text-rose-300'
+                        : 'bg-emerald-950/60 hover:bg-emerald-900 border border-emerald-600/40 text-emerald-300'
+                    }`}
+                  >
+                    {(selectedEntity.status === 'ACTIVE' || selectedEntity.account === 'ACTIVE') ? 'Suspend Entity' : 'Activate Entity'}
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => setModalType(null)}

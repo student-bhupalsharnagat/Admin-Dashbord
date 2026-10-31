@@ -945,7 +945,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     const existingIds = new Set(list.map(b => b.id));
     for (const cb of this.createdBrokersMap.values()) {
       if (!existingIds.has(cb.id)) {
-        if (!masterId || cb.master_id === masterId || cb.masterId === masterId || cb.master_name?.toLowerCase() === masterId.toLowerCase() || (cb as any).master?.toLowerCase() === masterId.toLowerCase()) {
+        if (!masterId || cb.master_id === masterId || (cb as any).masterId === masterId || cb.master_name?.toLowerCase() === masterId.toLowerCase() || (cb as any).master?.toLowerCase() === masterId.toLowerCase()) {
           list.push(cb);
         }
       }
@@ -1128,7 +1128,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     const existingIds = new Set(list.map(sb => sb.id));
     for (const csb of this.createdSubBrokersMap.values()) {
       if (!existingIds.has(csb.id)) {
-        if (!brokerId || csb.broker_id === brokerId || csb.brokerId === brokerId || csb.broker_name?.toLowerCase() === brokerId.toLowerCase() || (csb as any).parentBroker?.toLowerCase() === brokerId.toLowerCase()) {
+        if (!brokerId || csb.broker_id === brokerId || (csb as any).brokerId === brokerId || csb.broker_name?.toLowerCase() === brokerId.toLowerCase() || (csb as any).parentBroker?.toLowerCase() === brokerId.toLowerCase()) {
           list.push(csb);
         }
       }
@@ -4041,7 +4041,6 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       brand_name: r.portal_name || r.company_name,
       short_name: r.portal_name || 'Prime',
       tagline: r.tagline || 'Next-Gen Trading Infrastructure',
-      logo_url: r.logo_url || 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=120&auto=format&fit=crop&q=80',
       favicon_url: r.favicon_url || '/favicon.ico',
       primary_color: r.primary_color || '#2563eb',
       secondary_color: '#0f172a',
