@@ -147,7 +147,7 @@ export const AdminHeader: React.FC<AdminHeaderProps> = ({
         {/* Breadcrumbs: compact on mobile, full trail on sm+ */}
         <div className="flex items-center gap-1.5 sm:gap-2 text-xs truncate">
           {/* Mobile view: show current section only */}
-          <span className="sm:hidden text-slate-200 font-bold truncate max-w-[140px]">
+          <span className="sm:hidden text-slate-200 font-bold truncate max-w-[80px] xs:max-w-[120px]">
             {breadcrumbs[breadcrumbs.length - 1] || 'Dashboard'}
           </span>
 
@@ -172,7 +172,7 @@ export const AdminHeader: React.FC<AdminHeaderProps> = ({
       </div>
 
       {/* Right Controls */}
-      <div className="flex items-center gap-1.5 sm:gap-3">
+      <div className="flex items-center gap-1 sm:gap-2 md:gap-3">
         {/* Global Search (Desktop & Tablet) */}
         <div className="relative w-48 md:w-64 hidden sm:block" ref={searchContainerRef}>
           <Search
@@ -282,7 +282,7 @@ export const AdminHeader: React.FC<AdminHeaderProps> = ({
               title="Switch Tenant Scope"
             >
               <Building size={14} className="text-blue-400 shrink-0" />
-              <span className="max-w-[70px] sm:max-w-[120px] truncate">
+              <span className="max-w-[55px] xs:max-w-[85px] sm:max-w-[120px] truncate">
                 {activeTenant ? activeTenant.name : 'All Tenants'}
               </span>
               <ChevronDown size={13} className="text-slate-500 shrink-0" />
@@ -361,12 +361,12 @@ export const AdminHeader: React.FC<AdminHeaderProps> = ({
           <button
             id="trading-platform-btn"
             onClick={onOpenTradingPlatform}
-            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg bg-emerald-600/15 hover:bg-emerald-600/25 border border-emerald-500/30 text-emerald-400 hover:text-emerald-300 font-bold text-xs transition-colors cursor-pointer"
+            className="flex items-center gap-1.5 px-2 sm:px-3 py-1.5 rounded-lg bg-emerald-600/15 hover:bg-emerald-600/25 border border-emerald-500/30 text-emerald-400 hover:text-emerald-300 font-bold text-xs transition-colors cursor-pointer"
             title="Open B2C Trading Platform Terminal"
           >
             <Globe size={14} className="animate-pulse text-emerald-400 shrink-0" />
-            <span className="hidden sm:inline">Trading Platform</span>
-            <span className="sm:hidden">Terminal</span>
+            <span className="hidden md:inline">Trading Platform</span>
+            <span className="hidden sm:inline md:hidden">Terminal</span>
           </button>
         )}
 
@@ -476,10 +476,10 @@ export const AdminHeader: React.FC<AdminHeaderProps> = ({
           <HelpCircle size={18} />
         </button>
 
-        {/* Quick Dark / Light Mode Toggle Button */}
+        {/* Quick Dark / Light Mode Toggle Button (Desktop & Tablet; mobile has it in Profile and Sidebar) */}
         <button
           onClick={toggleTheme}
-          className="p-2 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-[#111b33] transition-all flex items-center justify-center cursor-pointer group"
+          className="hidden sm:flex p-2 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-[#111b33] transition-all items-center justify-center cursor-pointer group"
           title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
           aria-label="Toggle Dark and Light Mode"
         >

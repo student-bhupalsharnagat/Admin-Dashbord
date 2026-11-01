@@ -543,7 +543,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ onNotify, currentUser 
       {/* Report Generation Modal (Exact match to Screenshot 2026-09-11 004437.png) */}
       {selectedReport && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-xs p-4 animate-in fade-in duration-150">
-          <div className="bg-[#0b1328] border border-[#162340] rounded-xl max-w-xl w-full p-6 shadow-2xl space-y-6">
+          <div className="bg-[#0b1328] border border-[#162340] rounded-xl max-w-xl w-full max-h-[92vh] overflow-y-auto p-6 shadow-2xl space-y-6">
             {/* Header: Title and Close button */}
             <div className="flex items-center justify-between pb-3 border-b border-[#142038]">
               <h3 className="text-base font-bold text-white tracking-tight">

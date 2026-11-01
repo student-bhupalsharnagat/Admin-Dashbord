@@ -346,7 +346,7 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({ onNotify }
       {/* Plan Selection Modal */}
       {selectedPlanForModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-xs p-4 animate-in fade-in duration-150">
-          <div className="bg-[#0c152a] border border-[#1d2d50] rounded-xl max-w-md w-full p-6 shadow-2xl space-y-4">
+          <div className="bg-[#0c152a] border border-[#1d2d50] rounded-xl max-w-md w-full max-h-[92vh] overflow-y-auto p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-[#162340]">
               <div className="flex items-center gap-2">
                 <Sparkles size={16} className="text-blue-400" />

@@ -601,10 +601,10 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
         </div>
 
         {/* Filter Bar */}
-        <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-          <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3 w-full sm:w-auto">
             {/* Search */}
-            <div className="relative w-64 sm:w-80">
+            <div className="relative w-full sm:w-80">
               <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" />
               <input
                 type="text"
@@ -616,11 +616,11 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
             </div>
 
             {/* Status Dropdown */}
-            <div className="relative">
+            <div className="relative w-full sm:w-auto">
               <select
                 value={kycStatusFilter}
                 onChange={e => setKycStatusFilter(e.target.value)}
-                className="appearance-none bg-[#091122] border border-[#162238] text-xs text-slate-300 pl-3.5 pr-8 py-2 rounded-lg focus:outline-none focus:border-blue-500 cursor-pointer"
+                className="w-full sm:w-auto appearance-none bg-[#091122] border border-[#162238] text-xs text-slate-300 pl-3.5 pr-8 py-2 rounded-lg focus:outline-none focus:border-blue-500 cursor-pointer"
               >
                 <option value="All Status">All Status</option>
                 <option value="APPROVED">APPROVED</option>
@@ -726,7 +726,7 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
           </div>
 
           {filteredKyc.length > compliancePageSize && (
-            <div className="px-4 py-3 border-t border-[#131e36] flex items-center justify-between text-xs text-slate-400">
+            <div className="px-4 py-3 border-t border-[#131e36] flex flex-col sm:flex-row items-center justify-between gap-3 text-center sm:text-left text-xs text-slate-400">
               <div>
                 Showing {((kycPage - 1) * compliancePageSize) + 1} to {Math.min(kycPage * compliancePageSize, filteredKyc.length)} of {filteredKyc.length} submissions
               </div>
@@ -754,7 +754,7 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
         {/* KYC Dossier Modal */}
         {selectedKycDetail && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
-            <div className="bg-[#091122] border border-[#162238] rounded-xl w-full max-w-lg overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+            <div className="bg-[#091122] border border-[#162238] rounded-xl w-full max-w-lg max-h-[92vh] overflow-y-auto shadow-2xl animate-in fade-in zoom-in-95 duration-150">
               <div className="p-4 border-b border-[#162238] flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
                   <div className="w-8 h-8 rounded-lg bg-[#0b2149] border border-[#0369a1] flex items-center justify-center text-[#38bdf8]">
@@ -1055,10 +1055,10 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
         </div>
 
         {/* Filter Bar */}
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3 w-full sm:w-auto">
             {/* Search */}
-            <div className="relative w-64 sm:w-80">
+            <div className="relative w-full sm:w-80">
               <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" />
               <input
                 type="text"
@@ -1070,11 +1070,11 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
             </div>
 
             {/* Status Filter */}
-            <div className="relative">
+            <div className="relative w-full sm:w-auto">
               <select
                 value={fundsStatusFilter}
                 onChange={e => setFundsStatusFilter(e.target.value)}
-                className="appearance-none bg-[#091122] border border-[#162238] text-xs text-slate-300 pl-3.5 pr-8 py-2 rounded-lg focus:outline-none focus:border-blue-500 cursor-pointer"
+                className="w-full sm:w-auto appearance-none bg-[#091122] border border-[#162238] text-xs text-slate-300 pl-3.5 pr-8 py-2 rounded-lg focus:outline-none focus:border-blue-500 cursor-pointer"
               >
                 <option value="All Status">All Status</option>
                 <option value="COMPLETED">COMPLETED</option>
@@ -1202,7 +1202,7 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
           </div>
 
           {currentFundsList.length > compliancePageSize && (
-            <div className="px-4 py-3 border-t border-[#131e36] flex items-center justify-between text-xs text-slate-400">
+            <div className="px-4 py-3 border-t border-[#131e36] flex flex-col sm:flex-row items-center justify-between gap-3 text-center sm:text-left text-xs text-slate-400">
               <div>
                 Showing {((fundsPage - 1) * compliancePageSize) + 1} to {Math.min(fundsPage * compliancePageSize, currentFundsList.length)} of {currentFundsList.length} records
               </div>
@@ -1230,7 +1230,7 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
         {/* Transaction Modal */}
         {selectedTxnDetail && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
-            <div className="bg-[#091122] border border-[#162238] rounded-xl w-full max-w-md overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+            <div className="bg-[#091122] border border-[#162238] rounded-xl w-full max-w-md max-h-[92vh] overflow-y-auto shadow-2xl animate-in fade-in zoom-in-95 duration-150">
               <div className="p-4 border-b border-[#162238] flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
                   <div className="w-8 h-8 rounded-lg bg-[#0b2149] border border-[#0369a1] flex items-center justify-center text-[#38bdf8]">
@@ -1411,9 +1411,9 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
         </div>
 
         {/* Filter Bar */}
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
           {/* Search */}
-          <div className="relative w-64 sm:w-80">
+          <div className="relative w-full sm:w-80">
             <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" />
             <input
               type="text"
@@ -1425,11 +1425,11 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
           </div>
 
           {/* Type Dropdown */}
-          <div className="relative">
+          <div className="relative w-full sm:w-auto">
             <select
               value={ledgerTypeFilter}
               onChange={e => setLedgerTypeFilter(e.target.value)}
-              className="appearance-none bg-[#091122] border border-[#162238] text-xs text-slate-300 pl-3.5 pr-8 py-2 rounded-lg focus:outline-none focus:border-blue-500 cursor-pointer"
+              className="w-full sm:w-auto appearance-none bg-[#091122] border border-[#162238] text-xs text-slate-300 pl-3.5 pr-8 py-2 rounded-lg focus:outline-none focus:border-blue-500 cursor-pointer"
             >
               <option value="All Types">All Types</option>
               <option value="DEPOSIT">DEPOSIT</option>
@@ -1525,7 +1525,7 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
           </div>
 
           {filteredLedger.length > compliancePageSize && (
-            <div className="px-4 py-3 border-t border-[#131e36] flex items-center justify-between text-xs text-slate-400">
+            <div className="px-4 py-3 border-t border-[#131e36] flex flex-col sm:flex-row items-center justify-between gap-3 text-center sm:text-left text-xs text-slate-400">
               <div>
                 Showing {((ledgerPage - 1) * compliancePageSize) + 1} to {Math.min(ledgerPage * compliancePageSize, filteredLedger.length)} of {filteredLedger.length} transactions
               </div>
@@ -1553,7 +1553,7 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
         {/* Ledger Voucher Modal */}
         {selectedLedgerItem && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
-            <div className="bg-[#091122] border border-[#162238] rounded-xl w-full max-w-md overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+            <div className="bg-[#091122] border border-[#162238] rounded-xl w-full max-w-md max-h-[92vh] overflow-y-auto shadow-2xl animate-in fade-in zoom-in-95 duration-150">
               <div className="p-4 border-b border-[#162238] flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
                   <div className="w-8 h-8 rounded-lg bg-[#0b2149] border border-[#0369a1] flex items-center justify-center text-[#38bdf8]">

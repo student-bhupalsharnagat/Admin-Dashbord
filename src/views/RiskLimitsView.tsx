@@ -377,12 +377,12 @@ export const RiskLimitsView: React.FC<RiskLimitsViewProps> = ({ onNotify }) => {
       </div>
 
       {/* Header + Create Risk Profile Button */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <h1 className="text-xl font-bold text-white tracking-tight">Risk &amp; Limits</h1>
 
         <button
           onClick={() => setShowCreateModal(true)}
-          className="flex items-center gap-1.5 px-3.5 py-2 bg-[#2563eb] hover:bg-blue-600 text-white font-medium text-xs rounded-lg transition-colors shadow-sm"
+          className="flex items-center justify-center gap-1.5 px-3.5 py-2 bg-[#2563eb] hover:bg-blue-600 text-white font-medium text-xs rounded-lg transition-colors shadow-sm w-full sm:w-auto"
         >
           <Plus size={14} />
           Create Risk Profile
@@ -539,7 +539,7 @@ export const RiskLimitsView: React.FC<RiskLimitsViewProps> = ({ onNotify }) => {
       {/* Create Risk Profile Modal */}
       {showCreateModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
-          <div className="bg-[#091122] border border-[#162238] rounded-xl w-full max-w-md overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+          <div className="bg-[#091122] border border-[#162238] rounded-xl w-full max-w-md max-h-[92vh] overflow-y-auto shadow-2xl animate-in fade-in zoom-in-95 duration-150">
             <div className="p-4 border-b border-[#162238] flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Plus size={16} className="text-[#2563eb]" />
@@ -636,7 +636,7 @@ export const RiskLimitsView: React.FC<RiskLimitsViewProps> = ({ onNotify }) => {
       {/* Edit Risk Profile Modal */}
       {editingProfile && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
-          <div className="bg-[#091122] border border-[#162238] rounded-xl w-full max-w-md overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+          <div className="bg-[#091122] border border-[#162238] rounded-xl w-full max-w-md max-h-[92vh] overflow-y-auto shadow-2xl animate-in fade-in zoom-in-95 duration-150">
             <div className="p-4 border-b border-[#162238] flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Pencil size={16} className="text-[#38bdf8]" />

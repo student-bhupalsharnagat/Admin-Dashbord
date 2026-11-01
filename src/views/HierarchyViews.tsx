@@ -1086,7 +1086,7 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
   return (
     <div className="space-y-4">
       {/* 1. Page Header (Title + Subtitle + Action Button) */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold text-white tracking-tight">
             {level === 'masters' && 'Masters'}
@@ -1107,7 +1107,7 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
         {level !== 'tree' && canCreate && (
           <button
             onClick={handleOpenCreate}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 bg-[#1d4ed8] hover:bg-blue-600 font-semibold text-xs text-white rounded-lg transition-colors shadow-sm cursor-pointer"
+            className="flex items-center justify-center gap-1.5 px-3.5 py-2 sm:py-1.5 bg-[#1d4ed8] hover:bg-blue-600 font-semibold text-xs text-white rounded-lg transition-colors shadow-sm cursor-pointer w-full sm:w-auto shrink-0"
           >
             <Plus size={14} className="stroke-[2.5]" />
             <span>

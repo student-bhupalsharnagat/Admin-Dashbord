@@ -1283,7 +1283,7 @@ export const SystemToolsView: React.FC<SystemToolsViewProps> = ({
       {/* Freeze Entity Modal */}
       {freezeModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-xs p-4">
-          <div className="bg-[#0c152a] border border-[#1d2d50] rounded-xl max-w-md w-full p-5 shadow-2xl space-y-4">
+          <div className="bg-[#0c152a] border border-[#1d2d50] rounded-xl max-w-md w-full max-h-[92vh] overflow-y-auto p-5 shadow-2xl space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-[#162340]">
               <div className="flex items-center gap-2 text-rose-400 font-bold text-sm">
                 <AlertOctagon size={18} />

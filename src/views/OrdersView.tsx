@@ -265,9 +265,9 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
       </div>
 
       {/* Filter Bar matching Screenshot 4 */}
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
         {/* Search */}
-        <div className="relative w-64 sm:w-80">
+        <div className="relative flex-1 sm:w-80 sm:flex-initial">
           <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" />
           <input
             type="text"
@@ -278,33 +278,35 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
           />
         </div>
 
-        {/* All Sides Dropdown */}
-        <div className="relative">
-          <select
-            value={sideFilter}
-            onChange={e => setSideFilter(e.target.value as any)}
-            className="appearance-none bg-[#091122] border border-[#162238] text-xs text-slate-300 pl-3.5 pr-8 py-2 rounded-lg focus:outline-none focus:border-blue-500 cursor-pointer"
-          >
-            <option value="All Sides">All Sides</option>
-            <option value="BUY">BUY</option>
-            <option value="SELL">SELL</option>
-          </select>
-          <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-        </div>
+        <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+          {/* All Sides Dropdown */}
+          <div className="relative flex-1 sm:flex-initial">
+            <select
+              value={sideFilter}
+              onChange={e => setSideFilter(e.target.value as any)}
+              className="w-full sm:w-auto appearance-none bg-[#091122] border border-[#162238] text-xs text-slate-300 pl-3.5 pr-8 py-2 rounded-lg focus:outline-none focus:border-blue-500 cursor-pointer"
+            >
+              <option value="All Sides">All Sides</option>
+              <option value="BUY">BUY</option>
+              <option value="SELL">SELL</option>
+            </select>
+            <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+          </div>
 
-        {/* All Status Dropdown */}
-        <div className="relative">
-          <select
-            value={statusFilter}
-            onChange={e => setStatusFilter(e.target.value as any)}
-            className="appearance-none bg-[#091122] border border-[#162238] text-xs text-slate-300 pl-3.5 pr-8 py-2 rounded-lg focus:outline-none focus:border-blue-500 cursor-pointer"
-          >
-            <option value="All Status">All Status</option>
-            <option value="FILLED">FILLED</option>
-            <option value="PENDING">PENDING</option>
-            <option value="CANCELLED">CANCELLED</option>
-          </select>
-          <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+          {/* All Status Dropdown */}
+          <div className="relative flex-1 sm:flex-initial">
+            <select
+              value={statusFilter}
+              onChange={e => setStatusFilter(e.target.value as any)}
+              className="w-full sm:w-auto appearance-none bg-[#091122] border border-[#162238] text-xs text-slate-300 pl-3.5 pr-8 py-2 rounded-lg focus:outline-none focus:border-blue-500 cursor-pointer"
+            >
+              <option value="All Status">All Status</option>
+              <option value="FILLED">FILLED</option>
+              <option value="PENDING">PENDING</option>
+              <option value="CANCELLED">CANCELLED</option>
+            </select>
+            <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+          </div>
         </div>
       </div>
 
@@ -386,7 +388,7 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
         </div>
 
         {filteredOrders.length > pageSize && (
-          <div className="px-4 py-3 border-t border-[#131e36] flex items-center justify-between text-xs text-slate-400">
+          <div className="px-4 py-3 border-t border-[#131e36] flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-400 text-center sm:text-left">
             <div>
               Showing {((currentPage - 1) * pageSize) + 1} to {Math.min(currentPage * pageSize, filteredOrders.length)} of {filteredOrders.length} orders
             </div>
@@ -394,7 +396,7 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
               <button
                 disabled={currentPage <= 1}
                 onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                className="px-2.5 py-1 rounded bg-[#0f172a] hover:bg-[#1e293b] disabled:opacity-40 disabled:cursor-not-allowed border border-[#1e293b] text-slate-200"
+                className="px-2.5 py-1 rounded bg-[#0f172a] hover:bg-[#1e293b] disabled:opacity-40 disabled:cursor-not-allowed border border-[#1e293b] text-slate-200 cursor-pointer"
               >
                 Previous
               </button>
@@ -402,7 +404,7 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
               <button
                 disabled={currentPage >= totalPages}
                 onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                className="px-2.5 py-1 rounded bg-[#0f172a] hover:bg-[#1e293b] disabled:opacity-40 disabled:cursor-not-allowed border border-[#1e293b] text-slate-200"
+                className="px-2.5 py-1 rounded bg-[#0f172a] hover:bg-[#1e293b] disabled:opacity-40 disabled:cursor-not-allowed border border-[#1e293b] text-slate-200 cursor-pointer"
               >
                 Next
               </button>

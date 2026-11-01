@@ -145,7 +145,7 @@ export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify }) => {
 
       {/* Filter Bar */}
       <div className="flex items-center gap-3">
-        <div className="relative w-64 sm:w-80">
+        <div className="relative w-full sm:w-80">
           <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" />
           <input
             type="text"
@@ -213,7 +213,7 @@ export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify }) => {
         </div>
 
         {filteredPositions.length > pageSize && (
-          <div className="px-4 py-3 border-t border-[#131e36] flex items-center justify-between text-xs text-slate-400">
+          <div className="px-4 py-3 border-t border-[#131e36] flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-400 text-center sm:text-left">
             <div>
               Showing {((currentPage - 1) * pageSize) + 1} to {Math.min(currentPage * pageSize, filteredPositions.length)} of {filteredPositions.length} positions
             </div>
@@ -221,7 +221,7 @@ export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify }) => {
               <button
                 disabled={currentPage <= 1}
                 onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                className="px-2.5 py-1 rounded bg-[#0f172a] hover:bg-[#1e293b] disabled:opacity-40 disabled:cursor-not-allowed border border-[#1e293b] text-slate-200"
+                className="px-2.5 py-1 rounded bg-[#0f172a] hover:bg-[#1e293b] disabled:opacity-40 disabled:cursor-not-allowed border border-[#1e293b] text-slate-200 cursor-pointer"
               >
                 Previous
               </button>
@@ -229,7 +229,7 @@ export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify }) => {
               <button
                 disabled={currentPage >= totalPages}
                 onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                className="px-2.5 py-1 rounded bg-[#0f172a] hover:bg-[#1e293b] disabled:opacity-40 disabled:cursor-not-allowed border border-[#1e293b] text-slate-200"
+                className="px-2.5 py-1 rounded bg-[#0f172a] hover:bg-[#1e293b] disabled:opacity-40 disabled:cursor-not-allowed border border-[#1e293b] text-slate-200 cursor-pointer"
               >
                 Next
               </button>

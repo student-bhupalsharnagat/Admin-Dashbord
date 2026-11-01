@@ -71,6 +71,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<NavigationTab>('dashboard');
   const [selectedTenantForDetail, setSelectedTenantForDetail] = useState<Tenant | null>(null);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   // Global Multi-Tenant Scope filter for Super Admin (null = All Tenants)
   const [selectedTenantScope, setSelectedTenantScope] = useState<string | null>(null);
@@ -929,6 +930,8 @@ export default function App() {
         }}
         mobileOpen={mobileSidebarOpen}
         onCloseMobile={() => setMobileSidebarOpen(false)}
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={() => setSidebarCollapsed(prev => !prev)}
         currentUser={currentUser}
         badgeCounts={{
           kycPending: Number(dashboardData?.kpis?.pending_kyc?.value) || 0,

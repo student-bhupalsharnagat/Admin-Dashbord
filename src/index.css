@@ -365,10 +365,15 @@ html.dark, html.dark body, [data-theme="dark"], [data-theme="dark"] body {
   padding-right: var(--sar);
 }
 
-/* Ensure mobile interactive controls meet minimum touch target of 40px */
+/* Smooth mobile momentum scrolling on table containers */
+.overflow-x-auto {
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Ensure mobile interactive controls meet minimum touch target of 40px without distorting toggles or small table action icons */
 @media (max-width: 767.98px) {
-  button, 
-  a[role="button"], 
+  button:not([role="switch"]):not([aria-label*="Toggle"]):not(.h-4):not(.h-5):not(.h-6):not(.h-7):not(.h-8):not(.p-0\.5):not(.p-1):not(.p-1\.5):not([class*="w-8 h-4"]):not([class*="w-9 h-5"]), 
+  a[role="button"]:not(.inline-flex), 
   input[type="button"], 
   input[type="submit"], 
   select {

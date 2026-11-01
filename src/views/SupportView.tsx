@@ -475,9 +475,9 @@ export const SupportView: React.FC<SupportViewProps> = ({ onNotify, currentUser 
       </div>
 
       {/* Search & Filter Bar */}
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3">
         {/* Search */}
-        <div className="relative flex-1 min-w-[220px] max-w-sm">
+        <div className="relative flex-1 w-full sm:max-w-sm">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
           <input
             type="text"
@@ -488,33 +488,36 @@ export const SupportView: React.FC<SupportViewProps> = ({ onNotify, currentUser 
           />
         </div>
 
-        {/* Status Dropdown */}
-        <div className="w-36">
-          <select
-            value={statusFilter}
-            onChange={e => setStatusFilter(e.target.value)}
-            className="w-full bg-[#0b1328] border border-[#142038] text-slate-300 rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-blue-500 cursor-pointer"
-          >
-            <option value="ALL">All Status</option>
-            <option value="OPEN">Open</option>
-            <option value="IN PROGRESS">In Progress</option>
-            <option value="PENDING">Pending</option>
-            <option value="RESOLVED">Resolved</option>
-          </select>
-        </div>
+        {/* Dropdowns Row on Mobile */}
+        <div className="flex items-center gap-3 w-full sm:w-auto">
+          {/* Status Dropdown */}
+          <div className="flex-1 sm:w-36">
+            <select
+              value={statusFilter}
+              onChange={e => setStatusFilter(e.target.value)}
+              className="w-full bg-[#0b1328] border border-[#142038] text-slate-300 rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-blue-500 cursor-pointer"
+            >
+              <option value="ALL">All Status</option>
+              <option value="OPEN">Open</option>
+              <option value="IN PROGRESS">In Progress</option>
+              <option value="PENDING">Pending</option>
+              <option value="RESOLVED">Resolved</option>
+            </select>
+          </div>
 
-        {/* Priority Dropdown */}
-        <div className="w-36">
-          <select
-            value={priorityFilter}
-            onChange={e => setPriorityFilter(e.target.value)}
-            className="w-full bg-[#0b1328] border border-[#142038] text-slate-300 rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-blue-500 cursor-pointer"
-          >
-            <option value="ALL">All Priority</option>
-            <option value="HIGH">High</option>
-            <option value="MEDIUM">Medium</option>
-            <option value="LOW">Low</option>
-          </select>
+          {/* Priority Dropdown */}
+          <div className="flex-1 sm:w-36">
+            <select
+              value={priorityFilter}
+              onChange={e => setPriorityFilter(e.target.value)}
+              className="w-full bg-[#0b1328] border border-[#142038] text-slate-300 rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-blue-500 cursor-pointer"
+            >
+              <option value="ALL">All Priority</option>
+              <option value="HIGH">High</option>
+              <option value="MEDIUM">Medium</option>
+              <option value="LOW">Low</option>
+            </select>
+          </div>
         </div>
       </div>
 
@@ -834,7 +837,7 @@ export const SupportView: React.FC<SupportViewProps> = ({ onNotify, currentUser 
       {/* Quick Reply Modal */}
       {ticketForReply && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-xs p-4 animate-in fade-in duration-150">
-          <div className="bg-[#0c152a] border border-[#1d2d50] rounded-xl max-w-lg w-full p-5 shadow-2xl space-y-4">
+          <div className="bg-[#0c152a] border border-[#1d2d50] rounded-xl max-w-lg w-full max-h-[92vh] overflow-y-auto p-5 shadow-2xl space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-[#162340]">
               <h3 className="text-sm font-bold text-white">
                 Reply to Ticket {ticketForReply.ticketId} ({ticketForReply.createdBy})

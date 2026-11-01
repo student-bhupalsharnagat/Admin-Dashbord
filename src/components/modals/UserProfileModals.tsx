@@ -116,7 +116,7 @@ export const UserProfileModals: React.FC<UserProfileModalsProps> = ({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in duration-200">
       <div
-        className="w-full max-w-lg bg-[#0b1325] border border-[#1b2b4d] rounded-2xl shadow-2xl shadow-black/90 overflow-hidden"
+        className="w-full max-w-lg max-h-[92vh] overflow-y-auto bg-[#0b1325] border border-[#1b2b4d] rounded-2xl shadow-2xl shadow-black/90"
         onClick={e => e.stopPropagation()}
       >
         {/* Modal 1: MY PROFILE */}

@@ -540,7 +540,7 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
       </div>
 
       {/* Header + Create Plan Button */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <h1 className="text-xl font-bold text-white tracking-tight">Commission Management</h1>
 
         <button
@@ -551,7 +551,7 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
               setShowCreateModal(true);
             }
           }}
-          className="flex items-center gap-1.5 px-3.5 py-2 bg-[#2563eb] hover:bg-blue-600 text-white font-medium text-xs rounded-lg transition-colors shadow-sm cursor-pointer"
+          className="flex items-center justify-center gap-1.5 px-3.5 py-2 bg-[#2563eb] hover:bg-blue-600 text-white font-medium text-xs rounded-lg transition-colors shadow-sm cursor-pointer w-full sm:w-auto"
         >
           <Plus size={14} />
           {activeTab === 'rules' ? 'Add Rule' : 'Create Plan'}
@@ -559,7 +559,7 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
       </div>
 
       {/* Tabs: Plans | Rules | Transactions */}
-      <div className="border-b border-[#131e36] flex items-center gap-6 text-sm">
+      <div className="border-b border-[#131e36] flex items-center gap-6 text-sm overflow-x-auto">
         <button
           onClick={() => setActiveTab('plans')}
           className={`pb-3 font-semibold transition-colors relative ${
@@ -1254,7 +1254,7 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
       {/* View Plan Modal */}
       {selectedPlan && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
-          <div className="bg-[#091122] border border-[#162238] rounded-xl w-full max-w-md overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+          <div className="bg-[#091122] border border-[#162238] rounded-xl w-full max-w-md max-h-[92vh] overflow-y-auto shadow-2xl animate-in fade-in zoom-in-95 duration-150">
             <div className="p-4 border-b border-[#162238] flex items-center justify-between">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-lg bg-[#0b2149] border border-[#0369a1] flex items-center justify-center text-[#38bdf8]">
@@ -1325,7 +1325,7 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
       {/* Create Plan Modal */}
       {showCreateModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
-          <div className="bg-[#091122] border border-[#162238] rounded-xl w-full max-w-md overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+          <div className="bg-[#091122] border border-[#162238] rounded-xl w-full max-w-md max-h-[92vh] overflow-y-auto shadow-2xl animate-in fade-in zoom-in-95 duration-150">
             <div className="p-4 border-b border-[#162238] flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Plus size={16} className="text-[#2563eb]" />
@@ -1413,7 +1413,7 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
       {/* Edit Plan Modal */}
       {editingPlan && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
-          <div className="bg-[#091122] border border-[#162238] rounded-xl w-full max-w-md overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+          <div className="bg-[#091122] border border-[#162238] rounded-xl w-full max-w-md max-h-[92vh] overflow-y-auto shadow-2xl animate-in fade-in zoom-in-95 duration-150">
             <div className="p-4 border-b border-[#162238] flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Pencil size={16} className="text-[#38bdf8]" />
@@ -1493,7 +1493,7 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
       {/* Create Rule Modal */}
       {showCreateRuleModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
-          <div className="bg-[#091122] border border-[#162238] rounded-xl w-full max-w-lg overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+          <div className="bg-[#091122] border border-[#162238] rounded-xl w-full max-w-lg max-h-[92vh] overflow-y-auto shadow-2xl animate-in fade-in zoom-in-95 duration-150">
             <div className="p-4 border-b border-[#162238] flex items-center justify-between">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-lg bg-[#06261f] border border-[#065f46] flex items-center justify-center text-[#34d399]">
@@ -1619,7 +1619,7 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
       {/* Edit Rule Modal */}
       {editingRule && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
-          <div className="bg-[#091122] border border-[#162238] rounded-xl w-full max-w-lg overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+          <div className="bg-[#091122] border border-[#162238] rounded-xl w-full max-w-lg max-h-[92vh] overflow-y-auto shadow-2xl animate-in fade-in zoom-in-95 duration-150">
             <div className="p-4 border-b border-[#162238] flex items-center justify-between">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-lg bg-[#0b2149] border border-[#0369a1] flex items-center justify-center text-[#38bdf8]">

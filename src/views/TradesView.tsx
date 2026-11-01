@@ -256,9 +256,9 @@ export const TradesView: React.FC<TradesViewProps> = ({
       )}
 
       {/* Filter Bar matching Screenshot 5 */}
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
         {/* Search */}
-        <div className="relative w-64 sm:w-80">
+        <div className="relative flex-1 sm:w-80 sm:flex-initial">
           <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" />
           <input
             type="text"
@@ -270,11 +270,11 @@ export const TradesView: React.FC<TradesViewProps> = ({
         </div>
 
         {/* All Sides Dropdown */}
-        <div className="relative">
+        <div className="relative w-full sm:w-auto">
           <select
             value={sideFilter}
             onChange={e => setSideFilter(e.target.value as any)}
-            className="appearance-none bg-[#091122] border border-[#162238] text-xs text-slate-300 pl-3.5 pr-8 py-2 rounded-lg focus:outline-none focus:border-blue-500 cursor-pointer"
+            className="w-full sm:w-auto appearance-none bg-[#091122] border border-[#162238] text-xs text-slate-300 pl-3.5 pr-8 py-2 rounded-lg focus:outline-none focus:border-blue-500 cursor-pointer"
           >
             <option value="All Sides">All Sides</option>
             <option value="BUY">BUY</option>

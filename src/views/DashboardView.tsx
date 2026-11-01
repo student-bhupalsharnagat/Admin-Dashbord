@@ -235,7 +235,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </button>
           </div>
 
-          {/* Timeframe Selector */}
+          {/* Timeframe Selector (Desktop buttons + Mobile dropdown) */}
           <div className="hidden md:flex items-center bg-[#090f1f] border border-[#16233d] rounded-lg p-0.5 text-xs font-medium text-slate-400">
             {(['Today', '7D', '30D', 'YTD', 'All'] as const).map(tab => (
               <button
@@ -250,6 +250,20 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 {tab}
               </button>
             ))}
+          </div>
+
+          <div className="md:hidden relative">
+            <select
+              value={timeRange}
+              onChange={e => setTimeRange(e.target.value as any)}
+              className="bg-[#090f1f] border border-[#16233d] rounded-lg px-2.5 py-1 text-xs font-semibold text-slate-300 focus:outline-none focus:border-blue-500 cursor-pointer"
+            >
+              {(['Today', '7D', '30D', 'YTD', 'All'] as const).map(tab => (
+                <option key={tab} value={tab}>
+                  {tab}
+                </option>
+              ))}
+            </select>
           </div>
 
           {/* Refresh Button */}
