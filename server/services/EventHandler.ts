@@ -670,14 +670,13 @@ export class EventHandler {
         }
       }
 
-      await query(
+      const insertRes = await query<{ id: string }>(
         `INSERT INTO clients (
           id, tenant_id, sub_broker_id, sub_broker_name, client_code, name, email, phone, status, kyc_status,
           balance, equity, margin_used, referral_code, broker_code, created_at, updated_at
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        ON CONFLICT (id) DO UPDATE SET
+        ON CONFLICT (tenant_id, client_code) DO UPDATE SET
           name = EXCLUDED.name,
-          client_code = EXCLUDED.client_code,
           email = COALESCE(NULLIF(EXCLUDED.email, ''), clients.email),
           phone = COALESCE(NULLIF(EXCLUDED.phone, ''), clients.phone),
           status = COALESCE(NULLIF(EXCLUDED.status, ''), clients.status),
@@ -689,9 +688,13 @@ export class EventHandler {
           sub_broker_name = COALESCE(clients.sub_broker_name, EXCLUDED.sub_broker_name),
           referral_code = COALESCE(clients.referral_code, EXCLUDED.referral_code),
           broker_code = COALESCE(clients.broker_code, EXCLUDED.broker_code),
-          updated_at = CURRENT_TIMESTAMP`,
+          updated_at = CURRENT_TIMESTAMP
+        RETURNING id`,
         [clientId, event.tenantId, subBrokerId, subBrokerName, clientCode, clientName, email, phone, status, kycStatus, balance, equity, marginUsed, referralCode || null, brokerCode || null]
       );
+      if (insertRes.rows.length > 0 && insertRes.rows[0].id) {
+        targetId = insertRes.rows[0].id;
+      }
     }
 
     // Projection to wallets table
@@ -898,7 +901,7 @@ export class EventHandler {
       await query(
         `INSERT INTO clients (id, tenant_id, sub_broker_id, client_code, name, email, phone, status, kyc_status, created_at, updated_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACTIVE', 'VERIFIED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-         ON CONFLICT (id) DO NOTHING`,
+         ON CONFLICT (tenant_id, client_code) DO NOTHING`,
         [clientId, event.tenantId, subBrokerId, clientCode, clientName, `${clientCode.toLowerCase()}@client.com`, '+91 98765 43210']
       );
     }
@@ -1113,7 +1116,7 @@ export class EventHandler {
       await query(
         `INSERT INTO clients (id, tenant_id, sub_broker_id, client_code, name, email, phone, status, kyc_status, created_at, updated_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACTIVE', 'VERIFIED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-         ON CONFLICT (id) DO NOTHING`,
+         ON CONFLICT (tenant_id, client_code) DO NOTHING`,
         [clientId, event.tenantId, subBrokerId, clientCode, clientName, `${clientCode.toLowerCase()}@client.com`, '+91 98765 43210']
       );
     }
@@ -1194,7 +1197,7 @@ export class EventHandler {
       await query(
         `INSERT INTO clients (id, tenant_id, sub_broker_id, client_code, name, email, phone, status, kyc_status, created_at, updated_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACTIVE', 'VERIFIED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-         ON CONFLICT (id) DO NOTHING`,
+         ON CONFLICT (tenant_id, client_code) DO NOTHING`,
         [clientId, event.tenantId, subBrokerId, clientCode, clientName, `${clientCode.toLowerCase()}@client.com`, '+91 98765 43210']
       );
     }
@@ -1324,7 +1327,7 @@ export class EventHandler {
       await query(
         `INSERT INTO clients (id, tenant_id, sub_broker_id, client_code, name, email, phone, status, kyc_status, created_at, updated_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACTIVE', 'VERIFIED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-         ON CONFLICT (id) DO NOTHING`,
+         ON CONFLICT (tenant_id, client_code) DO NOTHING`,
         [clientId, event.tenantId, subBrokerId, clientCode, clientName, `${clientCode.toLowerCase()}@client.com`, '+91 98765 43210']
       );
     }
@@ -1439,7 +1442,7 @@ export class EventHandler {
       await query(
         `INSERT INTO clients (id, tenant_id, sub_broker_id, client_code, name, email, phone, status, kyc_status, created_at, updated_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACTIVE', 'VERIFIED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-         ON CONFLICT (id) DO NOTHING`,
+         ON CONFLICT (tenant_id, client_code) DO NOTHING`,
         [clientId, event.tenantId, subBrokerId, clientCode, clientName, `${clientCode.toLowerCase()}@client.com`, '+91 98765 43210']
       );
     }

@@ -90,6 +90,45 @@ async function testBackfillAndUpsertLogic() {
   const masterCheck = await (eventHandler as any).ensureTenantSubBroker('vertex-default');
   console.log('[PASS] Hierarchy sub-broker ensured under vertex-default:', masterCheck);
 
+  // 7. Test uq_clients_tenant_code conflict target on clients table
+  // Direct insert with same tenant and client_code but different primary key id
+  const codeTest = 'CODE_UQ_TEST_01';
+  await (eventHandler as any).handleClientCreatedOrUpdated({
+    eventId: `evt_uq_1_${Date.now()}`,
+    eventType: 'client.created',
+    tenantId: 'vertex-default',
+    timestamp: new Date().toISOString(),
+    payload: {
+      userId: 'usr_orig_1001',
+      clientCode: codeTest,
+      name: 'Original Client Code Holder',
+      status: 'ACTIVE'
+    }
+  });
+
+  // Now simulate an event with different userId/id but identical (tenant_id, client_code)
+  await (eventHandler as any).handleClientCreatedOrUpdated({
+    eventId: `evt_uq_2_${Date.now()}`,
+    eventType: 'client.created',
+    tenantId: 'vertex-default',
+    timestamp: new Date().toISOString(),
+    payload: {
+      userId: 'usr_new_9999',
+      clientCode: codeTest,
+      name: 'Updated Name After Conflict',
+      status: 'ACTIVE'
+    }
+  });
+
+  const updatedClientRes = await query<{ id: string; name: string }>(
+    "SELECT id, name FROM clients WHERE tenant_id = 'vertex-default' AND client_code = $1",
+    [codeTest]
+  );
+  if (updatedClientRes.rows.length === 0 || updatedClientRes.rows[0].name !== 'Updated Name After Conflict') {
+    throw new Error('Client record failed to update via uq_clients_tenant_code conflict target!');
+  }
+  console.log('[PASS] uq_clients_tenant_code conflict target successfully updated existing record:', updatedClientRes.rows[0]);
+
   console.log('--- ALL BACKFILL AND UPSERT TESTS PASSED CLEANLY ---');
 }
 
