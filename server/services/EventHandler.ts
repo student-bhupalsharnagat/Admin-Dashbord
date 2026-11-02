@@ -581,6 +581,64 @@ export class EventHandler {
    * - Never overwrite existing hierarchy
    * - Projects to clients, wallets, and kyc tables
    */
+  /**
+   * Idempotently ensures client exists in the clients projection table.
+   * Prevents duplicate key errors on clients_pkey (id) and uq_clients_tenant_code (tenant_id, client_code).
+   */
+  public async ensureClientProjection(
+    rawClientId: string,
+    rawClientCode: string,
+    rawClientName: string,
+    tenantId: string
+  ): Promise<{ id: string; name: string }> {
+    const clientCode = String(rawClientCode || rawClientId || 'CLT001').trim();
+    const clientId = String(rawClientId || clientCode).trim();
+    const clientName = String(rawClientName || 'Trading Client').trim();
+
+    // 1. Check if client already exists by id (globally) OR (client_code AND tenant_id)
+    const check = await query<{ id: string; name: string }>(
+      'SELECT id, name FROM clients WHERE id = $1 OR (client_code = $2 AND tenant_id = $3) LIMIT 1',
+      [clientId, clientCode, tenantId]
+    );
+
+    if (check.rows.length > 0) {
+      return {
+        id: check.rows[0].id,
+        name: rawClientName || check.rows[0].name || clientName,
+      };
+    }
+
+    // 2. Client does not exist: provision under tenant
+    const subBrokerId = await this.ensureTenantSubBroker(tenantId);
+    try {
+      const insertRes = await query<{ id: string }>(
+        `INSERT INTO clients (id, tenant_id, sub_broker_id, client_code, name, email, phone, status, kyc_status, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACTIVE', 'VERIFIED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+         ON CONFLICT (id) DO UPDATE SET
+           name = COALESCE(NULLIF(EXCLUDED.name, ''), clients.name),
+           updated_at = CURRENT_TIMESTAMP
+         RETURNING id`,
+        [clientId, tenantId, subBrokerId, clientCode, clientName, `${clientCode.toLowerCase().replace(/[^a-z0-9]/g, '')}@client.com`, '+91 98765 43210']
+      );
+      if (insertRes.rows.length > 0 && insertRes.rows[0].id) {
+        return { id: insertRes.rows[0].id, name: clientName };
+      }
+    } catch (insertErr: any) {
+      if (insertErr.code === '23505') {
+        const fallback = await query<{ id: string; name: string }>(
+          'SELECT id, name FROM clients WHERE id = $1 OR (client_code = $2 AND tenant_id = $3) LIMIT 1',
+          [clientId, clientCode, tenantId]
+        );
+        if (fallback.rows.length > 0) {
+          return { id: fallback.rows[0].id, name: fallback.rows[0].name || clientName };
+        }
+      }
+      console.warn(`[EventHandler] ensureClientProjection notice for client ${clientId}:`, insertErr.message);
+    }
+
+    return { id: clientId, name: clientName };
+  }
+
   private async handleClientCreatedOrUpdated(event: TradingPlatformEvent): Promise<void> {
     const p = event.payload;
     if (!p) return;
@@ -606,7 +664,7 @@ export class EventHandler {
     const brokerCode = p.brokerCode || p.broker_code || p.agentCode || p.agent_code;
     const hierarchyCode = referralCode || brokerCode;
 
-    // Check if client already exists by client_code OR id in this tenant
+    // Check if client already exists by id (globally) OR (client_code AND tenant_id)
     const existing = await query<{
       id: string;
       sub_broker_id: string | null;
@@ -614,8 +672,8 @@ export class EventHandler {
       referral_code: string | null;
       broker_code: string | null;
     }>(
-      'SELECT id, sub_broker_id, sub_broker_name, referral_code, broker_code FROM clients WHERE (client_code = $1 OR id = $2) AND tenant_id = $3 LIMIT 1',
-      [clientCode, clientId, event.tenantId]
+      'SELECT id, sub_broker_id, sub_broker_name, referral_code, broker_code FROM clients WHERE id = $1 OR (client_code = $2 AND tenant_id = $3) LIMIT 1',
+      [clientId, clientCode, event.tenantId]
     );
 
     let targetId = clientId;
@@ -654,8 +712,8 @@ export class EventHandler {
              referral_code = COALESCE(NULLIF($12, ''), referral_code),
              broker_code = COALESCE(NULLIF($13, ''), broker_code),
              updated_at = CURRENT_TIMESTAMP
-         WHERE id = $14 AND tenant_id = $15`,
-        [clientName, clientCode, email, phone, status, kycStatus, balance, equity, marginUsed, subBrokerId, subBrokerName, referralCode || null, brokerCode || null, targetId, event.tenantId]
+         WHERE id = $14`,
+        [clientName, clientCode, email, phone, status, kycStatus, balance, equity, marginUsed, subBrokerId, subBrokerName, referralCode || null, brokerCode || null, targetId]
       );
     } else {
       // New client registration
@@ -670,30 +728,60 @@ export class EventHandler {
         }
       }
 
-      const insertRes = await query<{ id: string }>(
-        `INSERT INTO clients (
-          id, tenant_id, sub_broker_id, sub_broker_name, client_code, name, email, phone, status, kyc_status,
-          balance, equity, margin_used, referral_code, broker_code, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        ON CONFLICT (tenant_id, client_code) DO UPDATE SET
-          name = EXCLUDED.name,
-          email = COALESCE(NULLIF(EXCLUDED.email, ''), clients.email),
-          phone = COALESCE(NULLIF(EXCLUDED.phone, ''), clients.phone),
-          status = COALESCE(NULLIF(EXCLUDED.status, ''), clients.status),
-          kyc_status = COALESCE(NULLIF(EXCLUDED.kyc_status, ''), clients.kyc_status),
-          balance = COALESCE(EXCLUDED.balance, clients.balance),
-          equity = COALESCE(EXCLUDED.equity, clients.equity),
-          margin_used = COALESCE(EXCLUDED.margin_used, clients.margin_used),
-          sub_broker_id = COALESCE(clients.sub_broker_id, EXCLUDED.sub_broker_id),
-          sub_broker_name = COALESCE(clients.sub_broker_name, EXCLUDED.sub_broker_name),
-          referral_code = COALESCE(clients.referral_code, EXCLUDED.referral_code),
-          broker_code = COALESCE(clients.broker_code, EXCLUDED.broker_code),
-          updated_at = CURRENT_TIMESTAMP
-        RETURNING id`,
-        [clientId, event.tenantId, subBrokerId, subBrokerName, clientCode, clientName, email, phone, status, kycStatus, balance, equity, marginUsed, referralCode || null, brokerCode || null]
-      );
-      if (insertRes.rows.length > 0 && insertRes.rows[0].id) {
-        targetId = insertRes.rows[0].id;
+      try {
+        const insertRes = await query<{ id: string }>(
+          `INSERT INTO clients (
+            id, tenant_id, sub_broker_id, sub_broker_name, client_code, name, email, phone, status, kyc_status,
+            balance, equity, margin_used, referral_code, broker_code, created_at, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          ON CONFLICT (id) DO UPDATE SET
+            name = EXCLUDED.name,
+            client_code = COALESCE(NULLIF(EXCLUDED.client_code, ''), clients.client_code),
+            email = COALESCE(NULLIF(EXCLUDED.email, ''), clients.email),
+            phone = COALESCE(NULLIF(EXCLUDED.phone, ''), clients.phone),
+            status = COALESCE(NULLIF(EXCLUDED.status, ''), clients.status),
+            kyc_status = COALESCE(NULLIF(EXCLUDED.kyc_status, ''), clients.kyc_status),
+            balance = COALESCE(EXCLUDED.balance, clients.balance),
+            equity = COALESCE(EXCLUDED.equity, clients.equity),
+            margin_used = COALESCE(EXCLUDED.margin_used, clients.margin_used),
+            sub_broker_id = COALESCE(clients.sub_broker_id, EXCLUDED.sub_broker_id),
+            sub_broker_name = COALESCE(clients.sub_broker_name, EXCLUDED.sub_broker_name),
+            referral_code = COALESCE(clients.referral_code, EXCLUDED.referral_code),
+            broker_code = COALESCE(clients.broker_code, EXCLUDED.broker_code),
+            updated_at = CURRENT_TIMESTAMP
+          RETURNING id`,
+          [clientId, event.tenantId, subBrokerId, subBrokerName, clientCode, clientName, email, phone, status, kycStatus, balance, equity, marginUsed, referralCode || null, brokerCode || null]
+        );
+        if (insertRes.rows.length > 0 && insertRes.rows[0].id) {
+          targetId = insertRes.rows[0].id;
+        }
+      } catch (insertErr: any) {
+        if (insertErr.code === '23505') {
+          const fallback = await query<{ id: string }>(
+            'SELECT id FROM clients WHERE id = $1 OR (client_code = $2 AND tenant_id = $3) LIMIT 1',
+            [clientId, clientCode, event.tenantId]
+          );
+          if (fallback.rows.length > 0) {
+            targetId = fallback.rows[0].id;
+            await query(
+              `UPDATE clients 
+               SET name = COALESCE(NULLIF($1, ''), name),
+                   client_code = COALESCE(NULLIF($2, ''), client_code),
+                   email = COALESCE(NULLIF($3, ''), email),
+                   phone = COALESCE(NULLIF($4, ''), phone),
+                   status = COALESCE(NULLIF($5, ''), status),
+                   kyc_status = COALESCE(NULLIF($6, ''), kyc_status),
+                   balance = COALESCE($7, balance),
+                   equity = COALESCE($8, equity),
+                   margin_used = COALESCE($9, margin_used),
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE id = $10`,
+              [clientName, clientCode, email, phone, status, kycStatus, balance, equity, marginUsed, targetId]
+            );
+          }
+        } else {
+          throw insertErr;
+        }
       }
     }
 
@@ -884,27 +972,14 @@ export class EventHandler {
     let clientId = String(rawClientId || clientCode);
     let clientName = String(p.clientName || p.client_name || 'Trading Client');
 
-    // Check if client exists in Central Admin
-    const clientCheck = await query(
-      'SELECT id, name, client_code FROM clients WHERE (id = $1 OR client_code = $2) AND tenant_id = $3',
-      [clientId, clientCode, event.tenantId]
+    const resolvedClient = await this.ensureClientProjection(
+      String(rawClientId || clientCode),
+      clientCode,
+      String(p.clientName || p.client_name || 'Trading Client'),
+      event.tenantId
     );
-
-    if (clientCheck.rows.length > 0) {
-      clientId = clientCheck.rows[0].id;
-      if (!p.clientName && !p.client_name) {
-        clientName = clientCheck.rows[0].name;
-      }
-    } else {
-      // Create projection for this specific client
-      const subBrokerId = await this.ensureTenantSubBroker(event.tenantId);
-      await query(
-        `INSERT INTO clients (id, tenant_id, sub_broker_id, client_code, name, email, phone, status, kyc_status, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACTIVE', 'VERIFIED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-         ON CONFLICT (tenant_id, client_code) DO NOTHING`,
-        [clientId, event.tenantId, subBrokerId, clientCode, clientName, `${clientCode.toLowerCase()}@client.com`, '+91 98765 43210']
-      );
-    }
+    clientId = resolvedClient.id;
+    clientName = resolvedClient.name;
 
     const tradeId = String(p.tradeId || p.trade_id || p.id || `TRD-${Date.now()}`);
     const id = String(p.id || p.tradeId || p.trade_id || `trd_${tradeId}`);
@@ -1101,25 +1176,14 @@ export class EventHandler {
     let clientId = String(rawClientId || clientCode);
     let clientName = String(p.clientName || p.client_name || 'Trading Client');
 
-    // Ensure client projection exists
-    const clientCheck = await query(
-      'SELECT id, name, client_code FROM clients WHERE (id = $1 OR client_code = $2) AND tenant_id = $3',
-      [clientId, clientCode, event.tenantId]
+    const resolvedClient = await this.ensureClientProjection(
+      String(rawClientId || clientCode),
+      clientCode,
+      String(p.clientName || p.client_name || 'Trading Client'),
+      event.tenantId
     );
-    if (clientCheck.rows.length > 0) {
-      clientId = clientCheck.rows[0].id;
-      if (!p.clientName && !p.client_name) {
-        clientName = clientCheck.rows[0].name;
-      }
-    } else {
-      const subBrokerId = await this.ensureTenantSubBroker(event.tenantId);
-      await query(
-        `INSERT INTO clients (id, tenant_id, sub_broker_id, client_code, name, email, phone, status, kyc_status, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACTIVE', 'VERIFIED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-         ON CONFLICT (tenant_id, client_code) DO NOTHING`,
-        [clientId, event.tenantId, subBrokerId, clientCode, clientName, `${clientCode.toLowerCase()}@client.com`, '+91 98765 43210']
-      );
-    }
+    clientId = resolvedClient.id;
+    clientName = resolvedClient.name;
 
     const posId = String(p.id || p.positionId || p.position_id || `POS-${clientId}-${p.symbol}`);
     const symbol = String(p.symbol || 'NIFTY50');
@@ -1182,25 +1246,14 @@ export class EventHandler {
     let clientId = String(rawClientId || clientCode);
     let clientName = String(p.clientName || p.client_name || 'Trading Client');
 
-    // Ensure client projection exists
-    const clientCheck = await query(
-      'SELECT id, name FROM clients WHERE (id = $1 OR client_code = $2) AND tenant_id = $3',
-      [clientId, clientCode, event.tenantId]
+    const resolvedClient = await this.ensureClientProjection(
+      String(rawClientId || clientCode),
+      clientCode,
+      String(p.clientName || p.client_name || 'Trading Client'),
+      event.tenantId
     );
-    if (clientCheck.rows.length > 0) {
-      clientId = clientCheck.rows[0].id;
-      if (!p.clientName && !p.client_name) {
-        clientName = clientCheck.rows[0].name;
-      }
-    } else {
-      const subBrokerId = await this.ensureTenantSubBroker(event.tenantId);
-      await query(
-        `INSERT INTO clients (id, tenant_id, sub_broker_id, client_code, name, email, phone, status, kyc_status, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACTIVE', 'VERIFIED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-         ON CONFLICT (tenant_id, client_code) DO NOTHING`,
-        [clientId, event.tenantId, subBrokerId, clientCode, clientName, `${clientCode.toLowerCase()}@client.com`, '+91 98765 43210']
-      );
-    }
+    clientId = resolvedClient.id;
+    clientName = resolvedClient.name;
 
     const amount = Number(p.amount ?? p.rawAmount ?? 0);
     const currency = String(p.currency || 'INR');
@@ -1312,25 +1365,14 @@ export class EventHandler {
     let clientId = String(rawClientId || clientCode);
     let clientName = String(p.clientName || p.client_name || 'Trading Client');
 
-    // Ensure client projection exists
-    const clientCheck = await query(
-      'SELECT id, name FROM clients WHERE (id = $1 OR client_code = $2) AND tenant_id = $3',
-      [clientId, clientCode, event.tenantId]
+    const resolvedClient = await this.ensureClientProjection(
+      String(rawClientId || clientCode),
+      clientCode,
+      String(p.clientName || p.client_name || 'Trading Client'),
+      event.tenantId
     );
-    if (clientCheck.rows.length > 0) {
-      clientId = clientCheck.rows[0].id;
-      if (!p.clientName && !p.client_name) {
-        clientName = clientCheck.rows[0].name;
-      }
-    } else {
-      const subBrokerId = await this.ensureTenantSubBroker(event.tenantId);
-      await query(
-        `INSERT INTO clients (id, tenant_id, sub_broker_id, client_code, name, email, phone, status, kyc_status, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACTIVE', 'VERIFIED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-         ON CONFLICT (tenant_id, client_code) DO NOTHING`,
-        [clientId, event.tenantId, subBrokerId, clientCode, clientName, `${clientCode.toLowerCase()}@client.com`, '+91 98765 43210']
-      );
-    }
+    clientId = resolvedClient.id;
+    clientName = resolvedClient.name;
 
     const amount = Number(p.amount ?? p.rawAmount ?? 0);
     const currency = String(p.currency || 'INR');
@@ -1428,24 +1470,14 @@ export class EventHandler {
     let clientId = String(rawClientId || clientCode);
     let clientName = String(p.clientName || p.client_name || 'Trader');
 
-    const clientCheck = await query(
-      'SELECT id, name FROM clients WHERE (id = $1 OR client_code = $2) AND tenant_id = $3',
-      [clientId, clientCode, event.tenantId]
+    const resolvedClient = await this.ensureClientProjection(
+      String(rawClientId || clientCode),
+      clientCode,
+      String(p.clientName || p.client_name || 'Trader'),
+      event.tenantId
     );
-    if (clientCheck.rows.length > 0) {
-      clientId = clientCheck.rows[0].id;
-      if (!p.clientName && !p.client_name) {
-        clientName = clientCheck.rows[0].name;
-      }
-    } else {
-      const subBrokerId = await this.ensureTenantSubBroker(event.tenantId);
-      await query(
-        `INSERT INTO clients (id, tenant_id, sub_broker_id, client_code, name, email, phone, status, kyc_status, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACTIVE', 'VERIFIED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-         ON CONFLICT (tenant_id, client_code) DO NOTHING`,
-        [clientId, event.tenantId, subBrokerId, clientCode, clientName, `${clientCode.toLowerCase()}@client.com`, '+91 98765 43210']
-      );
-    }
+    clientId = resolvedClient.id;
+    clientName = resolvedClient.name;
 
     await query(
       `INSERT INTO orders (
@@ -1589,14 +1621,18 @@ export class EventHandler {
         const res = await tradingPlatformClient.request<any>({ method: 'GET', path: '/api/internal/v1/trading/clients', tenantId });
         const items = res.success ? (res.data?.clients || res.data?.items || (Array.isArray(res.data) ? res.data : [])) : [];
         for (const item of items) {
-          await this.handleClientCreatedOrUpdated({
-            eventId: `bf_clt_${item.id || item.userId || item.clientCode || Math.random()}_${Date.now()}`,
-            eventType: 'client.created',
-            tenantId,
-            timestamp: new Date().toISOString(),
-            payload: item
-          });
-          counts.clients++;
+          try {
+            await this.handleClientCreatedOrUpdated({
+              eventId: `bf_clt_${item.id || item.userId || item.clientCode || Math.random()}_${Date.now()}`,
+              eventType: 'client.created',
+              tenantId,
+              timestamp: new Date().toISOString(),
+              payload: item
+            });
+            counts.clients++;
+          } catch (itemErr: any) {
+            console.warn(`[Backfill] Client ${item.id || item.clientCode} sync notice:`, itemErr.message);
+          }
         }
       } catch (err) {
         console.warn(`[Backfill] GET /api/internal/v1/trading/clients for tenant ${tenantId} skipped:`, err);
@@ -1685,14 +1721,18 @@ export class EventHandler {
         const res = await tradingPlatformClient.request<any>({ method: 'GET', path: '/api/internal/v1/trading/orders', tenantId: tenantId });
         const items = res.success ? (res.data?.orders || res.data?.items || (Array.isArray(res.data) ? res.data : [])) : [];
         for (const item of items) {
-          await this.handleOrderEvent({
-            eventId: `bf_ord_${item.id || item.orderId || Math.random()}_${Date.now()}`,
-            eventType: 'order.updated',
-            tenantId,
-            timestamp: new Date().toISOString(),
-            payload: item
-          });
-          counts.orders++;
+          try {
+            await this.handleOrderEvent({
+              eventId: `bf_ord_${item.id || item.orderId || Math.random()}_${Date.now()}`,
+              eventType: 'order.updated',
+              tenantId,
+              timestamp: new Date().toISOString(),
+              payload: item
+            });
+            counts.orders++;
+          } catch (itemErr: any) {
+            console.warn(`[Backfill] Order ${item.id || item.orderId} sync notice:`, itemErr.message);
+          }
         }
       } catch (err) {
         console.warn(`[Backfill] GET /api/internal/v1/trading/orders for tenant ${tenantId} skipped:`, err);
@@ -1703,14 +1743,18 @@ export class EventHandler {
         const res = await tradingPlatformClient.request<any>({ method: 'GET', path: '/api/internal/v1/trading/trades', tenantId: tenantId });
         const items = res.success ? (res.data?.trades || res.data?.items || (Array.isArray(res.data) ? res.data : [])) : [];
         for (const item of items) {
-          await this.handleTradeExecuted({
-            eventId: `bf_trd_${item.id || item.tradeId || Math.random()}_${Date.now()}`,
-            eventType: 'trade.executed',
-            tenantId,
-            timestamp: new Date().toISOString(),
-            payload: item
-          });
-          counts.trades++;
+          try {
+            await this.handleTradeExecuted({
+              eventId: `bf_trd_${item.id || item.tradeId || Math.random()}_${Date.now()}`,
+              eventType: 'trade.executed',
+              tenantId,
+              timestamp: new Date().toISOString(),
+              payload: item
+            });
+            counts.trades++;
+          } catch (itemErr: any) {
+            console.warn(`[Backfill] Trade ${item.id || item.tradeId} sync notice:`, itemErr.message);
+          }
         }
       } catch (err) {
         console.warn(`[Backfill] GET /api/internal/v1/trading/trades for tenant ${tenantId} skipped:`, err);
@@ -1721,14 +1765,18 @@ export class EventHandler {
         const res = await tradingPlatformClient.request<any>({ method: 'GET', path: '/api/internal/v1/trading/positions', tenantId: tenantId });
         const items = res.success ? (res.data?.positions || res.data?.items || (Array.isArray(res.data) ? res.data : [])) : [];
         for (const item of items) {
-          await this.handlePositionUpdated({
-            eventId: `bf_pos_${item.id || item.positionId || Math.random()}_${Date.now()}`,
-            eventType: 'position.updated',
-            tenantId,
-            timestamp: new Date().toISOString(),
-            payload: item
-          });
-          counts.positions++;
+          try {
+            await this.handlePositionUpdated({
+              eventId: `bf_pos_${item.id || item.positionId || Math.random()}_${Date.now()}`,
+              eventType: 'position.updated',
+              tenantId,
+              timestamp: new Date().toISOString(),
+              payload: item
+            });
+            counts.positions++;
+          } catch (itemErr: any) {
+            console.warn(`[Backfill] Position ${item.id || item.positionId} sync notice:`, itemErr.message);
+          }
         }
       } catch (err) {
         console.warn(`[Backfill] GET /api/internal/v1/trading/positions for tenant ${tenantId} skipped:`, err);
