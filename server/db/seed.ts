@@ -10,6 +10,22 @@ export async function seedDatabase(customPool?: pg.Pool): Promise<void> {
     // --------------------------------------------------------------------
     const tenants = [
       {
+        id: 'vertex-default',
+        name: 'Vertex Default',
+        code: 'VERTEX-DEFAULT',
+        subdomain: 'vertex-default',
+        custom_domain: 'trade.vertex-default.com',
+        plan: 'ENTERPRISE',
+        status: 'ACTIVE',
+        owner_name: 'Platform Admin',
+        owner_email: 'admin@tradematrix.com',
+        region: 'ap-south-1',
+        user_count: 1000,
+        max_users: 10000,
+        monthly_volume: '₹100M',
+        monthly_revenue: '₹1.0M'
+      },
+      {
         id: 'TNT-001',
         name: 'Alpha Prime Capital',
         code: 'ALPHA',
@@ -117,6 +133,7 @@ export async function seedDatabase(customPool?: pg.Pool): Promise<void> {
     // 2. HIERARCHY: MASTERS -> BROKERS -> SUB-BROKERS -> CLIENTS
     // --------------------------------------------------------------------
     const masters = [
+      { id: 'MST-VTX-001', tenant_id: 'vertex-default', name: 'Vertex Master', company: 'Vertex Operations', code: 'MST-VTX', email: 'master@vertex-default.com', phone: '+91 98000 00001', status: 'ACTIVE', brokers_count: 5, clients_count: 150, turnover: '₹30.0M', commission: '₹250K' },
       { id: 'MST-001', tenant_id: 'TNT-001', name: 'Rohan Deshmukh', company: 'Deshmukh Securities Ltd', code: 'MST-1', email: 'rohan@deshmukhsec.in', phone: '+91 98201 11223', status: 'ACTIVE', brokers_count: 14, clients_count: 420, turnover: '₹84.2M', commission: '₹740K' },
       { id: 'MST-002', tenant_id: 'TNT-001', name: 'Vikram Singhania', company: 'Singhania Wealth LLP', code: 'MST-2', email: 'vikram@singhaniawealth.com', phone: '+91 98202 22334', status: 'ACTIVE', brokers_count: 8, clients_count: 260, turnover: '₹42.6M', commission: '₹390K' },
       { id: 'MST-003', tenant_id: 'TNT-002', name: 'Arvind Mehta', company: 'Mehta Equities & Advisory', code: 'MST-3', email: 'arvind@mehtaequities.com', phone: '+91 98203 33445', status: 'ACTIVE', brokers_count: 11, clients_count: 310, turnover: '₹55.1M', commission: '₹480K' }
@@ -140,6 +157,7 @@ export async function seedDatabase(customPool?: pg.Pool): Promise<void> {
     }
 
     const brokers = [
+      { id: 'BRK-VTX-001', tenant_id: 'vertex-default', master_id: 'MST-VTX-001', master_name: 'Vertex Master', name: 'Vertex Broker', company: 'Vertex Brokerage', code: 'BRK-VTX', email: 'broker@vertex-default.com', phone: '+91 98000 00002', status: 'ACTIVE', sub_brokers_count: 5, clients_count: 150, turnover: '₹30.0M', commission: '₹250K' },
       { id: 'BRK-001', tenant_id: 'TNT-001', master_id: 'MST-001', master_name: 'Rohan Deshmukh', name: 'Vikas Shah', company: 'Shah Financial Services', code: 'BRK-101', email: 'vikas@shahfin.in', phone: '+91 98301 44556', status: 'ACTIVE', sub_brokers_count: 5, clients_count: 180, turnover: '₹34.5M', commission: '₹310K' },
       { id: 'BRK-002', tenant_id: 'TNT-001', master_id: 'MST-001', master_name: 'Rohan Deshmukh', name: 'Priya Nair', company: 'Nair Equities', code: 'BRK-102', email: 'priya@nairequities.com', phone: '+91 98302 55667', status: 'ACTIVE', sub_brokers_count: 4, clients_count: 140, turnover: '₹28.2M', commission: '₹250K' },
       { id: 'BRK-003', tenant_id: 'TNT-002', master_id: 'MST-003', master_name: 'Arvind Mehta', name: 'Rajesh Khanna', company: 'Khanna Brokerage', code: 'BRK-201', email: 'rajesh@khannabroker.com', phone: '+91 98303 66778', status: 'ACTIVE', sub_brokers_count: 6, clients_count: 195, turnover: '₹38.4M', commission: '₹340K' }
@@ -162,6 +180,7 @@ export async function seedDatabase(customPool?: pg.Pool): Promise<void> {
     }
 
     const subBrokers = [
+      { id: 'SBRK-VTX-001', tenant_id: 'vertex-default', broker_id: 'BRK-VTX-001', broker_name: 'Vertex Broker', name: 'Vertex Sub-Broker', code: 'SBRK-VTX', email: 'subbroker@vertex-default.com', phone: '+91 98000 00003', status: 'ACTIVE', clients_count: 150, turnover: '₹30.0M', commission: '₹250K' },
       { id: 'SBRK-001', tenant_id: 'TNT-001', broker_id: 'BRK-001', broker_name: 'Vikas Shah', name: 'Kunal Verma', code: 'SBRK-1011', email: 'kunal@vermatrading.com', phone: '+91 98401 77889', status: 'ACTIVE', clients_count: 45, turnover: '₹12.4M', commission: '₹110K' },
       { id: 'SBRK-002', tenant_id: 'TNT-001', broker_id: 'BRK-002', broker_name: 'Priya Nair', name: 'Deepak Joshi', code: 'SBRK-1021', email: 'deepak@joshifin.in', phone: '+91 98402 88990', status: 'ACTIVE', clients_count: 38, turnover: '₹9.8M', commission: '₹88K' },
       { id: 'SBRK-003', tenant_id: 'TNT-002', broker_id: 'BRK-003', broker_name: 'Rajesh Khanna', name: 'Sneha Reddy', code: 'SBRK-2011', email: 'sneha@reddywealth.in', phone: '+91 98403 99001', status: 'ACTIVE', clients_count: 52, turnover: '₹15.2M', commission: '₹135K' }

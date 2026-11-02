@@ -373,9 +373,63 @@ export class EventHandler {
   }
 
   /**
+   * Helper: Ensures a default tenant exists in the database to prevent foreign key violations (23503)
+   */
+  public async ensureTenantExists(tenantId: string = 'vertex-default'): Promise<void> {
+    const cleanId = String(tenantId || 'vertex-default').trim();
+    if (!cleanId) return;
+
+    try {
+      const existing = await query('SELECT id FROM tenants WHERE id = $1 LIMIT 1', [cleanId]);
+      if (existing.rows.length > 0) {
+        return;
+      }
+
+      const isDefault = cleanId === 'vertex-default';
+      const name = isDefault ? 'Vertex Default' : `Tenant ${cleanId}`;
+      const code = isDefault ? 'VERTEX-DEFAULT' : `TENANT-${cleanId.replace(/[^a-zA-Z0-9]/g, '').slice(-6).toUpperCase() || 'DEF'}`;
+      const subdomain = isDefault ? 'vertex-default' : `tenant-${cleanId.replace(/[^a-zA-Z0-9]/g, '').slice(-12).toLowerCase() || 'default'}`;
+
+      await query(
+        `INSERT INTO tenants (
+          id, name, code, subdomain, plan, status, owner_name, owner_email
+        ) VALUES ($1, $2, $3, $4, 'ENTERPRISE', 'ACTIVE', 'Platform Admin', 'admin@tradematrix.com')
+        ON CONFLICT (id) DO UPDATE SET status = 'ACTIVE'`,
+        [cleanId, name, code, subdomain]
+      );
+
+      // Ensure tenant branding exists
+      await query(
+        `INSERT INTO tenant_branding (
+          id, tenant_id, company_name, portal_name, tagline, logo_url, favicon_url, primary_color, accent_color
+        ) VALUES ($1, $2, $3, $4, 'Next-Gen Multi-Asset Institutional Execution',
+          'https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?w=128&q=80',
+          'https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?w=32&q=80',
+          '#3b82f6', '#10b981')
+        ON CONFLICT (tenant_id) DO NOTHING`,
+        [`BRD-${cleanId}`, cleanId, name, `${name} Admin`]
+      ).catch(() => {});
+
+      // Ensure platform settings exist
+      await query(
+        `INSERT INTO platform_settings (
+          id, tenant_id, web_trading_enabled, web_version, web_maintenance_mode,
+          mobile_android_enabled, mobile_android_version, mobile_ios_enabled, mobile_ios_version,
+          api_enabled, api_rate_limit, ip_whitelist_enabled, allowed_ips
+        ) VALUES ($1, $2, true, 'v4.8.2-stable', false, true, 'v2.14.0', true, 'v2.14.0', true, 120, false, ARRAY[]::TEXT[])
+        ON CONFLICT (tenant_id) DO NOTHING`,
+        [`SET-${cleanId}`, cleanId]
+      ).catch(() => {});
+    } catch (err: any) {
+      console.warn(`[EventHandler] ensureTenantExists error for ${cleanId}:`, err.message);
+    }
+  }
+
+  /**
    * Helper: Ensures a default sub-broker exists for a tenant to satisfy FK constraints
    */
   private async ensureTenantSubBroker(tenantId: string): Promise<string> {
+    await this.ensureTenantExists(tenantId);
     const existing = await query('SELECT id FROM sub_brokers WHERE tenant_id = $1 ORDER BY created_at ASC LIMIT 1', [tenantId]);
     if (existing.rows.length > 0) {
       return existing.rows[0].id;
@@ -468,17 +522,8 @@ export class EventHandler {
 
     // D. Resilient auto-provision: ensure inbound webhooks NEVER fail with Unknown tenant
     const targetId = inboundTenantId || envTradingTenantId || 'vertex-default';
-    try {
-      await query(`
-        INSERT INTO tenants (id, name, code, subdomain, plan, status, owner_name, owner_email)
-        VALUES ($1, 'Default Trading Tenant', 'DEF_' || SUBSTRING(MD5($1), 1, 6), 'tenant-' || SUBSTRING(MD5($1), 1, 8), 'ENTERPRISE', 'ACTIVE', 'Platform Admin', 'admin@tradematrix.com')
-        ON CONFLICT (id) DO UPDATE SET status = 'ACTIVE'
-      `, [targetId]);
-      return targetId;
-    } catch (provisionErr: any) {
-      console.warn('[EventHandler] Auto-provision tenant fallback:', provisionErr.message);
-      return targetId;
-    }
+    await this.ensureTenantExists(targetId);
+    return targetId;
   }
 
   /**
@@ -670,8 +715,10 @@ export class EventHandler {
     await query(
       `INSERT INTO kyc (id, client_id, client_code, tenant_id, status, created_at, updated_at)
        VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-       ON CONFLICT (tenant_id, client_id) DO UPDATE SET
+       ON CONFLICT (id) DO UPDATE SET
+         client_id = EXCLUDED.client_id,
          client_code = EXCLUDED.client_code,
+         tenant_id = EXCLUDED.tenant_id,
          status = EXCLUDED.status,
          updated_at = CURRENT_TIMESTAMP`,
       [kycId, targetId, clientCode, event.tenantId, kycStatus]
@@ -681,6 +728,10 @@ export class EventHandler {
       `INSERT INTO kyc_records (id, tenant_id, client_id, client_code, client_name, email, pan_number, aadhaar_number, kyc_status, created_at, updated_at)
        VALUES ($1, $2, $3, $4, $5, $6, 'ABCDE1234F', '123456789012', $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
        ON CONFLICT (id) DO UPDATE SET
+         tenant_id = EXCLUDED.tenant_id,
+         client_code = EXCLUDED.client_code,
+         client_name = EXCLUDED.client_name,
+         email = COALESCE(NULLIF(EXCLUDED.email, ''), kyc_records.email),
          kyc_status = EXCLUDED.kyc_status,
          updated_at = CURRENT_TIMESTAMP`,
       [kycId, event.tenantId, targetId, clientCode, clientName, email, kycStatus]
@@ -1522,6 +1573,11 @@ export class EventHandler {
       tenantIds = [targetTenantId];
     } else {
       tenantIds = ['vertex-default'];
+    }
+
+    // Ensure all target tenants exist before any backfill queries run
+    for (const tenantId of tenantIds) {
+      await this.ensureTenantExists(tenantId);
     }
 
     for (const tenantId of tenantIds) {

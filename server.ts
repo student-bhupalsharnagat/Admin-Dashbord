@@ -52,6 +52,7 @@ async function startServer() {
     await runMigrations().catch(e => console.warn('[Migration Notice]', e.message));
     await seedDatabase().catch(e => console.warn('[Seed Notice]', e.message));
     await seedAuthAndRbac().catch(e => console.warn('[Auth Seed Notice]', e.message));
+    await eventHandler.ensureTenantExists('vertex-default').catch(e => console.warn('[Default Tenant Notice]', e.message));
   } catch (err: any) {
     console.warn('[Server] Initial database readiness check:', err?.message);
   }
