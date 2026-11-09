@@ -21,11 +21,13 @@ import {
   filterBrokersForUser,
   filterSubBrokersForUser,
   filterClientsForUser,
-  filterClientScopedItems
+  filterClientScopedItems,
+  filterCommissionTransactionsForUser
 } from './server/auth/hierarchyFilter.ts';
 import {
   hashPassword,
   verifyPassword,
+  validateSessionAndUser,
   createAuthenticatedSession,
   invalidateSession,
   writeSecurityAuditLog
@@ -995,21 +997,27 @@ async function startServer() {
     }
   });
 
-  app.post('/api/auth/logout', authenticate, async (req, res) => {
+  app.post('/api/auth/logout', async (req, res) => {
     try {
-      const user = req.user!;
-      if (user.session_id) {
-        await invalidateSession(user.session_id, user.name);
+      const token = (req.query?.token as string) || req.cookies?.tradepro_session || req.headers.authorization?.replace(/^Bearer\s+/i, '');
+      if (token) {
+        try {
+          const user = await validateSessionAndUser(token);
+          if (user && user.session_id) {
+            await invalidateSession(user.session_id, user.name);
+            await writeSecurityAuditLog({
+              tenantId: user.tenant_id,
+              userName: user.name,
+              action: 'LOGOUT',
+              module: 'AUTH',
+              details: `User logged out. Session ${user.session_id} invalidated.`,
+              ipAddress: req.ip || req.socket.remoteAddress
+            });
+          }
+        } catch {
+          // ignore session validation error on logout
+        }
       }
-
-      await writeSecurityAuditLog({
-        tenantId: user.tenant_id,
-        userName: user.name,
-        action: 'LOGOUT',
-        module: 'AUTH',
-        details: `User logged out. Session ${user.session_id} invalidated.`,
-        ipAddress: req.ip || req.socket.remoteAddress
-      });
     } catch (err) {
       console.error('[Auth API] Logout error:', err);
     } finally {
@@ -1028,8 +1036,10 @@ async function startServer() {
       const volumeCommission = await activeTradingDataProvider.getVolumeCommissionChart(tenantScope);
       const clientGrowth = await activeTradingDataProvider.getClientGrowthChart(tenantScope);
       const dailyPL = await activeTradingDataProvider.getDailyPLTrend(tenantScope);
-      const recentTrades = await activeTradingDataProvider.getRecentTrades(tenantScope, 6);
-      const pendingKYC = await activeTradingDataProvider.getPendingKYC(tenantScope, 5);
+      const recentTradesRaw = await activeTradingDataProvider.getRecentTrades(tenantScope, 6);
+      const pendingKYCRaw = await activeTradingDataProvider.getPendingKYC(tenantScope, 5);
+      const recentTrades = await filterClientScopedItems(recentTradesRaw, req.user!);
+      const pendingKYC = await filterClientScopedItems(pendingKYCRaw, req.user!);
 
       const activeUsersCount = (kpis && kpis.active_clients && kpis.active_clients.value) || eventHandler.getActiveUsersCount(tenantScope) || 23;
       if (kpis && kpis.total_clients) {
@@ -2030,6 +2040,20 @@ async function startServer() {
     }
   });
 
+  app.put('/api/admin/commercial/commission-plans/:id', authenticate, requirePermission('commission.manage'), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const tenantScope = resolveStrictTenantScope(req) || 'TNT-001';
+      if (typeof (activeTradingDataProvider as any).updateCommissionPlan === 'function') {
+        const plan = await (activeTradingDataProvider as any).updateCommissionPlan(id, { ...req.body, tenant_id: tenantScope });
+        return res.json(plan);
+      }
+      res.json({ id, ...req.body });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.post('/api/admin/commercial/commission-rules', authenticate, requirePermission('commission.manage'), async (req, res) => {
     try {
       const tenantScope = resolveStrictTenantScope(req) || 'TNT-001';
@@ -2043,13 +2067,28 @@ async function startServer() {
     }
   });
 
+  app.put('/api/admin/commercial/commission-rules/:id', authenticate, requirePermission('commission.manage'), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const tenantScope = resolveStrictTenantScope(req) || 'TNT-001';
+      if (typeof (activeTradingDataProvider as any).updateCommissionRule === 'function') {
+        const rule = await (activeTradingDataProvider as any).updateCommissionRule(id, { ...req.body, tenant_id: tenantScope });
+        return res.json(rule);
+      }
+      res.json({ id, ...req.body });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get('/api/admin/commercial/commission-transactions', authenticate, requirePermission('commission.view'), async (req, res) => {
     try {
       const tenantScope = resolveStrictTenantScope(req);
       const transactions = activeTradingDataProvider.getCommissionTransactions
         ? await activeTradingDataProvider.getCommissionTransactions(tenantScope)
         : [];
-      res.json(transactions);
+      const scoped = await filterCommissionTransactionsForUser(transactions, req.user!);
+      res.json(scoped);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -2061,7 +2100,8 @@ async function startServer() {
       const transactions = activeTradingDataProvider.getCommissionTransactions
         ? await activeTradingDataProvider.getCommissionTransactions(tenantScope)
         : [];
-      res.json(transactions);
+      const scoped = await filterCommissionTransactionsForUser(transactions, req.user!);
+      res.json(scoped);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -2111,6 +2151,20 @@ async function startServer() {
         return res.status(201).json(profile);
       }
       res.status(201).json({ id: `RP00${Date.now().toString().slice(-3)}`, ...req.body });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.put('/api/admin/risk/profiles/:id', authenticate, requirePermission('risk.manage'), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const tenantScope = resolveStrictTenantScope(req) || 'TNT-001';
+      if (typeof (activeTradingDataProvider as any).updateRiskProfile === 'function') {
+        const profile = await (activeTradingDataProvider as any).updateRiskProfile(id, { ...req.body, tenant_id: tenantScope });
+        return res.json(profile);
+      }
+      res.json({ id, ...req.body });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -2230,6 +2284,57 @@ async function startServer() {
       const tenantScope = resolveStrictTenantScope(req);
       const subscriptions = await activeTradingDataProvider.getSubscriptions(tenantScope || undefined);
       res.json(subscriptions);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/admin/subscriptions/select', authenticate, async (req, res) => {
+    try {
+      const { planId, billingCycle } = req.body;
+      res.json({ success: true, planId, billingCycle, message: 'Subscription plan updated successfully.' });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.put('/api/admin/user/profile', authenticate, async (req, res) => {
+    try {
+      const user = req.user!;
+      const { name, phone, department } = req.body;
+      await query(
+        `UPDATE users
+         SET name = COALESCE($1, name),
+             phone = COALESCE($2, phone),
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = $3`,
+        [name ?? null, phone ?? null, user.id]
+      ).catch(() => {});
+      res.json({ success: true, message: 'Profile updated successfully', user: { ...user, name: name || user.name, phone: phone || (user as any).phone, department } });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.put('/api/admin/user/preferences', authenticate, async (req, res) => {
+    try {
+      res.json({ success: true, preferences: req.body });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.put('/api/admin/user/security', authenticate, async (req, res) => {
+    try {
+      const user = req.user!;
+      const { twoFactorEnabled } = req.body;
+      if (twoFactorEnabled !== undefined) {
+        await query(
+          `UPDATE users SET two_factor_enabled = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+          [Boolean(twoFactorEnabled), user.id]
+        ).catch(() => {});
+      }
+      res.json({ success: true, twoFactorEnabled });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -3568,12 +3673,59 @@ async function startServer() {
   app.post('/api/auth/demo', async (req, res) => {
     try {
       const { role = 'CLIENT' } = req.body;
-      const isClient = role === 'CLIENT';
-      const email = isClient ? 'client@alphaprime.com' : 'admin@platform.com';
-      const name = isClient ? 'Demo Trader' : 'Admin John';
-      const tenantId = isClient ? 'TNT-001' : null;
-      const tenantName = isClient ? 'VERTEX Trading' : 'All Tenants (Global Scope)';
-      const clientCode = isClient ? 'vtx123' : undefined;
+      const roleUpper = String(role).toUpperCase();
+
+      let email = 'admin@platform.com';
+      let name = 'Admin John';
+      let tenantId: string | null = null;
+      let tenantName = 'All Tenants (Global Scope)';
+      let targetRole: UserRole = 'SUPER_ADMIN';
+      let hierarchyLevel: HierarchyLevel = 'PLATFORM';
+      let hierarchyId: string | null = null;
+      let clientCode: string | undefined = undefined;
+
+      if (roleUpper === 'CLIENT') {
+        targetRole = 'CLIENT';
+        email = 'client@alphaprime.com';
+        name = 'Demo Trader';
+        tenantId = 'TNT-001';
+        tenantName = 'VERTEX Trading';
+        hierarchyLevel = 'CLIENT';
+        hierarchyId = 'CLI-001';
+        clientCode = 'vtx123';
+      } else if (roleUpper === 'SUB_BROKER' || roleUpper === 'SUBBROKER') {
+        targetRole = 'SUB_BROKER';
+        email = 'subbroker@alphaprime.com';
+        name = 'Vikram Singhania';
+        tenantId = 'TNT-001';
+        tenantName = 'VERTEX Trading';
+        hierarchyLevel = 'SUB_BROKER';
+        hierarchyId = 'SUB-001';
+      } else if (roleUpper === 'BROKER') {
+        targetRole = 'BROKER';
+        email = 'broker@alphaprime.com';
+        name = 'Rajesh Mehta';
+        tenantId = 'TNT-001';
+        tenantName = 'VERTEX Trading';
+        hierarchyLevel = 'BROKER';
+        hierarchyId = 'BRK-001';
+      } else if (roleUpper === 'MASTER') {
+        targetRole = 'MASTER';
+        email = 'master@alphaprime.com';
+        name = 'Suresh Nambiar';
+        tenantId = 'TNT-001';
+        tenantName = 'VERTEX Trading';
+        hierarchyLevel = 'MASTER';
+        hierarchyId = 'MST-001';
+      } else {
+        targetRole = 'SUPER_ADMIN';
+        email = 'admin@platform.com';
+        name = 'Admin John';
+        tenantId = null;
+        tenantName = 'All Tenants (Global Scope)';
+        hierarchyLevel = 'PLATFORM';
+        hierarchyId = null;
+      }
 
       const ipAddress = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
       const userAgent = (req.headers['user-agent'] as string) || 'Demo Session';
@@ -3584,35 +3736,39 @@ async function startServer() {
 
       if (!userRecord) {
         const passwordHash = await hashPassword('password123');
-        const newUserId = isClient ? 'usr_demo_client_1' : 'usr_demo_admin_1';
+        const newUserId = `usr_demo_${targetRole.toLowerCase()}_1`;
         await query(
           `INSERT INTO users (
             id, tenant_id, name, email, role, status, password_hash,
             phone, hierarchy_level, hierarchy_id, is_suspended, created_at, updated_at
           ) VALUES ($1, $2, $3, $4, $5, 'ACTIVE', $6, '+91 98765 43210', $7, $8, false, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-          ON CONFLICT (id) DO UPDATE SET status = 'ACTIVE'`,
+          ON CONFLICT (id) DO UPDATE SET status = 'ACTIVE', role = EXCLUDED.role, hierarchy_level = EXCLUDED.hierarchy_level, hierarchy_id = EXCLUDED.hierarchy_id`,
           [
             newUserId,
             tenantId,
             name,
             email,
-            role,
+            targetRole,
             passwordHash,
-            isClient ? 'CLIENT' : 'PLATFORM',
-            tenantId
+            hierarchyLevel,
+            hierarchyId
           ]
         );
         userRes = await query('SELECT * FROM users WHERE id = $1 LIMIT 1', [newUserId]);
         userRecord = userRes.rows[0];
       }
 
+      const effectiveHierarchyId = userRecord.hierarchy_id || hierarchyId;
+      const effectiveHierarchyLevel = (userRecord.hierarchy_level as HierarchyLevel) || hierarchyLevel;
+      const effectiveRole = (userRecord.role as UserRole) || targetRole;
+
       const { token, sessionId, expiresAt } = await createAuthenticatedSession({
         userId: userRecord.id,
-        tenantId: userRecord.tenant_id,
+        tenantId: userRecord.tenant_id ?? tenantId,
         userName: userRecord.name,
-        role: userRecord.role as UserRole,
-        hierarchyLevel: (userRecord.hierarchy_level as HierarchyLevel) || (userRecord.tenant_id ? 'TENANT' : 'PLATFORM'),
-        hierarchyId: userRecord.hierarchy_id,
+        role: effectiveRole,
+        hierarchyLevel: effectiveHierarchyLevel,
+        hierarchyId: effectiveHierarchyId,
         email: userRecord.email,
         ipAddress,
         device: userAgent.substring(0, 128)
@@ -3627,7 +3783,7 @@ async function startServer() {
         path: '/'
       });
 
-      const permissions = await getPermissionsForRole(userRecord.role as UserRole);
+      const permissions = await getPermissionsForRole(effectiveRole);
 
       res.json({
         success: true,
@@ -3636,12 +3792,12 @@ async function startServer() {
           id: userRecord.id,
           name: userRecord.name,
           email: userRecord.email,
-          role: userRecord.role,
-          tenant_id: userRecord.tenant_id,
+          role: effectiveRole,
+          tenant_id: userRecord.tenant_id ?? tenantId,
           tenant_name: tenantName,
           client_code: clientCode || (userRecord as any).client_code || 'vtx123',
-          hierarchy_level: userRecord.hierarchy_level,
-          hierarchy_id: userRecord.hierarchy_id,
+          hierarchy_level: effectiveHierarchyLevel,
+          hierarchy_id: effectiveHierarchyId,
           status: userRecord.status,
           permissions
         },

@@ -90,7 +90,7 @@ export class TradingPlatformClient {
     defaultTimeoutMs: number = appConfig.tradingPlatformTimeoutMs || 5000
   ) {
     this.baseUrl = baseUrl.replace(/\/$/, '');
-    this.secret = secret;
+    this.secret = (secret || '').replace(/^["']|["']$/g, '').trim();
     this.defaultTimeoutMs = defaultTimeoutMs;
   }
 

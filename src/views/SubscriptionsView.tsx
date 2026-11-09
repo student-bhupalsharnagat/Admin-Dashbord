@@ -98,7 +98,7 @@ interface SubscriptionsViewProps {
 
 export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({ onNotify }) => {
   const [activeTab, setActiveTab] = useState<'plans' | 'subscriptions'>('plans');
-  const [currentPlan, setCurrentPlan] = useState<string>('PROFESSIONAL');
+  const [currentPlan, setCurrentPlan] = useState<string>(() => localStorage.getItem('admin_current_subscription_plan') || 'PROFESSIONAL');
   const [selectedPlanForModal, setSelectedPlanForModal] = useState<PlanItem | null>(null);
   const [billingCycle, setBillingCycle] = useState<'monthly' | 'annual'>('monthly');
   const [subscriptionsList, setSubscriptionsList] = useState<ActiveSubscription[]>([]);
@@ -145,6 +145,13 @@ export const SubscriptionsView: React.FC<SubscriptionsViewProps> = ({ onNotify }
   const handleConfirmPlan = () => {
     if (!selectedPlanForModal) return;
     setCurrentPlan(selectedPlanForModal.name);
+    localStorage.setItem('admin_current_subscription_plan', selectedPlanForModal.name);
+    fetch('/api/admin/subscriptions/select', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ plan: selectedPlanForModal.name })
+    }).catch(() => {});
     setSelectedPlanForModal(null);
     onNotify?.(`Successfully subscribed to the ${selectedPlanForModal.name} Plan!`, 'success');
   };

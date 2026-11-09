@@ -3,7 +3,7 @@
  * Architecture: Central Admin Panel -> Central API -> Multi-Tenant Trading Infrastructure
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { AdminSidebar, NavigationTab } from './components/layout/AdminSidebar';
 import { AdminHeader } from './components/layout/AdminHeader';
 import { DashboardView } from './views/DashboardView';
@@ -250,6 +250,10 @@ export default function App() {
     } catch (e) {
       console.warn('Logout error:', e);
     }
+    localStorage.removeItem('auth_token');
+    sessionStorage.removeItem('auth_token');
+    localStorage.removeItem('user');
+    sessionStorage.clear();
     setCurrentUser(null);
     setActiveTradingClient(null);
     setAppMode('admin');
@@ -692,6 +696,8 @@ export default function App() {
       });
       if (res.ok) {
         showToast(`KYC status updated to ${status}`, 'success');
+        setKycRecords(prev => prev.map(k => k.id === id ? { ...k, kyc_status: status, status } : k));
+        setPendingKYC(prev => prev.filter(k => k.id !== id));
         await loadHierarchyData();
         await loadDashboardData();
       } else {
@@ -918,6 +924,17 @@ export default function App() {
     );
   }
 
+  const pendingKycCount = useMemo(() => {
+    const list = kycRecords.length ? kycRecords : pendingKYC;
+    if (list.length > 0) {
+      return list.filter(r => {
+        const s = (r.kyc_status || r.status || '').toUpperCase();
+        return s === 'PENDING' || s === 'IN_REVIEW';
+      }).length;
+    }
+    return Number(dashboardData?.kpis?.pending_kyc?.value) || 0;
+  }, [kycRecords, pendingKYC, dashboardData?.kpis?.pending_kyc?.value]);
+
   return (
     <div className={`flex h-screen ${isDark ? 'bg-[#070d19] text-slate-100' : 'bg-slate-100 text-slate-900'} overflow-hidden font-sans`}>
       {/* Central Admin Left Sidebar */}
@@ -925,6 +942,7 @@ export default function App() {
         activeTab={activeTab}
         onSelectTab={tab => {
           setSelectedTenantForDetail(null);
+          setSelectedClientForDetail(null);
           setActiveTab(tab);
           setMobileSidebarOpen(false);
         }}
@@ -934,9 +952,10 @@ export default function App() {
         onToggleCollapse={() => setSidebarCollapsed(prev => !prev)}
         currentUser={currentUser}
         badgeCounts={{
-          kycPending: Number(dashboardData?.kpis?.pending_kyc?.value) || 0,
+          kycPending: pendingKycCount,
           openTickets: Number(dashboardData?.kpis?.open_tickets?.value) || 0
         }}
+        onLogout={handleLogout}
       />
 
       {/* Main Content Area */}
@@ -964,6 +983,9 @@ export default function App() {
           onSelectClient={(client: any) => {
             setSelectedClientForDetail(client);
             setActiveTab('clients');
+          }}
+          onUpdateUser={(updated: Partial<AuthUser>) => {
+            setCurrentUser(prev => prev ? { ...prev, ...updated } : null);
           }}
         />
 
@@ -1000,12 +1022,6 @@ export default function App() {
                 >
                   Return to Dashboard
                 </button>
-                <button
-                  onClick={() => handleSwitchUserRole('SUPER_ADMIN')}
-                  className="px-4 py-2 bg-[#162342] hover:bg-[#1c2d54] text-slate-300 hover:text-white text-xs font-semibold rounded-xl border border-[#233868] transition-all cursor-pointer"
-                >
-                  Switch to Super Admin
-                </button>
               </div>
             </div>
           ) : (
@@ -1034,6 +1050,7 @@ export default function App() {
                     } else if (pendingKYC.length > 0) {
                       setSelectedKycForReview(pendingKYC[0]);
                     }
+                    setActiveTab('kyc');
                   }}
                   onSelectTrade={trade => {
                     setSelectedTradeForDetail(trade);

@@ -144,23 +144,23 @@ export const RiskLimitsView: React.FC<RiskLimitsViewProps> = ({ onNotify }) => {
             const mappedProfiles: RiskProfileItem[] = profilesData.map((p: any) => ({
               profileId: p.id || p.profileId,
               name: p.name,
-              maxOrderQty: p.max_order_qty ? String(p.max_order_qty) : (p.max_leverage ? `${p.max_leverage}x` : (p.maxOrderQty || '100,000')),
-              maxExposure: p.max_order_value ? `₹${parseFloat(p.max_order_value).toLocaleString('en-IN')}` : (p.max_exposure || p.maxExposure || '₹500,000'),
-              dailyLossLimit: p.daily_loss_limit ? `₹${parseFloat(p.daily_loss_limit).toLocaleString('en-IN')}` : (p.dailyLossLimit || '₹10,000'),
-              marginReq: p.margin_call_threshold ? `${p.margin_call_threshold}%` : (p.marginReq || '2%'),
+              maxOrderQty: p.max_order_qty !== undefined && p.max_order_qty !== null ? String(p.max_order_qty) : (p.maxOrderQty || '50,000'),
+              maxExposure: p.max_order_value ? `₹${parseFloat(p.max_order_value).toLocaleString('en-IN')}` : (p.max_exposure || p.maxExposure || '₹250,000'),
+              dailyLossLimit: p.daily_loss_limit ? `₹${parseFloat(p.daily_loss_limit).toLocaleString('en-IN')}` : (p.dailyLossLimit || '₹5,000'),
+              marginReq: p.margin_requirement || p.marginReq || (p.margin_call_threshold ? `${p.margin_call_threshold}%` : '2%'),
               status: p.status === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE',
               description: p.description || `${p.name} risk governance tier`
             }));
 
-            // Merge local profiles
-            const seenIds = new Set(mappedProfiles.map(p => p.profileId));
+            // Merge local profiles, prioritizing local edits
+            const localMap = new Map(localProfiles.map(lp => [lp.profileId, lp]));
+            const mergedProfiles = mappedProfiles.map(p => localMap.get(p.profileId) || p);
             for (const lp of localProfiles) {
-              if (!seenIds.has(lp.profileId)) {
-                mappedProfiles.push(lp);
-                seenIds.add(lp.profileId);
+              if (!mappedProfiles.some(p => p.profileId === lp.profileId)) {
+                mergedProfiles.push(lp);
               }
             }
-            setProfiles(mappedProfiles);
+            setProfiles(mergedProfiles);
           }
         } else if (localProfiles.length > 0) {
           setProfiles(localProfiles);
@@ -276,9 +276,65 @@ export const RiskLimitsView: React.FC<RiskLimitsViewProps> = ({ onNotify }) => {
     setNewMarginReq('');
   };
 
-  const handleSaveEditProfile = (e: React.FormEvent) => {
+  const handleSaveEditProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingProfile) return;
+
+    // Validate numeric limits (reject negative numbers and invalid margin)
+    const cleanQty = String(editingProfile.maxOrderQty || '').trim().replace(/,/g, '');
+    if (cleanQty) {
+      const parsedQty = Number(cleanQty);
+      if (isNaN(parsedQty) || parsedQty <= 0) {
+        notify('Max Order Quantity must be a valid positive number', 'warning');
+        return;
+      }
+    }
+
+    const cleanExposure = String(editingProfile.maxExposure || '').trim().replace(/[$,₹, ]/g, '');
+    if (cleanExposure) {
+      const parsedExposure = Number(cleanExposure);
+      if (isNaN(parsedExposure) || parsedExposure <= 0) {
+        notify('Max Exposure must be a valid positive number', 'warning');
+        return;
+      }
+    }
+
+    const cleanDailyLoss = String(editingProfile.dailyLossLimit || '').trim().replace(/[$,₹, ]/g, '');
+    if (cleanDailyLoss) {
+      const parsedLoss = Number(cleanDailyLoss);
+      if (isNaN(parsedLoss) || parsedLoss <= 0) {
+        notify('Daily Loss Limit must be a valid positive number', 'warning');
+        return;
+      }
+    }
+
+    const cleanMargin = String(editingProfile.marginReq || '').trim().replace(/%/g, '');
+    if (cleanMargin) {
+      const parsedMargin = Number(cleanMargin);
+      if (isNaN(parsedMargin) || parsedMargin <= 0) {
+        notify('Margin Requirement must be a valid positive percentage', 'warning');
+        return;
+      }
+    }
+
+    try {
+      await fetch(`/api/admin/risk/profiles/${editingProfile.profileId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(editingProfile)
+      });
+    } catch (err) {
+      console.warn('Failed to persist risk profile to backend:', err);
+    }
+
+    try {
+      const stored = JSON.parse(localStorage.getItem('admin_risk_profiles') || '[]');
+      const updatedStored = stored.some((p: any) => p.profileId === editingProfile.profileId)
+        ? stored.map((p: any) => p.profileId === editingProfile.profileId ? editingProfile : p)
+        : [...stored, editingProfile];
+      localStorage.setItem('admin_risk_profiles', JSON.stringify(updatedStored));
+    } catch {}
 
     setProfiles(prev =>
       prev.map(p => (p.profileId === editingProfile.profileId ? editingProfile : p))

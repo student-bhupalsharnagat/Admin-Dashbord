@@ -56,6 +56,10 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
   const [tradeModalOrder, setTradeModalOrder] = useState<OrderItem | null>(null);
   const [activeClientDetail, setActiveClientDetail] = useState<any | null>(null);
 
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, sideFilter, statusFilter]);
+
   const notify = (msg: string, type: 'info' | 'success' | 'warning' = 'info') => {
     if (onNotify) onNotify(msg, type);
   };
@@ -564,7 +568,13 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
             <div className="p-4 border-b border-[#162238] flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <ArrowRightLeft size={16} className="text-[#38bdf8]" />
-                <h3 className="text-sm font-bold text-white">Trade Execution Details</h3>
+                <h3 className="text-sm font-bold text-white">
+                  {tradeModalOrder.status === 'CANCELLED'
+                    ? 'Order Cancelled Details'
+                    : tradeModalOrder.status === 'PENDING'
+                    ? 'Order Pending Details'
+                    : 'Trade Execution Details'}
+                </h3>
               </div>
               <button onClick={() => setTradeModalOrder(null)} className="text-slate-400 hover:text-white">
                 <X size={15} />
@@ -574,7 +584,11 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
               <div className="p-3 bg-[#0c162b] border border-[#162238] rounded-lg">
                 <span className="text-slate-500 block text-[10px] uppercase font-bold">Execution Reference</span>
                 <span className="text-base font-bold text-cyan-400 font-mono block mt-0.5">
-                  TRD-{tradeModalOrder.orderId.replace('ORD', '')}
+                  {tradeModalOrder.status === 'CANCELLED'
+                    ? 'N/A - Cancelled (Unfulfilled)'
+                    : tradeModalOrder.status === 'PENDING'
+                    ? 'Pending Fill'
+                    : `TRD-${tradeModalOrder.orderId.replace('ORD', '')}`}
                 </span>
                 <span className="text-xs text-slate-400">Order Ref: {tradeModalOrder.orderId}</span>
               </div>
@@ -584,33 +598,48 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
                   <span className="text-white font-bold">{tradeModalOrder.symbol}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-400">Execution Price</span>
+                  <span className="text-slate-400">Order / Exec Price</span>
                   <span className="text-white font-bold">{tradeModalOrder.price}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-400">Filled Qty</span>
                   <span className="text-emerald-400 font-bold">
-                    {tradeModalOrder.status === 'CANCELLED'
+                    {tradeModalOrder.status === 'CANCELLED' || tradeModalOrder.status === 'PENDING'
                       ? (tradeModalOrder.filledQty !== undefined ? tradeModalOrder.filledQty : '0')
                       : (tradeModalOrder.filledQty || (tradeModalOrder.status === 'FILLED' ? tradeModalOrder.quantity : '0'))}
                   </span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-400">Settlement</span>
-                  <span className="text-emerald-400 font-bold">T+0 INSTANT</span>
+                  <span className={`font-bold ${tradeModalOrder.status === 'FILLED' ? 'text-emerald-400' : 'text-slate-400'}`}>
+                    {tradeModalOrder.status === 'FILLED'
+                      ? 'T+0 INSTANT'
+                      : tradeModalOrder.status === 'CANCELLED'
+                      ? 'N/A - Not Executed'
+                      : 'Pending Fill'}
+                  </span>
                 </div>
               </div>
             </div>
             <div className="p-3 bg-[#080e1c] border-t border-[#162238] flex justify-end">
-              <button
-                onClick={() => {
-                  setTradeModalOrder(null);
-                  if (onNavigateToTrade) onNavigateToTrade(tradeModalOrder.orderId);
-                }}
-                className="px-4 py-1.5 bg-[#2563eb] hover:bg-blue-600 text-white rounded-lg text-xs font-semibold"
-              >
-                Go to Trades Screen
-              </button>
+              {tradeModalOrder.status === 'FILLED' ? (
+                <button
+                  onClick={() => {
+                    setTradeModalOrder(null);
+                    if (onNavigateToTrade) onNavigateToTrade(tradeModalOrder.orderId);
+                  }}
+                  className="px-4 py-1.5 bg-[#2563eb] hover:bg-blue-600 text-white rounded-lg text-xs font-semibold cursor-pointer"
+                >
+                  Go to Trades Screen
+                </button>
+              ) : (
+                <button
+                  onClick={() => setTradeModalOrder(null)}
+                  className="px-4 py-1.5 bg-[#162342] hover:bg-[#1c2d54] text-slate-300 rounded-lg text-xs font-semibold cursor-pointer"
+                >
+                  Close
+                </button>
+              )}
             </div>
           </div>
         </div>
