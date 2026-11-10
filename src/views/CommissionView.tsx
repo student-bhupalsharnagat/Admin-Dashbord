@@ -243,7 +243,6 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
   const [newRuleSubBrokerShare, setNewRuleSubBrokerShare] = useState('20%');
   const [newRuleInstruments, setNewRuleInstruments] = useState('All Instruments');
   const [newRulePolicyType, setNewRulePolicyType] = useState('Turnover Slab Incentive');
-  const [chartTimeframe, setChartTimeframe] = useState<string>('1M');
 
   const notify = (msg: string, type: 'info' | 'success' | 'warning' = 'info') => {
     if (onNotify) onNotify(msg, type);
@@ -272,34 +271,28 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
         if (plansRes.ok) {
           const plansData = await plansRes.json();
           if (isMounted && Array.isArray(plansData)) {
-            const mappedPlans: CommissionPlanItem[] = plansData.map((p: any) => {
-              const planType = (p.plan_type === 'TIERED' || p.type === 'TIERED' ? 'TIERED' : (p.plan_type === 'FIXED' || p.type === 'FIXED' ? 'FIXED' : 'PERCENTAGE')) as any;
-              const formattedRate = planType === 'FIXED'
-                ? (p.rate_value !== undefined ? `₹${p.rate_value}` : (p.rate?.startsWith('₹') ? p.rate : `₹${p.rate || '20'}`))
-                : (p.rate_value !== undefined ? `${p.rate_value}%` : (p.rate || '0.05%'));
-              return {
-                planId: p.id || p.planId,
-                planName: p.name || p.planName,
-                type: planType,
-                rate: formattedRate,
-                instruments: p.instruments || 'All',
-                users: p.users_count || p.users || 0,
-                status: p.status === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE',
-                description: p.description || '',
-                masterShare: p.master_share || p.masterShare || '40%',
-                brokerShare: p.broker_share || p.brokerShare || '60%'
-              };
-            });
+            const mappedPlans: CommissionPlanItem[] = plansData.map((p: any) => ({
+              planId: p.id || p.planId,
+              planName: p.name || p.planName,
+              type: (p.plan_type === 'TIERED' || p.type === 'TIERED' ? 'TIERED' : (p.plan_type === 'FIXED' || p.type === 'FIXED' ? 'FIXED' : 'PERCENTAGE')) as any,
+              rate: p.rate_value ? `${p.rate_value}%` : (p.rate || '0.05%'),
+              instruments: p.instruments || 'All',
+              users: p.users_count || p.users || 0,
+              status: p.status === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE',
+              description: p.description || '',
+              masterShare: p.master_share || p.masterShare || '40%',
+              brokerShare: p.broker_share || p.brokerShare || '60%'
+            }));
 
-            // Merge with local plans, prioritizing local updates
-            const localMap = new Map(localPlans.map(lp => [lp.planId, lp]));
-            const mergedPlans = mappedPlans.map(p => localMap.get(p.planId) || p);
+            // Merge with local plans
+            const seenIds = new Set(mappedPlans.map(p => p.planId));
             for (const lp of localPlans) {
-              if (!mappedPlans.some(p => p.planId === lp.planId)) {
-                mergedPlans.push(lp);
+              if (!seenIds.has(lp.planId)) {
+                mappedPlans.push(lp);
+                seenIds.add(lp.planId);
               }
             }
-            setPlans(mergedPlans);
+            setPlans(mappedPlans);
           }
         } else if (localPlans.length > 0) {
           setPlans(localPlans);
@@ -327,17 +320,17 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
               description: r.description || 'Commission policy rule'
             }));
 
-            // Merge with local rules, prioritizing local updates
-            const localRulesMap = new Map(localRules.map(lr => [lr.id, lr]));
-            const mergedRules = mappedRules.map(r => localRulesMap.get(r.id) || r);
+            // Merge with local rules
+            const seenRuleIds = new Set(mappedRules.map(r => r.id));
             for (const lr of localRules) {
-              if (!mappedRules.some(r => r.id === lr.id)) {
-                mergedRules.push(lr);
+              if (!seenRuleIds.has(lr.id)) {
+                mappedRules.push(lr);
+                seenRuleIds.add(lr.id);
               }
             }
-            setRulesList(mergedRules);
-            if (mergedRules.length > 0) {
-              setSelectedRule(mergedRules[0]);
+            setRulesList(mappedRules);
+            if (mappedRules.length > 0) {
+              setSelectedRule(mappedRules[0]);
             }
           }
         } else if (localRules.length > 0) {
@@ -420,49 +413,15 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
     setNewRuleCondition('');
   };
 
-  const handleUpdateRule = async (e: React.FormEvent) => {
+  const handleUpdateRule = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingRule) return;
 
-    // Validate Master + Broker + Sub-Broker share <= 100%
-    const mShare = parseFloat(String(editingRule.masterShare).replace(/[^0-9.]/g, '')) || 0;
-    const bShare = parseFloat(String(editingRule.brokerShare).replace(/[^0-9.]/g, '')) || 0;
-    const sbShare = parseFloat(String(editingRule.subBrokerShare).replace(/[^0-9.]/g, '')) || 0;
-
-    if (mShare + bShare + sbShare > 100) {
-      notify(`Total commission share (${mShare + bShare + sbShare}%) cannot exceed 100%`, 'warning');
-      return;
+    setRulesList(prev => prev.map(r => r.id === editingRule.id ? editingRule : r));
+    if (selectedRule.id === editingRule.id) {
+      setSelectedRule(editingRule);
     }
-
-    const updatedRule = {
-      ...editingRule,
-      split: `Master: ${editingRule.masterShare}, Broker: ${editingRule.brokerShare}, Sub-Broker: ${editingRule.subBrokerShare}`
-    };
-
-    try {
-      await fetch(`/api/admin/commercial/commission-rules/${updatedRule.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify(updatedRule)
-      });
-    } catch (err) {
-      console.warn('Failed to persist commission rule update:', err);
-    }
-
-    try {
-      const stored = JSON.parse(localStorage.getItem('admin_commission_rules') || '[]');
-      const updatedStored = stored.some((r: any) => r.id === updatedRule.id)
-        ? stored.map((r: any) => r.id === updatedRule.id ? updatedRule : r)
-        : [...stored, updatedRule];
-      localStorage.setItem('admin_commission_rules', JSON.stringify(updatedStored));
-    } catch {}
-
-    setRulesList(prev => prev.map(r => r.id === updatedRule.id ? updatedRule : r));
-    if (selectedRule?.id === updatedRule.id) {
-      setSelectedRule(updatedRule);
-    }
-    notify(`Rule ${updatedRule.id} updated successfully!`, 'success');
+    notify(`Rule ${editingRule.id} updated successfully!`, 'success');
     setEditingRule(null);
   };
 
@@ -526,7 +485,7 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
     setNewPlanRate('');
   };
 
-  const handleDuplicatePlan = async (plan: CommissionPlanItem) => {
+  const handleDuplicatePlan = (plan: CommissionPlanItem) => {
     const newId = `CP00${plans.length + 1}`;
     const cloned: CommissionPlanItem = {
       ...plan,
@@ -535,50 +494,13 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
       users: 0,
       status: 'ACTIVE'
     };
-
-    try {
-      await fetch('/api/admin/commercial/commission-plans', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify(cloned)
-      });
-    } catch (err) {
-      console.warn('Failed to persist cloned plan:', err);
-    }
-
-    try {
-      const stored = JSON.parse(localStorage.getItem('admin_commission_plans') || '[]');
-      stored.push(cloned);
-      localStorage.setItem('admin_commission_plans', JSON.stringify(stored));
-    } catch {}
-
     setPlans(prev => [...prev, cloned]);
     notify(`Cloned ${plan.planName} as ${cloned.planName} (${newId})`, 'success');
   };
 
-  const handleUpdatePlan = async (e: React.FormEvent) => {
+  const handleUpdatePlan = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingPlan) return;
-
-    try {
-      await fetch(`/api/admin/commercial/commission-plans/${editingPlan.planId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify(editingPlan)
-      });
-    } catch (err) {
-      console.warn('Failed to persist plan update:', err);
-    }
-
-    try {
-      const stored = JSON.parse(localStorage.getItem('admin_commission_plans') || '[]');
-      const updatedStored = stored.some((p: any) => p.planId === editingPlan.planId)
-        ? stored.map((p: any) => p.planId === editingPlan.planId ? editingPlan : p)
-        : [...stored, editingPlan];
-      localStorage.setItem('admin_commission_plans', JSON.stringify(updatedStored));
-    } catch {}
 
     setPlans(prev => prev.map(p => (p.planId === editingPlan.planId ? editingPlan : p)));
     notify(`Updated commission plan ${editingPlan.planName}`, 'success');
@@ -897,16 +819,14 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
                   </div>
                   <div className="flex items-center gap-1 bg-[#091122] border border-[#142038] p-1 rounded-lg text-[10px]">
                     {['1D', '1W', '1M', '1Y', 'ALL'].map(tf => (
-                      <button
+                      <span
                         key={tf}
-                        type="button"
-                        onClick={() => setChartTimeframe(tf)}
-                        className={`px-2 py-0.5 rounded cursor-pointer transition-colors ${
-                          chartTimeframe === tf ? 'bg-[#1d4ed8] text-white font-bold' : 'text-slate-400 hover:text-white'
+                        className={`px-2 py-0.5 rounded cursor-pointer ${
+                          tf === '1M' ? 'bg-[#1d4ed8] text-white font-bold' : 'text-slate-400 hover:text-white'
                         }`}
                       >
                         {tf}
-                      </button>
+                      </span>
                     ))}
                   </div>
                 </div>

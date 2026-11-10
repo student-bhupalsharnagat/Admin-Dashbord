@@ -37,10 +37,6 @@ export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify }) => {
   const pageSize = 25;
   const [selectedPosition, setSelectedPosition] = useState<PositionItem | null>(null);
 
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [searchQuery]);
-
   const notify = (msg: string, type: 'info' | 'success' | 'warning' = 'info') => {
     if (onNotify) onNotify(msg, type);
   };
@@ -65,12 +61,6 @@ export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify }) => {
               }
             }
 
-            // Derive effective unrealized P&L from prices & quantity if missing or 0
-            let effectivePnl = pnlNum;
-            if (effectivePnl === 0 && rawCurrent !== rawAvg && qtyNum > 0) {
-              effectivePnl = (rawCurrent - rawAvg) * qtyNum;
-            }
-
             return {
               id: p.id || `POS-${idx + 1}`,
               client: p.client || p.client_name || 'Retail Client',
@@ -78,10 +68,10 @@ export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify }) => {
               qty: String(p.qty || p.quantity || '1'),
               avgPrice: rawAvg > 0 ? `₹${rawAvg.toLocaleString('en-IN', { minimumFractionDigits: 1, maximumFractionDigits: 2 })}` : (typeof p.avgPrice === 'number' ? `₹${p.avgPrice.toLocaleString('en-IN')}` : String(p.avgPrice || p.buy_price || '—')),
               currentPrice: rawCurrent > 0 ? `₹${rawCurrent.toLocaleString('en-IN', { minimumFractionDigits: 1, maximumFractionDigits: 2 })}` : (typeof p.currentPrice === 'number' ? `₹${p.currentPrice.toLocaleString('en-IN')}` : String(p.currentPrice || p.last_price || '0')),
-              unrealizedPL: `${effectivePnl >= 0 ? '+' : ''}₹${effectivePnl.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`,
+              unrealizedPL: typeof p.unrealizedPL === 'string' ? p.unrealizedPL : `${pnlNum >= 0 ? '+' : ''}₹${pnlNum.toLocaleString('en-IN')}`,
               realizedPL: typeof p.realizedPL === 'string' ? p.realizedPL : '+₹0',
               margin: typeof p.margin === 'string' ? p.margin : `₹${p.margin || '15,000'}`,
-              unrealizedPLPositive: p.unrealizedPLPositive !== undefined ? p.unrealizedPLPositive : effectivePnl >= 0,
+              unrealizedPLPositive: p.unrealizedPLPositive !== undefined ? p.unrealizedPLPositive : pnlNum >= 0,
               realizedPLPositive: p.realizedPLPositive !== undefined ? p.realizedPLPositive : true
             };
           });
@@ -130,12 +120,6 @@ export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify }) => {
   };
 
   const filteredPositions = positions.filter(p => {
-    // Filter out closed or zero quantity positions
-    if ((p as any).status === 'CLOSED') return false;
-    const rawQty = (p as any).quantity ?? p.qty;
-    const qty = typeof rawQty === 'number' ? rawQty : parseInt(String(rawQty || '0').replace(/,/g, ''), 10);
-    if (qty === 0) return false;
-
     return (
       p.client.toLowerCase().includes(searchQuery.toLowerCase()) ||
       p.symbol.toLowerCase().includes(searchQuery.toLowerCase())

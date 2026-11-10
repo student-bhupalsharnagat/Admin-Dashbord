@@ -600,7 +600,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         admin_email: r.owner_email || 'admin@tenant.com',
         admin_phone: '+91 98000 00000',
         domain: r.custom_domain || `${r.subdomain || r.code.toLowerCase()}.tradepro.com`,
-        support_email: r.support_email || r.admin_email || `support@${(r.code || 'tenant').toLowerCase()}.com`,
+        support_email: `support@${(r.code || 'tenant').toLowerCase()}.com`,
         total_users: clientCount,
         active_users: activeClientCount,
         trading_volume: formatCurrency(volRaw),
@@ -667,7 +667,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       admin_email: r.owner_email || 'admin@tenant.com',
       admin_phone: '+91 98000 00000',
       domain: r.custom_domain || `${r.subdomain || r.code.toLowerCase()}.tradepro.com`,
-      support_email: r.support_email || r.admin_email || `support@${(r.code || 'tenant').toLowerCase()}.com`,
+      support_email: `support@${(r.code || 'tenant').toLowerCase()}.com`,
       total_users: clientCount,
       active_users: activeClientCount,
       trading_volume: formatCurrency(volRaw),
@@ -738,7 +738,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       admin_email: r?.owner_email || adminEmail,
       admin_phone: '+91 98000 00000',
       domain: r?.custom_domain || customDomain,
-      support_email: (data as any).support_email || (data as any).email || data.admin_email || r?.support_email || `support@${code.toLowerCase()}.com`,
+      support_email: `support@${code.toLowerCase()}.com`,
       total_users: r?.user_count || data.total_users || 0,
       active_users: Math.round((r?.user_count || data.total_users || 0) * 0.8),
       trading_volume: r?.monthly_volume || data.trading_volume || '₹0',
@@ -1066,18 +1066,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     const fields: string[] = [];
     const params: any[] = [];
 
-    if (data.name) {
-      params.push(data.name);
-      fields.push(`name = $${params.length}`);
-      // Also update parent broker name across downstream sub_brokers
-      this.executeQuery('UPDATE sub_brokers SET broker_name = $1 WHERE broker_id = $2', [data.name, id]).catch(() => {});
-      for (const sb of this.createdSubBrokersMap.values()) {
-        if (sb.broker_id === id || (sb as any).brokerId === id) {
-          sb.broker_name = data.name;
-          (sb as any).parentBroker = data.name;
-        }
-      }
-    }
+    if (data.name) { params.push(data.name); fields.push(`name = $${params.length}`); }
     if (data.email) { params.push(data.email); fields.push(`email = $${params.length}`); }
     if (data.status) { params.push(data.status); fields.push(`status = $${params.length}`); }
 
@@ -2121,12 +2110,8 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       sql += ` AND tenant_id = $${params.length}`;
     }
     if (status && status !== 'ALL') {
-      if (status === 'APPROVED' || status === 'VERIFIED') {
-        sql += ` AND (kyc_status = 'APPROVED' OR kyc_status = 'VERIFIED')`;
-      } else {
-        params.push(status);
-        sql += ` AND kyc_status = $${params.length}`;
-      }
+      params.push(status);
+      sql += ` AND kyc_status = $${params.length}`;
     }
 
     sql += ' ORDER BY created_at DESC';
@@ -2143,8 +2128,6 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       document_status: ((r.kyc_status === 'APPROVED' || r.kyc_status === 'VERIFIED') ? 'VERIFIED' : (r.kyc_status === 'REJECTED' ? 'REJECTED' : 'PENDING')) as any,
       assigned_reviewer: r.reviewed_by || 'Compliance Officer',
       submitted_date: r.submitted_at?.toISOString() || new Date().toISOString(),
-      reviewed_at: r.reviewed_at ? (typeof r.reviewed_at === 'string' ? r.reviewed_at : r.reviewed_at.toISOString()) : null,
-      reviewDate: r.reviewed_at ? (typeof r.reviewed_at === 'string' ? r.reviewed_at : r.reviewed_at.toISOString()) : null,
       id_number: r.pan_number || r.aadhaar_number,
       notes: r.notes
     }));
@@ -2610,7 +2593,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       const raw = (r.entry_type || '').toUpperCase();
       if (raw.includes('WITHDRAW')) mappedType = 'WITHDRAWAL';
       else if (raw.includes('COMMISSION')) mappedType = 'COMMISSION';
-      else if (raw.includes('TRADE') || raw.includes('P&L') || raw.includes('SQUARE') || raw.includes('SETTLE')) mappedType = 'P&L';
+      else if (raw.includes('TRADE') || raw.includes('P&L')) mappedType = 'P&L';
 
       const resolvedName = (r.resolved_account && r.resolved_account !== 'Trading Client')
         ? r.resolved_account
@@ -3134,26 +3117,6 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     return res.rows[0] || { id, planId: id, tenant_id: tenantId, name, plan_type: planType, description };
   }
 
-  async updateCommissionPlan(id: string, data: any): Promise<any> {
-    const name = data.name || data.planName;
-    const description = data.description;
-    const planType = data.type || data.plan_type;
-    let res: any = { rows: [] };
-    try {
-      res = await this.executeQuery(`
-        UPDATE commission_plans
-        SET name = COALESCE($1::varchar, name),
-            description = COALESCE($2::text, description),
-            plan_type = COALESCE($3::varchar, plan_type),
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = $4
-        RETURNING *
-      `, [name ?? null, description ?? null, planType ?? null, id]);
-    } catch (err) {}
-
-    return res.rows[0] || { id, ...data, name: name ?? data.name, description, plan_type: planType };
-  }
-
   async createCommissionRule(data: any): Promise<any> {
     const id = data.id || `RUL-${Date.now().toString().slice(-4)}`;
     const tenantId = data.tenant_id || data.tenantId || 'TNT-001';
@@ -3172,29 +3135,6 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     return res.rows[0] || { id, tenant_id: tenantId, plan_id: planId, asset_class: assetClass, rate_value: rateValue };
   }
 
-  async updateCommissionRule(id: string, data: any): Promise<any> {
-    const rateValue = (data.rate !== undefined || data.rate_value !== undefined || data.baseRate !== undefined)
-      ? parseFloat(String(data.rate ?? data.rate_value ?? data.baseRate).replace(/[^0-9.]/g, ''))
-      : null;
-    const rateType = data.rateType || data.rate_type;
-    const assetClass = data.instruments || data.asset_class;
-
-    let res: any = { rows: [] };
-    try {
-      res = await this.executeQuery(`
-        UPDATE commission_rules
-        SET rate_value = COALESCE($1::numeric, rate_value),
-            rate_type = COALESCE($2::varchar, rate_type),
-            asset_class = COALESCE($3::varchar, asset_class),
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = $4
-        RETURNING *
-      `, [rateValue, rateType ?? null, assetClass ?? null, id]);
-    } catch (err) {}
-
-    return res.rows[0] || { id, ...data, rate_value: rateValue ?? data.rate_value ?? data.rate };
-  }
-
   async createRiskProfile(data: any): Promise<any> {
     const id = data.profileId || data.id || `RP00${Date.now().toString().slice(-3)}`;
     const tenantId = data.tenant_id || data.tenantId || 'TNT-001';
@@ -3211,42 +3151,6 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     `, [id, tenantId, name, maxLeverage, maxExposure, dailyLoss]).catch(() => ({ rows: [] }));
 
     return res.rows[0] || { id, profileId: id, tenant_id: tenantId, name, max_leverage: maxLeverage, max_order_value: maxExposure, daily_loss_limit: dailyLoss };
-  }
-
-  async updateRiskProfile(id: string, data: any): Promise<any> {
-    const name = data.name;
-    const maxLeverage = (data.maxLeverage !== undefined || data.max_leverage !== undefined)
-      ? parseInt(String(data.maxLeverage ?? data.max_leverage), 10)
-      : null;
-    const maxExposure = (data.maxExposure !== undefined || data.max_order_value !== undefined)
-      ? parseFloat(String(data.maxExposure ?? data.max_order_value).replace(/[^0-9.]/g, ''))
-      : null;
-    const dailyLoss = (data.dailyLossLimit !== undefined || data.daily_loss_limit !== undefined)
-      ? parseFloat(String(data.dailyLossLimit ?? data.daily_loss_limit).replace(/[^0-9.]/g, ''))
-      : null;
-
-    let res: any = { rows: [] };
-    try {
-      res = await this.executeQuery(`
-        UPDATE risk_profiles
-        SET name = COALESCE($1::varchar, name),
-            max_leverage = COALESCE($2::int, max_leverage),
-            max_order_value = COALESCE($3::numeric, max_order_value),
-            daily_loss_limit = COALESCE($4::numeric, daily_loss_limit),
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = $5
-        RETURNING *
-      `, [name ?? null, maxLeverage, maxExposure, dailyLoss, id]);
-    } catch (err) {}
-
-    return res.rows[0] || {
-      id,
-      ...data,
-      name: name ?? data.name,
-      max_leverage: maxLeverage ?? data.max_leverage ?? data.maxLeverage,
-      max_order_value: maxExposure ?? data.max_order_value ?? data.maxExposure,
-      daily_loss_limit: dailyLoss ?? data.daily_loss_limit ?? data.dailyLossLimit
-    };
   }
 
   async resolveRiskEvent(id: string, status: string = 'RESOLVED'): Promise<any> {
@@ -4101,7 +4005,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         brand_name: r.portal_name || r.company_name,
         short_name: r.portal_name || 'Prime',
         tagline: r.tagline || 'Next-Gen Trading Infrastructure',
-        logo_url: r.logo_url !== undefined ? r.logo_url : 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=120&auto=format&fit=crop&q=80',
+        logo_url: r.logo_url || 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=120&auto=format&fit=crop&q=80',
         favicon_url: r.favicon_url || '/favicon.ico',
         primary_color: r.primary_color || '#2563eb',
         secondary_color: '#0f172a',
@@ -4151,7 +4055,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       last_published_at: r.last_published_at,
       last_published_by: r.last_published_by,
       ...draft,
-      logo_url: draft.logo_url !== undefined ? draft.logo_url : (draft.logoUrl !== undefined ? draft.logoUrl : (r.logo_url !== undefined ? r.logo_url : 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=120&auto=format&fit=crop&q=80')),
+      logo_url: draft.logo_url || draft.logoUrl || r.logo_url || 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=120&auto=format&fit=crop&q=80',
       version: finalVersion,
       status: (r.publish_status || 'DRAFT') as any
     };

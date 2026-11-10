@@ -211,22 +211,6 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ onNotify, currentUser 
   };
 
   const fetchLiveReportRows = async (report: ReportCardConfig): Promise<string[]> => {
-    const isWithinDateRange = (itemDateStr?: string) => {
-      if (!itemDateStr) return true;
-      const d = new Date(itemDateStr);
-      if (isNaN(d.getTime())) return true;
-      if (dateFrom) {
-        const from = new Date(dateFrom);
-        if (!isNaN(from.getTime()) && d < from) return false;
-      }
-      if (dateTo) {
-        const to = new Date(dateTo);
-        to.setHours(23, 59, 59, 999);
-        if (!isNaN(to.getTime()) && d > to) return false;
-      }
-      return true;
-    };
-
     try {
       if (report.id === 'pl-report') {
         const res = await fetch('/api/admin/clients');
@@ -261,74 +245,67 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ onNotify, currentUser 
         return filteredClients.map((c: any) => {
           const code = c.code || c.id || '';
           const name = (c.name || 'Client').replace(/"/g, '""');
-          const realizedNum = Number(c.realized_pl || 0);
-          const unrealizedNum = Number(c.unrealized_pl || 0);
-          const grossNum = realizedNum + unrealizedNum;
-          const brokerageNum = Number(c.brokerage || (Math.abs(grossNum) * 0.0005) || 0);
-          const netNum = grossNum - brokerageNum;
-          const realized = `₹${realizedNum.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
-          const unrealized = `₹${unrealizedNum.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
-          const gross = `₹${grossNum.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
-          const net = `₹${netNum.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
-          const brokerage = `₹${brokerageNum.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
-          return `${code},"${name}","${realized}","${unrealized}","${gross}","${net}","${brokerage}"`;
+          const realized = `₹${Number(c.realized_pl || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+          const unrealized = `₹${Number(c.unrealized_pl || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+          const total = `₹${(Number(c.realized_pl || 0) + Number(c.unrealized_pl || 0)).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+          const avail = `₹${Number(c.available_margin || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+          const used = `₹${Number(c.used_margin || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+          return `${code},"${name}","${realized}","${unrealized}","${total}","${avail}","${used}"`;
         });
       }
 
-      if (report.id === 'turnover-report' || report.id === 'trade-book-report' || report.id === 'trade-report') {
+      if (report.id === 'turnover-report' || report.id === 'trade-book-report') {
         const res = await fetch('/api/admin/trades');
         if (!res.ok) return [];
         const trades = await res.json();
         if (!Array.isArray(trades) || trades.length === 0) return [];
-        const dateFiltered = trades.filter((t: any) => isWithinDateRange(t.executed_at || t.timestamp || t.created_at));
-        return dateFiltered.map((t: any) => {
-          const time = t.executed_at || t.timestamp || t.created_at || new Date().toISOString();
+        return trades.map((t: any) => {
+          const time = t.executed_at || t.timestamp || new Date().toISOString();
           const symbol = t.symbol || '';
           const qty = t.quantity || t.qty || 0;
           const price = Number(t.price || 0);
           const turnover = `₹${(qty * price).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
           const side = t.side || '';
-          const client = t.client_name || t.client_id || t.clientId || '';
+          const client = t.client_id || t.clientId || '';
           if (report.id === 'turnover-report') {
             return `${time.split('T')[0]},${symbol},${qty},"${turnover}","₹${(price).toFixed(2)}",${client}`;
           }
-          return `${t.id || ''},${t.order_id || ''},"${client}",${symbol},${side},${qty},"₹${price.toFixed(2)}",${time}`;
+          return `${t.id || ''},${t.order_id || ''},${client},${symbol},${side},${qty},"₹${price.toFixed(2)}",${time}`;
         });
       }
 
-      if (report.id === 'order-book-report' || report.id === 'order-report') {
+      if (report.id === 'order-book-report') {
         const res = await fetch('/api/admin/orders');
         if (!res.ok) return [];
         const orders = await res.json();
         if (!Array.isArray(orders) || orders.length === 0) return [];
-        const dateFiltered = orders.filter((o: any) => isWithinDateRange(o.created_at || o.time));
-        return dateFiltered.map((o: any) => {
+        return orders.map((o: any) => {
           const id = o.id || o.order_id || '';
-          const client = o.client_name || o.client_id || o.clientId || '';
+          const client = o.client_id || o.clientId || '';
           const symbol = o.symbol || '';
           const side = o.side || '';
           const qty = o.quantity || o.qty || 0;
           const price = `₹${Number(o.price || 0).toFixed(2)}`;
           const status = o.status || '';
-          const time = o.created_at || o.time || new Date().toISOString();
-          return `${id},"${client}",${symbol},${o.type || 'LIMIT'},${side},${qty},"${price}",${status},${time}`;
+          const time = o.created_at || new Date().toISOString();
+          return `${id},${client},${symbol},${o.type || 'LIMIT'},${side},${qty},"${price}",${status},${time}`;
         });
       }
 
-      if (report.id === 'position-book-report' || report.id === 'position-report') {
+      if (report.id === 'position-book-report') {
         const res = await fetch('/api/admin/positions');
         if (!res.ok) return [];
         const pos = await res.json();
         if (!Array.isArray(pos) || pos.length === 0) return [];
         return pos.map((p: any) => {
-          const client = p.client_name || p.client_id || p.clientId || '';
+          const client = p.client_id || p.clientId || '';
           const symbol = p.symbol || '';
           const netQty = p.net_quantity || p.quantity || 0;
           const buyAvg = `₹${Number(p.buy_average || p.buy_price || 0).toFixed(2)}`;
           const sellAvg = `₹${Number(p.sell_average || p.sell_price || 0).toFixed(2)}`;
           const ltp = `₹${Number(p.ltp || p.current_price || 0).toFixed(2)}`;
           const pl = `₹${Number(p.unrealized_pl || p.pnl || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
-          return `"${client}",${symbol},${netQty},"${buyAvg}","${sellAvg}","${ltp}","${pl}"`;
+          return `${client},${symbol},${netQty},"${buyAvg}","${sellAvg}","${ltp}","${pl}"`;
         });
       }
 
@@ -337,8 +314,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ onNotify, currentUser 
         if (!res.ok) return [];
         const deps = await res.json();
         if (!Array.isArray(deps) || deps.length === 0) return [];
-        const dateFiltered = deps.filter((d: any) => isWithinDateRange(d.created_at || d.date));
-        return dateFiltered.map((d: any) => {
+        return deps.map((d: any) => {
           const id = d.id || '';
           const name = (d.client_name || d.client_id || '').replace(/"/g, '""');
           const amt = `₹${Number(d.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
@@ -355,8 +331,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ onNotify, currentUser 
         if (!res.ok) return [];
         const wds = await res.json();
         if (!Array.isArray(wds) || wds.length === 0) return [];
-        const dateFiltered = wds.filter((w: any) => isWithinDateRange(w.created_at || w.date || w.processed_at));
-        return dateFiltered.map((w: any) => {
+        return wds.map((w: any) => {
           const id = w.id || '';
           const name = (w.client_name || w.client_id || '').replace(/"/g, '""');
           const acc = w.account_number || w.bank_account || '';
@@ -434,10 +409,6 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ onNotify, currentUser 
 
   const handleExportCSV = async () => {
     if (!selectedReport) return;
-    if (dateFrom && dateTo && new Date(dateFrom) > new Date(dateTo)) {
-      onNotify?.('Start date cannot be after end date. Please correct the date range.', 'warning');
-      return;
-    }
     setIsGenerating(true);
 
     try {
@@ -463,10 +434,6 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ onNotify, currentUser 
 
   const handleExportPDF = async () => {
     if (!selectedReport) return;
-    if (dateFrom && dateTo && new Date(dateFrom) > new Date(dateTo)) {
-      onNotify?.('Start date cannot be after end date. Please correct the date range.', 'warning');
-      return;
-    }
     setIsGenerating(true);
 
     try {

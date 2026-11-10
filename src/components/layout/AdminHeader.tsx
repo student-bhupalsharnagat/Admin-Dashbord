@@ -40,7 +40,6 @@ interface AdminHeaderProps {
   orders?: any[];
   onNavigateTab?: (tab: string) => void;
   onSelectClient?: (client: any) => void;
-  onUpdateUser?: (updated: Partial<AuthUser>) => void;
 }
 
 export const AdminHeader: React.FC<AdminHeaderProps> = ({
@@ -60,8 +59,7 @@ export const AdminHeader: React.FC<AdminHeaderProps> = ({
   clients = [],
   orders = [],
   onNavigateTab,
-  onSelectClient,
-  onUpdateUser
+  onSelectClient
 }) => {
   const { theme, toggleTheme } = useTheme();
   const [showProfileMenu, setShowProfileMenu] = useState(false);
@@ -632,7 +630,6 @@ export const AdminHeader: React.FC<AdminHeaderProps> = ({
         activeModal={activeModal}
         onClose={() => setActiveModal(null)}
         currentUser={currentUser}
-        onUpdateUser={onUpdateUser}
       />
 
       {/* Platform Help Modal */}

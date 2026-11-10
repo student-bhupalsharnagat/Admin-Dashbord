@@ -36,13 +36,13 @@ export const UserProfileModals: React.FC<UserProfileModalsProps> = ({
 }) => {
   const { theme, setTheme } = useTheme();
   // My Profile Form State
-  const [profileName, setProfileName] = useState(() => localStorage.getItem('user_profile_name') || currentUser?.name || 'Admin John');
-  const [profilePhone, setProfilePhone] = useState(() => localStorage.getItem('user_profile_phone') || '+91 98230 44910');
-  const [profileDepartment, setProfileDepartment] = useState(() => localStorage.getItem('user_profile_department') || 'Central Operations');
+  const [profileName, setProfileName] = useState(currentUser?.name || 'Admin John');
+  const [profilePhone, setProfilePhone] = useState('+91 98230 44910');
+  const [profileDepartment, setProfileDepartment] = useState('Central Operations');
   const [profileSaved, setProfileSaved] = useState(false);
 
   // Security State
-  const [twoFactorEnabled, setTwoFactorEnabled] = useState(() => localStorage.getItem('user_2fa_enabled') !== 'false');
+  const [twoFactorEnabled, setTwoFactorEnabled] = useState(true);
   const [sessionRevoked, setSessionRevoked] = useState(false);
 
   // Change Password State
@@ -55,10 +55,10 @@ export const UserProfileModals: React.FC<UserProfileModalsProps> = ({
   const [passwordSuccess, setPasswordSuccess] = useState(false);
 
   // Settings State
-  const [soundAlerts, setSoundAlerts] = useState(() => localStorage.getItem('user_sound_alerts') !== 'false');
-  const [orderConfirmation, setOrderConfirmation] = useState(() => localStorage.getItem('user_order_confirmation') !== 'false');
-  const [emailDigests, setEmailDigests] = useState(() => localStorage.getItem('user_email_digests') !== 'false');
-  const [compactDensity, setCompactDensity] = useState(() => localStorage.getItem('user_compact_density') === 'true');
+  const [soundAlerts, setSoundAlerts] = useState(true);
+  const [orderConfirmation, setOrderConfirmation] = useState(true);
+  const [emailDigests, setEmailDigests] = useState(true);
+  const [compactDensity, setCompactDensity] = useState(false);
   const [settingsSaved, setSettingsSaved] = useState(false);
 
   if (!activeModal) return null;
@@ -66,16 +66,6 @@ export const UserProfileModals: React.FC<UserProfileModalsProps> = ({
   // Handle Save Profile
   const handleSaveProfile = (e: React.FormEvent) => {
     e.preventDefault();
-    localStorage.setItem('user_profile_name', profileName);
-    localStorage.setItem('user_profile_phone', profilePhone);
-    localStorage.setItem('user_profile_department', profileDepartment);
-    fetch('/api/admin/user/profile', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ name: profileName, phone: profilePhone, department: profileDepartment })
-    }).catch(() => {});
-
     if (onUpdateUser) {
       onUpdateUser({ name: profileName });
     }
@@ -84,39 +74,6 @@ export const UserProfileModals: React.FC<UserProfileModalsProps> = ({
       setProfileSaved(false);
       onClose();
     }, 1200);
-  };
-
-  // Handle Save Settings
-  const handleSaveSettings = (e: React.FormEvent) => {
-    e.preventDefault();
-    localStorage.setItem('user_sound_alerts', String(soundAlerts));
-    localStorage.setItem('user_order_confirmation', String(orderConfirmation));
-    localStorage.setItem('user_email_digests', String(emailDigests));
-    localStorage.setItem('user_compact_density', String(compactDensity));
-    fetch('/api/admin/user/preferences', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ soundAlerts, orderConfirmation, emailDigests, compactDensity })
-    }).catch(() => {});
-
-    setSettingsSaved(true);
-    setTimeout(() => {
-      setSettingsSaved(false);
-      onClose();
-    }, 1200);
-  };
-
-  const handleToggle2FA = () => {
-    const nextVal = !twoFactorEnabled;
-    setTwoFactorEnabled(nextVal);
-    localStorage.setItem('user_2fa_enabled', String(nextVal));
-    fetch('/api/admin/user/security', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ twoFactorEnabled: nextVal })
-    }).catch(() => {});
   };
 
   // Handle Change Password Submit
@@ -144,6 +101,16 @@ export const UserProfileModals: React.FC<UserProfileModalsProps> = ({
       setConfirmPassword('');
       onClose();
     }, 1500);
+  };
+
+  // Handle Save Settings
+  const handleSaveSettings = (e: React.FormEvent) => {
+    e.preventDefault();
+    setSettingsSaved(true);
+    setTimeout(() => {
+      setSettingsSaved(false);
+      onClose();
+    }, 1200);
   };
 
   return (
@@ -317,7 +284,7 @@ export const UserProfileModals: React.FC<UserProfileModalsProps> = ({
                 </div>
 
                 <button
-                  onClick={handleToggle2FA}
+                  onClick={() => setTwoFactorEnabled(!twoFactorEnabled)}
                   className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
                     twoFactorEnabled ? 'bg-blue-600' : 'bg-slate-700'
                   }`}

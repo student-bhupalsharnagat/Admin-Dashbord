@@ -750,14 +750,6 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
 
   const filteredClients = useMemo(() => {
     return clientsList.filter(item => {
-      if (currentUser?.role === 'SUB_BROKER') {
-        const uId = (currentUser.hierarchy_id || currentUser.id || '').toLowerCase();
-        const uName = (currentUser.name || '').toLowerCase();
-        const cSubId = (item.sub_broker_id || item.subBrokerId || '').toLowerCase();
-        const cSubName = (item.sub_broker || item.sub_broker_name || item.subBroker || '').toLowerCase();
-        const matchSub = (uId && cSubId === uId) || (uName && cSubName.includes(uName)) || (uName && uName.includes(cSubName));
-        if (!matchSub) return false;
-      }
       const q = searchQuery.toLowerCase();
       const matchQuery =
         !searchQuery ||
@@ -774,7 +766,7 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
         accountFilter === 'ALL' || itemAccount === accountFilter.toUpperCase();
       return matchQuery && matchKyc && matchAccount;
     });
-  }, [clientsList, searchQuery, kycFilter, accountFilter, currentUser]);
+  }, [clientsList, searchQuery, kycFilter, accountFilter]);
 
   const totalPages = Math.ceil(filteredClients.length / pageSize) || 1;
   const paginatedClients = useMemo(() => {
@@ -945,13 +937,6 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
         });
         const saved = res.ok ? await res.json() : newBroker;
         setBrokersList([saved, ...brokersList]);
-        // Dynamically increment parent master's brokers count
-        setMastersList(prev => prev.map(m => {
-          if (m.id === resolvedMasterId || m.name === resolvedMasterName) {
-            return { ...m, brokers: (Number(m.brokers) || 0) + 1 };
-          }
-          return m;
-        }));
         notify(`Broker ${saved.name} (${saved.id}) registered!`, 'success');
       } else if (level === 'sub-brokers') {
         const selectedBroker = brokersList.find(b => b.id === formData.brokerId || b.name === formData.parentBroker || b.id === formData.parentBroker);
@@ -978,12 +963,6 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
         });
         const saved = res.ok ? await res.json() : newSub;
         setSubBrokersList([saved, ...subBrokersList]);
-        setBrokersList(prev =>
-          prev.map(b => (b.id === resolvedBrokerId || b.name === resolvedBrokerName)
-            ? { ...b, subBrokers: (Number(b.subBrokers) || 0) + 1 }
-            : b
-          )
-        );
         notify(`Sub-Broker ${saved.name} (${saved.id}) added!`, 'success');
       } else if (level === 'clients') {
         const newClient = {
@@ -1038,20 +1017,6 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
       setBrokersList(prev =>
         prev.map(b => (b.id === selectedEntity.id ? { ...b, ...formData } : b))
       );
-      if (formData.name) {
-        setSubBrokersList(prev =>
-          prev.map(s => (s.brokerId === selectedEntity.id || s.broker_id === selectedEntity.id || s.parentBroker === selectedEntity.name)
-            ? { ...s, parentBroker: formData.name, brokerName: formData.name, broker_name: formData.name }
-            : s
-          )
-        );
-        setClientsList(prev =>
-          prev.map(c => (c.brokerId === selectedEntity.id || c.broker_id === selectedEntity.id || c.broker === selectedEntity.name)
-            ? { ...c, broker: formData.name, brokerName: formData.name, broker_name: formData.name }
-            : c
-          )
-        );
-      }
       notify(`Updated broker ${formData.name || selectedEntity.name}`, 'success');
     } else if (level === 'sub-brokers') {
       setSubBrokersList(prev =>
@@ -1074,17 +1039,6 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
     setSelectedEntity(entity);
     if (action === 'view') {
       if (level === 'clients') {
-        if (currentUser?.role === 'SUB_BROKER') {
-          const uId = (currentUser.hierarchy_id || currentUser.id || '').toLowerCase();
-          const uName = (currentUser.name || '').toLowerCase();
-          const cSubId = (entity.sub_broker_id || entity.subBrokerId || '').toLowerCase();
-          const cSubName = (entity.sub_broker || entity.sub_broker_name || entity.subBroker || '').toLowerCase();
-          const matchSub = (uId && cSubId === uId) || (uName && cSubName.includes(uName)) || (uName && uName.includes(cSubName));
-          if (!matchSub) {
-            notify('Access denied: You can only view clients assigned to your sub-broker account.', 'warning');
-            return;
-          }
-        }
         setActiveClientDetail(entity);
         return;
       }
@@ -1599,12 +1553,12 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
                     className="hover:bg-[#0c1527] transition-colors group"
                   >
                     <td className="py-3.5 px-4 font-mono font-medium text-[#38bdf8] cursor-pointer hover:underline">
-                      <span onClick={() => handleQuickAction('view', client)}>
+                      <span onClick={() => setActiveClientDetail(client)}>
                         {client.id}
                       </span>
                     </td>
                     <td 
-                      onClick={() => handleQuickAction('view', client)}
+                      onClick={() => setActiveClientDetail(client)}
                       className="py-3.5 px-4 font-bold text-slate-100 whitespace-nowrap cursor-pointer hover:text-blue-400 hover:underline"
                     >
                       {client.name}

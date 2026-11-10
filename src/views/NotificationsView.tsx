@@ -116,8 +116,7 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
   const [notifications, setNotifications] = useState<NotificationItem[]>(() => {
     try {
       const storedRead: string[] = JSON.parse(localStorage.getItem('admin_read_notifications') || '[]');
-      const dismissed: string[] = JSON.parse(localStorage.getItem('admin_dismissed_notifications') || '[]');
-      return INITIAL_NOTIFICATIONS.filter(n => !dismissed.includes(n.id)).map(n => ({
+      return INITIAL_NOTIFICATIONS.map(n => ({
         ...n,
         read: storedRead.includes(n.id) ? true : n.read
       }));
@@ -166,14 +165,10 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
               };
             });
 
-            // Filter out any dismissed notifications
-            const dismissed: string[] = JSON.parse(localStorage.getItem('admin_dismissed_notifications') || '[]');
-            const nonDismissedMapped = mapped.filter(m => !dismissed.includes(m.id));
-            const existingTitles = new Set(nonDismissedMapped.map(m => m.title.toLowerCase().trim()));
-            const missingBaselines = INITIAL_NOTIFICATIONS
-              .filter(b => !dismissed.includes(b.id))
-              .filter(b => !existingTitles.has(b.title.toLowerCase().trim()));
-            setNotifications([...nonDismissedMapped, ...missingBaselines]);
+            // Ensure baseline 3 notifications (KYC Document Submitted, Withdrawal Request, Large Order Alert) are retained
+            const existingTitles = new Set(mapped.map(m => m.title.toLowerCase().trim()));
+            const missingBaselines = INITIAL_NOTIFICATIONS.filter(b => !existingTitles.has(b.title.toLowerCase().trim()));
+            setNotifications([...mapped, ...missingBaselines]);
           }
         }
       } catch {
@@ -232,13 +227,6 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
   const handleDelete = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     setNotifications(prev => prev.filter(n => n.id !== id));
-    try {
-      const dismissed: string[] = JSON.parse(localStorage.getItem('admin_dismissed_notifications') || '[]');
-      if (!dismissed.includes(id)) {
-        dismissed.push(id);
-        localStorage.setItem('admin_dismissed_notifications', JSON.stringify(dismissed));
-      }
-    } catch {}
     onNotify?.('Notification removed', 'info');
   };
 

@@ -316,10 +316,6 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
     fetchLedgerData();
   }, [ledgerTypeFilter]);
 
-  useEffect(() => {
-    setLedgerPage(1);
-  }, [ledgerSearch, ledgerTypeFilter]);
-
   // Listen to shared window admin:live-event to avoid socket starvation
   useEffect(() => {
     const handleLiveEvent = (e: any) => {
