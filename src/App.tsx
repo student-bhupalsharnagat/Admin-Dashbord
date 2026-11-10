@@ -874,6 +874,17 @@ export default function App() {
     }
   }, [handleOpenTradingPlatform]);
 
+  const pendingKycCount = useMemo(() => {
+    const list = kycRecords.length ? kycRecords : pendingKYC;
+    if (list.length > 0) {
+      return list.filter(r => {
+        const s = (r.kyc_status || r.status || '').toUpperCase();
+        return s === 'PENDING' || s === 'IN_REVIEW';
+      }).length;
+    }
+    return Number(dashboardData?.kpis?.pending_kyc?.value) || 0;
+  }, [kycRecords, pendingKYC, dashboardData?.kpis?.pending_kyc?.value]);
+
   // If no user is logged in, show the TradeMatrix Login & Sign Up screen
   if (!currentUser) {
     return (
@@ -923,17 +934,6 @@ export default function App() {
       />
     );
   }
-
-  const pendingKycCount = useMemo(() => {
-    const list = kycRecords.length ? kycRecords : pendingKYC;
-    if (list.length > 0) {
-      return list.filter(r => {
-        const s = (r.kyc_status || r.status || '').toUpperCase();
-        return s === 'PENDING' || s === 'IN_REVIEW';
-      }).length;
-    }
-    return Number(dashboardData?.kpis?.pending_kyc?.value) || 0;
-  }, [kycRecords, pendingKYC, dashboardData?.kpis?.pending_kyc?.value]);
 
   return (
     <div className={`flex h-screen ${isDark ? 'bg-[#070d19] text-slate-100' : 'bg-slate-100 text-slate-900'} overflow-hidden font-sans`}>
