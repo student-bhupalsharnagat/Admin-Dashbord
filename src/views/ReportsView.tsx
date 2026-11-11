@@ -211,6 +211,13 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ onNotify, currentUser 
   };
 
   const fetchLiveReportRows = async (report: ReportCardConfig): Promise<string[]> => {
+    const cleanNumber = (val: any): number => {
+      if (val == null) return 0;
+      if (typeof val === 'number') return isNaN(val) ? 0 : val;
+      const parsed = parseFloat(String(val).replace(/[^0-9.-]/g, ''));
+      return isNaN(parsed) ? 0 : parsed;
+    };
+
     try {
       if (report.id === 'pl-report') {
         const res = await fetch('/api/admin/clients');
@@ -245,11 +252,11 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ onNotify, currentUser 
         return filteredClients.map((c: any) => {
           const code = c.code || c.id || '';
           const name = (c.name || 'Client').replace(/"/g, '""');
-          const realized = `₹${Number(c.realized_pl || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
-          const unrealized = `₹${Number(c.unrealized_pl || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
-          const total = `₹${(Number(c.realized_pl || 0) + Number(c.unrealized_pl || 0)).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
-          const avail = `₹${Number(c.available_margin || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
-          const used = `₹${Number(c.used_margin || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+          const realized = `₹${cleanNumber(c.realized_pl).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+          const unrealized = `₹${cleanNumber(c.unrealized_pl).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+          const total = `₹${(cleanNumber(c.realized_pl) + cleanNumber(c.unrealized_pl)).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+          const avail = `₹${cleanNumber(c.available_margin).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+          const used = `₹${cleanNumber(c.used_margin).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
           return `${code},"${name}","${realized}","${unrealized}","${total}","${avail}","${used}"`;
         });
       }
@@ -262,8 +269,8 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ onNotify, currentUser 
         return trades.map((t: any) => {
           const time = t.executed_at || t.timestamp || new Date().toISOString();
           const symbol = t.symbol || '';
-          const qty = t.quantity || t.qty || 0;
-          const price = Number(t.price || 0);
+          const qty = cleanNumber(t.quantity || t.qty);
+          const price = cleanNumber(t.price);
           const turnover = `₹${(qty * price).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
           const side = t.side || '';
           const client = t.client_id || t.clientId || '';
@@ -284,8 +291,8 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ onNotify, currentUser 
           const client = o.client_id || o.clientId || '';
           const symbol = o.symbol || '';
           const side = o.side || '';
-          const qty = o.quantity || o.qty || 0;
-          const price = `₹${Number(o.price || 0).toFixed(2)}`;
+          const qty = cleanNumber(o.quantity || o.qty);
+          const price = `₹${cleanNumber(o.price).toFixed(2)}`;
           const status = o.status || '';
           const time = o.created_at || new Date().toISOString();
           return `${id},${client},${symbol},${o.type || 'LIMIT'},${side},${qty},"${price}",${status},${time}`;
@@ -300,11 +307,11 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ onNotify, currentUser 
         return pos.map((p: any) => {
           const client = p.client_id || p.clientId || '';
           const symbol = p.symbol || '';
-          const netQty = p.net_quantity || p.quantity || 0;
-          const buyAvg = `₹${Number(p.buy_average || p.buy_price || 0).toFixed(2)}`;
-          const sellAvg = `₹${Number(p.sell_average || p.sell_price || 0).toFixed(2)}`;
-          const ltp = `₹${Number(p.ltp || p.current_price || 0).toFixed(2)}`;
-          const pl = `₹${Number(p.unrealized_pl || p.pnl || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+          const netQty = cleanNumber(p.net_quantity || p.quantity);
+          const buyAvg = `₹${cleanNumber(p.buy_average || p.buy_price).toFixed(2)}`;
+          const sellAvg = `₹${cleanNumber(p.sell_average || p.sell_price).toFixed(2)}`;
+          const ltp = `₹${cleanNumber(p.ltp || p.current_price).toFixed(2)}`;
+          const pl = `₹${cleanNumber(p.unrealized_pl || p.pnl).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
           return `${client},${symbol},${netQty},"${buyAvg}","${sellAvg}","${ltp}","${pl}"`;
         });
       }
@@ -317,7 +324,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ onNotify, currentUser 
         return deps.map((d: any) => {
           const id = d.id || '';
           const name = (d.client_name || d.client_id || '').replace(/"/g, '""');
-          const amt = `₹${Number(d.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+          const amt = `₹${cleanNumber(d.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
           const gateway = d.payment_gateway || d.method || 'UPI/IMPS';
           const ref = d.bank_reference || d.reference_no || '';
           const status = d.status || '';
@@ -335,8 +342,8 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ onNotify, currentUser 
           const id = w.id || '';
           const name = (w.client_name || w.client_id || '').replace(/"/g, '""');
           const acc = w.account_number || w.bank_account || '';
-          const reqAmt = `₹${Number(w.requested_amount || w.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
-          const appAmt = `₹${Number(w.approved_amount || w.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+          const reqAmt = `₹${cleanNumber(w.requested_amount || w.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+          const appAmt = `₹${cleanNumber(w.approved_amount || w.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
           const status = w.status || '';
           const date = w.processed_at || w.created_at || '';
           return `${id},"${name}",${acc},"${reqAmt}","${appAmt}",${status},${date}`;
@@ -372,7 +379,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ onNotify, currentUser 
           const master = b.master_id || b.master_name || '';
           const subBrokers = b.sub_brokers_count || 0;
           const activeClients = b.active_clients_count || 0;
-          const vol = `₹${Number(b.total_volume || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+          const vol = `₹${cleanNumber(b.total_volume).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
           const status = b.status || 'ACTIVE';
           return `${code},"${name}",${master},${subBrokers},${activeClients},"${vol}",${status}`;
         });
@@ -387,9 +394,9 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ onNotify, currentUser 
           const master = (cm.master_name || cm.master_id || '').replace(/"/g, '""');
           const broker = (cm.broker_name || cm.broker_id || '').replace(/"/g, '""');
           const client = (cm.client_name || cm.client_id || '').replace(/"/g, '""');
-          const gross = `₹${Number(cm.gross_amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+          const gross = `₹${cleanNumber(cm.gross_amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
           const split = cm.split_ratio || '100%';
-          const net = `₹${Number(cm.net_payout || cm.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+          const net = `₹${cleanNumber(cm.net_payout || cm.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
           return `"${master}","${broker}","${client}","${gross}","${split}","${net}"`;
         });
       }
@@ -400,7 +407,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ onNotify, currentUser 
       const data = await res.json();
       if (!Array.isArray(data) || data.length === 0) return [];
       return data.map((item: any, i: number) => {
-        return `REC-${101 + i},"${(item.name || item.id || '').replace(/"/g, '""')}",Category A,1,Active,"₹${Number(item.available_margin || 0).toLocaleString('en-IN')}",${item.created_at || dateFrom || ''}`;
+        return `REC-${101 + i},"${(item.name || item.id || '').replace(/"/g, '""')}",Category A,1,Active,"₹${cleanNumber(item.available_margin).toLocaleString('en-IN')}",${item.created_at || dateFrom || ''}`;
       });
     } catch {
       return [];

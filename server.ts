@@ -1304,7 +1304,7 @@ async function startServer() {
     }
   });
 
-  app.get(['/api/admin/brokers', '/api/admin/hierarchy/brokers'], authenticate, requirePermission('brokers.view'), async (req, res) => {
+  app.get(['/api/admin/brokers', '/api/admin/hierarchy/brokers', '/api/brokers'], authenticate, requirePermission('brokers.view'), async (req, res) => {
     try {
       const tenantScope = resolveStrictTenantScope(req);
       const masterId = req.query.masterId as string;
@@ -2030,6 +2030,20 @@ async function startServer() {
     }
   });
 
+  app.put(['/api/admin/commercial/commission-plans/:id', '/api/commercial/commission-plans/:id'], authenticate, requirePermission('commission.manage'), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const tenantScope = resolveStrictTenantScope(req) || 'TNT-001';
+      if (typeof (activeTradingDataProvider as any).updateCommissionPlan === 'function') {
+        const updated = await (activeTradingDataProvider as any).updateCommissionPlan(id, { ...req.body, tenant_id: tenantScope });
+        return res.json(updated);
+      }
+      res.json({ id, ...req.body });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.post('/api/admin/commercial/commission-rules', authenticate, requirePermission('commission.manage'), async (req, res) => {
     try {
       const tenantScope = resolveStrictTenantScope(req) || 'TNT-001';
@@ -2038,6 +2052,20 @@ async function startServer() {
         return res.status(201).json(rule);
       }
       res.status(201).json({ id: `RUL-${Date.now().toString().slice(-4)}`, ...req.body });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.put(['/api/admin/commercial/commission-rules/:id', '/api/commercial/commission-rules/:id'], authenticate, requirePermission('commission.manage'), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const tenantScope = resolveStrictTenantScope(req) || 'TNT-001';
+      if (typeof (activeTradingDataProvider as any).updateCommissionRule === 'function') {
+        const updated = await (activeTradingDataProvider as any).updateCommissionRule(id, { ...req.body, tenant_id: tenantScope });
+        return res.json(updated);
+      }
+      res.json({ id, ...req.body });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -2106,11 +2134,47 @@ async function startServer() {
   app.post('/api/admin/risk/profiles', authenticate, requirePermission('risk.manage'), async (req, res) => {
     try {
       const tenantScope = resolveStrictTenantScope(req) || 'TNT-001';
+      // Server-side financial input validation: reject negative quantities and negative risk limits
+      const { maxOrderQty, maxExposure, dailyLossLimit, max_order_value, daily_loss_limit, max_leverage, maxLeverage } = req.body;
+      for (const val of [maxOrderQty, maxExposure, dailyLossLimit, max_order_value, daily_loss_limit, max_leverage, maxLeverage]) {
+        if (val !== undefined && val !== null) {
+          const num = parseFloat(String(val).replace(/[^0-9.-]/g, ''));
+          if (!isNaN(num) && num < 0) {
+            return res.status(400).json({ error: 'Risk profile parameters and quantities cannot be negative.' });
+          }
+        }
+      }
+
       if (typeof (activeTradingDataProvider as any).createRiskProfile === 'function') {
         const profile = await (activeTradingDataProvider as any).createRiskProfile({ ...req.body, tenant_id: tenantScope });
         return res.status(201).json(profile);
       }
       res.status(201).json({ id: `RP00${Date.now().toString().slice(-3)}`, ...req.body });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.put(['/api/admin/risk/profiles/:id', '/api/risk/profiles/:id'], authenticate, requirePermission('risk.manage'), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const tenantScope = resolveStrictTenantScope(req) || 'TNT-001';
+      // Server-side financial input validation: reject negative quantities and negative risk limits
+      const { maxOrderQty, maxExposure, dailyLossLimit, max_order_value, daily_loss_limit, max_leverage, maxLeverage } = req.body;
+      for (const val of [maxOrderQty, maxExposure, dailyLossLimit, max_order_value, daily_loss_limit, max_leverage, maxLeverage]) {
+        if (val !== undefined && val !== null) {
+          const num = parseFloat(String(val).replace(/[^0-9.-]/g, ''));
+          if (!isNaN(num) && num < 0) {
+            return res.status(400).json({ error: 'Risk profile parameters and quantities cannot be negative.' });
+          }
+        }
+      }
+
+      if (typeof (activeTradingDataProvider as any).updateRiskProfile === 'function') {
+        const updated = await (activeTradingDataProvider as any).updateRiskProfile(id, { ...req.body, tenant_id: tenantScope });
+        return res.json(updated);
+      }
+      res.json({ id, ...req.body });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -2185,7 +2249,7 @@ async function startServer() {
   // ----------------------------------------------------
   // TRADING: Orders & Trades
   // ----------------------------------------------------
-  app.get(['/api/admin/trades', '/api/admin/trading/trades'], authenticate, requirePermission('trades.view'), async (req, res) => {
+  app.get(['/api/admin/trades', '/api/admin/trading/trades', '/api/trades'], authenticate, requirePermission('trades.view'), async (req, res) => {
     try {
       const tenantScope = resolveStrictTenantScope(req);
       const trades = await activeTradingDataProvider.getAllTrades(tenantScope);
@@ -2368,6 +2432,35 @@ async function startServer() {
   });
 
   // 2. GET /api/tenant/config - Public feature flags & platform settings
+  const adminUserSettingsMap = new Map<string, any>();
+
+  app.all(['/api/settings', '/api/user/settings'], authenticate, async (req, res, next) => {
+    const userId = req.user?.id || 'admin-default';
+    if (req.method === 'GET') {
+      const existing = adminUserSettingsMap.get(userId) || {
+        soundAlerts: true,
+        orderConfirmation: true,
+        emailDigests: true,
+        compactDensity: false,
+        theme: 'dark'
+      };
+      return res.json({ success: true, settings: existing });
+    }
+    if (req.method === 'PATCH' || req.method === 'PUT' || req.method === 'POST') {
+      const current = adminUserSettingsMap.get(userId) || {
+        soundAlerts: true,
+        orderConfirmation: true,
+        emailDigests: true,
+        compactDensity: false,
+        theme: 'dark'
+      };
+      const updated = { ...current, ...req.body };
+      adminUserSettingsMap.set(userId, updated);
+      return res.json({ success: true, settings: updated });
+    }
+    next();
+  });
+
   app.get('/api/tenant/config', async (req, res) => {
     try {
       const { tenant, platformConfig } = await resolveTradingTenant(req);

@@ -413,9 +413,26 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
     setNewRuleCondition('');
   };
 
-  const handleUpdateRule = (e: React.FormEvent) => {
+  const handleUpdateRule = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingRule) return;
+
+    try {
+      await fetch(`/api/admin/commercial/commission-rules/${encodeURIComponent(editingRule.id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(editingRule)
+      });
+    } catch (err) {
+      console.warn('Failed to persist commission rule update:', err);
+    }
+
+    try {
+      const stored = JSON.parse(localStorage.getItem('admin_commission_rules') || '[]');
+      const updated = stored.map((r: any) => r.id === editingRule.id ? editingRule : r);
+      localStorage.setItem('admin_commission_rules', JSON.stringify(updated));
+    } catch {}
 
     setRulesList(prev => prev.map(r => r.id === editingRule.id ? editingRule : r));
     if (selectedRule.id === editingRule.id) {
@@ -485,7 +502,7 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
     setNewPlanRate('');
   };
 
-  const handleDuplicatePlan = (plan: CommissionPlanItem) => {
+  const handleDuplicatePlan = async (plan: CommissionPlanItem) => {
     const newId = `CP00${plans.length + 1}`;
     const cloned: CommissionPlanItem = {
       ...plan,
@@ -494,13 +511,46 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
       users: 0,
       status: 'ACTIVE'
     };
+
+    try {
+      await fetch('/api/admin/commercial/commission-plans', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(cloned)
+      });
+    } catch {}
+
+    try {
+      const stored = JSON.parse(localStorage.getItem('admin_commission_plans') || '[]');
+      stored.push(cloned);
+      localStorage.setItem('admin_commission_plans', JSON.stringify(stored));
+    } catch {}
+
     setPlans(prev => [...prev, cloned]);
     notify(`Cloned ${plan.planName} as ${cloned.planName} (${newId})`, 'success');
   };
 
-  const handleUpdatePlan = (e: React.FormEvent) => {
+  const handleUpdatePlan = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingPlan) return;
+
+    try {
+      await fetch(`/api/admin/commercial/commission-plans/${encodeURIComponent(editingPlan.planId)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(editingPlan)
+      });
+    } catch (err) {
+      console.warn('Failed to persist commission plan update:', err);
+    }
+
+    try {
+      const stored = JSON.parse(localStorage.getItem('admin_commission_plans') || '[]');
+      const updated = stored.map((p: any) => p.planId === editingPlan.planId ? editingPlan : p);
+      localStorage.setItem('admin_commission_plans', JSON.stringify(updated));
+    } catch {}
 
     setPlans(prev => prev.map(p => (p.planId === editingPlan.planId ? editingPlan : p)));
     notify(`Updated commission plan ${editingPlan.planName}`, 'success');

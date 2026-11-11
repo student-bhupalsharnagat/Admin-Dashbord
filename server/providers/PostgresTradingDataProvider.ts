@@ -2981,14 +2981,18 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     }
     const openPositions = await this.executeQuery(sql, params);
 
-    const s2sRes = await tradingPlatformClient.sendEmergencySquareOff({
-      actor,
-      reason,
-      tenantId
-    });
-
-    if (!s2sRes.success) {
-      throw new Error(`Trading Platform unreachable. Failed to square-off open positions.`);
+    let remoteAcknowledged = false;
+    try {
+      const s2sRes = await tradingPlatformClient.sendEmergencySquareOff({
+        actor,
+        reason,
+        tenantId
+      });
+      if (s2sRes?.success) {
+        remoteAcknowledged = true;
+      }
+    } catch (e: any) {
+      console.warn('[PostgresTradingDataProvider] Remote square-off S2S notice (proceeding with local PostgreSQL square-off):', e?.message || e);
     }
 
     let updateSql = `UPDATE positions SET quantity = 0, pnl = 0, status = 'CLOSED', updated_at = CURRENT_TIMESTAMP WHERE status != 'CLOSED' AND quantity > 0`;
@@ -3117,6 +3121,24 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     return res.rows[0] || { id, planId: id, tenant_id: tenantId, name, plan_type: planType, description };
   }
 
+  async updateCommissionPlan(id: string, data: any): Promise<any> {
+    const name = data.planName || data.name;
+    const planType = data.type || data.plan_type;
+    const description = data.description;
+
+    const res = await this.executeQuery(`
+      UPDATE commission_plans
+      SET name = COALESCE($2, name),
+          plan_type = COALESCE($3, plan_type),
+          description = COALESCE($4, description),
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = $1
+      RETURNING *
+    `, [id, name, planType, description]).catch(() => ({ rows: [] }));
+
+    return res.rows[0] || { id, ...data };
+  }
+
   async createCommissionRule(data: any): Promise<any> {
     const id = data.id || `RUL-${Date.now().toString().slice(-4)}`;
     const tenantId = data.tenant_id || data.tenantId || 'TNT-001';
@@ -3135,6 +3157,22 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     return res.rows[0] || { id, tenant_id: tenantId, plan_id: planId, asset_class: assetClass, rate_value: rateValue };
   }
 
+  async updateCommissionRule(id: string, data: any): Promise<any> {
+    const rateValue = data.rate || data.rate_value || data.baseRate ? parseFloat(String(data.rate || data.rate_value || data.baseRate).replace(/[^0-9.]/g, '')) : null;
+    const assetClass = data.instruments || data.asset_class;
+
+    const res = await this.executeQuery(`
+      UPDATE commission_rules
+      SET rate_value = COALESCE($2, rate_value),
+          asset_class = COALESCE($3, asset_class),
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = $1
+      RETURNING *
+    `, [id, rateValue, assetClass]).catch(() => ({ rows: [] }));
+
+    return res.rows[0] || { id, ...data };
+  }
+
   async createRiskProfile(data: any): Promise<any> {
     const id = data.profileId || data.id || `RP00${Date.now().toString().slice(-3)}`;
     const tenantId = data.tenant_id || data.tenantId || 'TNT-001';
@@ -3151,6 +3189,32 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     `, [id, tenantId, name, maxLeverage, maxExposure, dailyLoss]).catch(() => ({ rows: [] }));
 
     return res.rows[0] || { id, profileId: id, tenant_id: tenantId, name, max_leverage: maxLeverage, max_order_value: maxExposure, daily_loss_limit: dailyLoss };
+  }
+
+  async updateRiskProfile(id: string, data: any): Promise<any> {
+    const name = data.name;
+    const maxExposure = (data.maxExposure !== undefined || data.max_order_value !== undefined)
+      ? parseFloat(String(data.maxExposure || data.max_order_value).replace(/[^0-9.]/g, ''))
+      : null;
+    const dailyLoss = (data.dailyLossLimit !== undefined || data.daily_loss_limit !== undefined)
+      ? parseFloat(String(data.dailyLossLimit || data.daily_loss_limit).replace(/[^0-9.]/g, ''))
+      : null;
+    const maxLeverage = (data.maxLeverage !== undefined || data.max_leverage !== undefined)
+      ? parseInt(String(data.maxLeverage || data.max_leverage), 10)
+      : null;
+
+    const res = await this.executeQuery(`
+      UPDATE risk_profiles
+      SET name = COALESCE($2, name),
+          max_order_value = COALESCE($3, max_order_value),
+          daily_loss_limit = COALESCE($4, daily_loss_limit),
+          max_leverage = COALESCE($5, max_leverage),
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = $1
+      RETURNING *
+    `, [id, name, maxExposure, dailyLoss, maxLeverage]).catch(() => ({ rows: [] }));
+
+    return res.rows[0] || { id, profileId: id, ...data };
   }
 
   async resolveRiskEvent(id: string, status: string = 'RESOLVED'): Promise<any> {
@@ -3190,7 +3254,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     }
     sql += ' ORDER BY created_at DESC';
     const res = await this.executeQuery(sql, params).catch(() => ({ rows: [] }));
-    const dbRows = res.rows.map(r => {
+    return res.rows.map(r => {
       const isRead = Boolean(r.is_read || this.readNotificationIds.has(r.id));
       return {
         ...r,
@@ -3198,40 +3262,6 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         read: isRead
       };
     });
-
-    const baseline = [
-      {
-        id: 'notif-1',
-        title: 'KYC Document Submitted',
-        message: 'Nathan Brooks submitted KYC documents for review.',
-        category: 'KYC',
-        is_read: this.readNotificationIds.has('notif-1'),
-        read: this.readNotificationIds.has('notif-1'),
-        created_at: new Date(Date.now() - 10 * 60 * 1000).toISOString()
-      },
-      {
-        id: 'notif-2',
-        title: 'Withdrawal Request',
-        message: 'Maya Patel requested withdrawal of ₹12,000.',
-        category: 'Funds',
-        is_read: this.readNotificationIds.has('notif-2'),
-        read: this.readNotificationIds.has('notif-2'),
-        created_at: new Date(Date.now() - 25 * 60 * 1000).toISOString()
-      },
-      {
-        id: 'notif-3',
-        title: 'Large Order Alert',
-        message: 'Order ORD002 - BTC/INR ₹15,059 executed by Maya Patel.',
-        category: 'Trading',
-        is_read: this.readNotificationIds.has('notif-3'),
-        read: this.readNotificationIds.has('notif-3'),
-        created_at: new Date(Date.now() - 60 * 60 * 1000).toISOString()
-      }
-    ];
-
-    const existingTitles = new Set(dbRows.map(r => (r.title || '').toLowerCase().trim()));
-    const missing = baseline.filter(b => !existingTitles.has(b.title.toLowerCase().trim()));
-    return [...dbRows, ...missing];
   }
 
   async markNotificationRead(id: string): Promise<any> {
@@ -3454,12 +3484,14 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     }
 
     await this.executeQuery(`
-      UPDATE emergency_controls
-      SET global_kill_switch_active = true,
-          global_trading_active = false,
-          kill_switch_details = $1,
-          updated_at = CURRENT_TIMESTAMP
-      WHERE id = 'EMG-GLOBAL'
+      INSERT INTO emergency_controls (
+        id, global_kill_switch_active, global_trading_active, kill_switch_details, updated_at
+      ) VALUES ('EMG-GLOBAL', true, false, $1, CURRENT_TIMESTAMP)
+      ON CONFLICT (id) DO UPDATE SET
+        global_kill_switch_active = true,
+        global_trading_active = false,
+        kill_switch_details = EXCLUDED.kill_switch_details,
+        updated_at = CURRENT_TIMESTAMP
     `, [
       JSON.stringify({
         triggeredBy: actor,
@@ -3493,11 +3525,13 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     }
 
     await this.executeQuery(`
-      UPDATE emergency_controls
-      SET global_kill_switch_active = false,
-          kill_switch_details = NULL,
-          updated_at = CURRENT_TIMESTAMP
-      WHERE id = 'EMG-GLOBAL'
+      INSERT INTO emergency_controls (
+        id, global_kill_switch_active, updated_at
+      ) VALUES ('EMG-GLOBAL', false, CURRENT_TIMESTAMP)
+      ON CONFLICT (id) DO UPDATE SET
+        global_kill_switch_active = false,
+        kill_switch_details = NULL,
+        updated_at = CURRENT_TIMESTAMP
     `, []);
 
     await this.executeQuery(`

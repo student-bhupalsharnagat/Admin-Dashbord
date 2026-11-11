@@ -680,6 +680,15 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
 
     setPositions(prev => prev.filter(p => p.id !== positionId));
 
+    // Automatically cancel associated pending OCO/GTT trigger orders at mock broker level
+    setOrders(prev =>
+      prev.map(o =>
+        o.symbol === pos.symbol && (o.status === 'OPEN' || o.status === 'PENDING')
+          ? { ...o, status: 'CANCELLED' }
+          : o
+      )
+    );
+
     try {
       fetch('/api/events/trading-platform', {
         method: 'POST',
@@ -711,6 +720,16 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
       totalPnL: prev.totalPnL + totalPnl
     }));
     setPositions([]);
+
+    // Automatically cancel all pending OCO/GTT trigger orders
+    setOrders(prev =>
+      prev.map(o =>
+        o.status === 'OPEN' || o.status === 'PENDING'
+          ? { ...o, status: 'CANCELLED' }
+          : o
+      )
+    );
+
     onNotify?.(`All positions squared off! Total Realized P&L: ₹${totalPnl.toFixed(2)}.`, 'success');
   };
 

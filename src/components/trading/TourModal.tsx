@@ -29,9 +29,9 @@ interface TourStep {
 }
 
 export const TourModal: React.FC<TourModalProps> = ({ isOpen, onClose }) => {
-  if (!isOpen) return null;
-
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
+
+  if (!isOpen) return null;
 
   const steps: TourStep[] = [
     {

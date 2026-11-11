@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   User,
@@ -61,6 +61,30 @@ export const UserProfileModals: React.FC<UserProfileModalsProps> = ({
   const [compactDensity, setCompactDensity] = useState(false);
   const [settingsSaved, setSettingsSaved] = useState(false);
 
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('admin_user_settings');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.soundAlerts !== undefined) setSoundAlerts(parsed.soundAlerts);
+        if (parsed.orderConfirmation !== undefined) setOrderConfirmation(parsed.orderConfirmation);
+        if (parsed.emailDigests !== undefined) setEmailDigests(parsed.emailDigests);
+        if (parsed.compactDensity !== undefined) setCompactDensity(parsed.compactDensity);
+      }
+    } catch {}
+    fetch('/api/user/settings', { credentials: 'include' })
+      .then(r => r.json())
+      .then(d => {
+        if (d && d.settings) {
+          if (d.settings.soundAlerts !== undefined) setSoundAlerts(d.settings.soundAlerts);
+          if (d.settings.orderConfirmation !== undefined) setOrderConfirmation(d.settings.orderConfirmation);
+          if (d.settings.emailDigests !== undefined) setEmailDigests(d.settings.emailDigests);
+          if (d.settings.compactDensity !== undefined) setCompactDensity(d.settings.compactDensity);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   if (!activeModal) return null;
 
   // Handle Save Profile
@@ -106,6 +130,16 @@ export const UserProfileModals: React.FC<UserProfileModalsProps> = ({
   // Handle Save Settings
   const handleSaveSettings = (e: React.FormEvent) => {
     e.preventDefault();
+    const payload = { soundAlerts, orderConfirmation, emailDigests, compactDensity };
+    try {
+      localStorage.setItem('admin_user_settings', JSON.stringify(payload));
+      fetch('/api/user/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      }).catch(() => {});
+    } catch {}
     setSettingsSaved(true);
     setTimeout(() => {
       setSettingsSaved(false);

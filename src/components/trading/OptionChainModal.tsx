@@ -15,9 +15,9 @@ export const OptionChainModal: React.FC<OptionChainModalProps> = ({
   onClose,
   onSelectStrike
 }) => {
-  if (!isOpen || !instrument) return null;
-
   const [selectedExpiry, setSelectedExpiry] = useState('31 Aug');
+
+  if (!isOpen || !instrument) return null;
   const expiries = ['31 Aug', '07 Sep', '14 Sep', '28 Sep'];
 
   const spot = instrument.lastPrice;

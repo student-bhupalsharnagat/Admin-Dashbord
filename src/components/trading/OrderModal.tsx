@@ -46,8 +46,6 @@ export const OrderModal: React.FC<OrderModalProps> = ({
   onOpenChart,
   onOpenOptionChain
 }) => {
-  if (!isOpen || !instrument) return null;
-
   // View mode inside modal: 'ORDER' or 'CHART'
   const [modalTab, setModalTab] = useState<'ORDER' | 'CHART'>('ORDER');
   const [isExpanded, setIsExpanded] = useState(false);
@@ -55,7 +53,7 @@ export const OrderModal: React.FC<OrderModalProps> = ({
   // Order configuration
   const [product, setProduct] = useState<'INTRADAY' | 'HOLDING'>('INTRADAY');
   const [orderType, setOrderType] = useState<'MARKET' | 'LIMIT'>('MARKET');
-  const [limitPrice, setLimitPrice] = useState<number>(instrument.lastPrice);
+  const [limitPrice, setLimitPrice] = useState<number>(instrument?.lastPrice || 0);
   const [unitMode, setUnitMode] = useState<'LOTS' | 'QTY'>('LOTS');
   const [lots, setLots] = useState<number>(1);
   const [enableSLTarget, setEnableSLTarget] = useState(false);
@@ -67,41 +65,9 @@ export const OrderModal: React.FC<OrderModalProps> = ({
   const [timeframe, setTimeframe] = useState<'1m' | '5m' | '15m' | '1h' | '1D'>('15m');
   const [hoveredCandle, setHoveredCandle] = useState<Candle | null>(null);
 
-  const effectiveQty = unitMode === 'LOTS' ? lots * instrument.lotSize : lots;
-  const effectiveLots = unitMode === 'LOTS' ? lots : Math.max(1, Math.round(lots / instrument.lotSize));
-
-  // Margin requirement calculation
-  const marginPerLot = product === 'INTRADAY' ? instrument.intraday : instrument.holding;
-  const totalMarginRequired = marginPerLot * effectiveLots;
-  const hasSufficientMargin = wallet.availableBalance >= totalMarginRequired;
-
-  const isPositive = instrument.change >= 0;
-
-  // Execute order handler (works for either BUY or SELL button)
-  const handleExecute = (side: 'BUY' | 'SELL') => {
-    setIsSubmitting(true);
-    setTimeout(() => {
-      onPlaceOrder({
-        symbol: instrument.symbol,
-        category: instrument.category,
-        type: side,
-        orderType,
-        product,
-        lots: effectiveLots,
-        quantity: effectiveQty,
-        price: orderType === 'LIMIT' ? limitPrice : (side === 'BUY' ? instrument.ask : instrument.bid),
-        status: orderType === 'MARKET' ? 'EXECUTED' : 'OPEN',
-        executionPrice: orderType === 'MARKET' ? (side === 'BUY' ? instrument.ask : instrument.bid) : undefined,
-        stopLoss: enableSLTarget && stopLoss ? Number(stopLoss) : undefined,
-        target: enableSLTarget && target ? Number(target) : undefined
-      });
-      setIsSubmitting(false);
-      onClose();
-    }, 350);
-  };
-
   // Generate realistic candles for the Chart tab
   const candles = useMemo(() => {
+    if (!instrument) return [];
     const list: Candle[] = [];
     let current = instrument.lastPrice * 0.988;
     const baseTime = new Date();
@@ -142,6 +108,41 @@ export const OrderModal: React.FC<OrderModalProps> = ({
 
     return list;
   }, [instrument, timeframe]);
+
+  if (!isOpen || !instrument) return null;
+
+  const effectiveQty = unitMode === 'LOTS' ? lots * instrument.lotSize : lots;
+  const effectiveLots = unitMode === 'LOTS' ? lots : Math.max(1, Math.round(lots / instrument.lotSize));
+
+  // Margin requirement calculation
+  const marginPerLot = product === 'INTRADAY' ? instrument.intraday : instrument.holding;
+  const totalMarginRequired = marginPerLot * effectiveLots;
+  const hasSufficientMargin = wallet.availableBalance >= totalMarginRequired;
+
+  const isPositive = instrument.change >= 0;
+
+  // Execute order handler (works for either BUY or SELL button)
+  const handleExecute = (side: 'BUY' | 'SELL') => {
+    setIsSubmitting(true);
+    setTimeout(() => {
+      onPlaceOrder({
+        symbol: instrument.symbol,
+        category: instrument.category,
+        type: side,
+        orderType,
+        product,
+        lots: effectiveLots,
+        quantity: effectiveQty,
+        price: orderType === 'LIMIT' ? limitPrice : (side === 'BUY' ? instrument.ask : instrument.bid),
+        status: orderType === 'MARKET' ? 'EXECUTED' : 'OPEN',
+        executionPrice: orderType === 'MARKET' ? (side === 'BUY' ? instrument.ask : instrument.bid) : undefined,
+        stopLoss: enableSLTarget && stopLoss ? Number(stopLoss) : undefined,
+        target: enableSLTarget && target ? Number(target) : undefined
+      });
+      setIsSubmitting(false);
+      onClose();
+    }, 350);
+  };
 
   const minPrice = Math.min(...candles.map(c => c.low));
   const maxPrice = Math.max(...candles.map(c => c.high));
@@ -622,6 +623,26 @@ export const OrderModal: React.FC<OrderModalProps> = ({
             <ArrowUpRight className="w-4 h-4 stroke-[3]" />
             <div className="text-left">
               <span className="block leading-none">BUY ASK</span>
+              <span className="text-[11px] font-mono opacity-90 font-normal">
+                ₹{totalMarginRequired.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+              </span>
+            </div>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+              <span className="text-[11px] font-mono opacity-90 font-normal">
+                ₹{totalMarginRequired.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+              </span>
+            </div>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
               <span className="text-[11px] font-mono opacity-90 font-normal">
                 ₹{totalMarginRequired.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
               </span>

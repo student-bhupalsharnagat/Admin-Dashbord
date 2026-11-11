@@ -17,11 +17,11 @@ export const WalletModal: React.FC<WalletModalProps> = ({
   onDeposit,
   onWithdraw
 }) => {
-  if (!isOpen) return null;
-
   const [activeTab, setActiveTab] = useState<'DEPOSIT' | 'WITHDRAW' | 'TRANSACTIONS'>('DEPOSIT');
   const [depositAmount, setDepositAmount] = useState('50000');
   const [depositMethod, setDepositMethod] = useState<'UPI' | 'NETBANKING' | 'IMPS'>('UPI');
+  const [upiId, setUpiId] = useState('');
+  const [vpaError, setVpaError] = useState('');
   const [showQrCode, setShowQrCode] = useState(false);
   const [withdrawAmount, setWithdrawAmount] = useState('10000');
   const [selectedBank, setSelectedBank] = useState('HDFC Bank •••• 8912');
@@ -37,20 +37,31 @@ export const WalletModal: React.FC<WalletModalProps> = ({
     { id: 'TX-904', type: 'WITHDRAWAL', amount: 25000, method: 'IMPS to HDFC Bank (8912)', status: 'SUCCESS', time: '28 Aug, 04:30 PM', refId: 'WDR/2026/184910' }
   ]);
 
+  if (!isOpen) return null;
+
   const handleDepositSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const amt = parseFloat(depositAmount);
     if (!amt || amt < 100) return;
 
+    if (depositMethod === 'UPI') {
+      const vpaRegex = /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/;
+      if (!upiId || !vpaRegex.test(upiId.trim())) {
+        setVpaError('Please enter a valid UPI ID / VPA (e.g. name@okhdfcbank)');
+        return;
+      }
+    }
+
+    setVpaError('');
     setIsProcessing(true);
     setTimeout(() => {
-      onDeposit(amt, depositMethod === 'UPI' ? 'UPI Instant (GPay)' : 'Net Banking (HDFC)');
+      onDeposit(amt, depositMethod === 'UPI' ? `UPI Instant (${upiId.trim()})` : 'Net Banking (HDFC)');
       setTransactions(prev => [
         {
           id: `TX-${Date.now().toString().slice(-4)}`,
           type: 'DEPOSIT',
           amount: amt,
-          method: depositMethod === 'UPI' ? 'UPI Instant (GPay)' : 'Net Banking',
+          method: depositMethod === 'UPI' ? `UPI (${upiId.trim()})` : 'Net Banking',
           status: 'SUCCESS',
           time: 'Just now',
           refId: `REF/${Date.now().toString().slice(-6)}`
@@ -264,7 +275,21 @@ export const WalletModal: React.FC<WalletModalProps> = ({
 
               {depositMethod === 'UPI' ? (
                 <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-[#09111D] border border-slate-200 dark:border-[#162234] space-y-3 text-xs">
-                  <div className="flex items-center justify-between">
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-400 block mb-1 uppercase">
+                      Your UPI ID / VPA
+                    </label>
+                    <input
+                      type="text"
+                      value={upiId}
+                      onChange={e => { setUpiId(e.target.value); setVpaError(''); }}
+                      className="w-full bg-white dark:bg-[#070D18] border border-slate-200 dark:border-[#162234] focus:border-amber-500 rounded-xl px-3 py-2 text-xs font-mono text-slate-900 dark:text-white outline-none"
+                      placeholder="e.g. user@okhdfcbank"
+                    />
+                    {vpaError && <p className="text-[11px] text-rose-500 mt-1">{vpaError}</p>}
+                  </div>
+
+                  <div className="flex items-center justify-between pt-1">
                     <span className="text-slate-400">Merchant VPA:</span>
                     <button
                       type="button"

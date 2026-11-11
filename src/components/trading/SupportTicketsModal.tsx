@@ -40,8 +40,6 @@ export const SupportTicketsModal: React.FC<SupportTicketsModalProps> = ({
   isOpen,
   onClose
 }) => {
-  if (!isOpen) return null;
-
   const [mode, setMode] = useState<'LIST' | 'CREATE' | 'DETAIL'>('LIST');
   const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'OPEN' | 'IN_PROGRESS' | 'RESOLVED'>('ALL');
@@ -109,6 +107,8 @@ export const SupportTicketsModal: React.FC<SupportTicketsModalProps> = ({
       ]
     }
   ]);
+
+  if (!isOpen) return null;
 
   const activeTicket = tickets.find(t => t.id === selectedTicketId);
 

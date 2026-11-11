@@ -29,7 +29,7 @@ async function runPhase5JbTests() {
   await testConnection();
 
   const originalBaseUrl = tradingPlatformClient.getBaseUrl();
-  tradingPlatformClient.setBaseUrl('http://localhost:3001');
+  tradingPlatformClient.setBaseUrl('http://127.0.0.1:3001');
 
   // 2. Start lightweight mock Trading Platform HTTP server on port 3001
   const receivedMockRequests: Array<{ method?: string; url?: string; headers: http.IncomingHttpHeaders; body: any }> = [];
@@ -69,8 +69,8 @@ async function runPhase5JbTests() {
   });
 
   await new Promise<void>((resolve) => {
-    mockTradingPlatform.listen(3001, () => {
-      console.log('[Mock Trading Platform] Listening on http://localhost:3001 for S2S tests\n');
+    mockTradingPlatform.listen(3001, '0.0.0.0', () => {
+      console.log('[Mock Trading Platform] Listening on http://127.0.0.1:3001 for S2S tests\n');
       resolve();
     });
   });

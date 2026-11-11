@@ -276,9 +276,63 @@ export const RiskLimitsView: React.FC<RiskLimitsViewProps> = ({ onNotify }) => {
     setNewMarginReq('');
   };
 
-  const handleSaveEditProfile = (e: React.FormEvent) => {
+  const handleSaveEditProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingProfile) return;
+
+    // Validate numeric limits (reject negative quantities like -1)
+    const cleanQty = String(editingProfile.maxOrderQty || '').replace(/,/g, '').trim();
+    if (cleanQty) {
+      const parsed = Number(cleanQty);
+      if (isNaN(parsed) || parsed <= 0) {
+        notify('Max Order Quantity must be a positive number', 'warning');
+        return;
+      }
+    }
+
+    const cleanExposure = String(editingProfile.maxExposure || '').replace(/[$,₹, ]/g, '').trim();
+    if (cleanExposure) {
+      const parsed = Number(cleanExposure);
+      if (isNaN(parsed) || parsed <= 0) {
+        notify('Max Exposure must be a positive number', 'warning');
+        return;
+      }
+    }
+
+    const cleanLoss = String(editingProfile.dailyLossLimit || '').replace(/[$,₹, ]/g, '').trim();
+    if (cleanLoss) {
+      const parsed = Number(cleanLoss);
+      if (isNaN(parsed) || parsed <= 0) {
+        notify('Daily Loss Limit must be a positive number', 'warning');
+        return;
+      }
+    }
+
+    const cleanMargin = String(editingProfile.marginReq || '').replace(/%/g, '').trim();
+    if (cleanMargin) {
+      const parsed = Number(cleanMargin);
+      if (isNaN(parsed) || parsed <= 0) {
+        notify('Margin Requirement must be a positive percentage', 'warning');
+        return;
+      }
+    }
+
+    try {
+      await fetch(`/api/admin/risk/profiles/${encodeURIComponent(editingProfile.profileId)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(editingProfile)
+      });
+    } catch (err) {
+      console.warn('Failed to persist risk profile update:', err);
+    }
+
+    try {
+      const stored = JSON.parse(localStorage.getItem('admin_risk_profiles') || '[]');
+      const updated = stored.map((p: any) => p.profileId === editingProfile.profileId ? editingProfile : p);
+      localStorage.setItem('admin_risk_profiles', JSON.stringify(updated));
+    } catch {}
 
     setProfiles(prev =>
       prev.map(p => (p.profileId === editingProfile.profileId ? editingProfile : p))

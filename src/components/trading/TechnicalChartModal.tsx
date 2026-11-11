@@ -70,8 +70,6 @@ export const TechnicalChartModal: React.FC<TechnicalChartModalProps> = ({
   onOpenOrder,
   onOpenOptionChain
 }) => {
-  if (!isOpen || !instrument) return null;
-
   // View modes
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [chartEngine, setChartEngine] = useState<'tradingview' | 'canvas'>('tradingview');
@@ -123,10 +121,11 @@ export const TechnicalChartModal: React.FC<TechnicalChartModalProps> = ({
     return () => clearInterval(interval);
   }, []);
 
-  const tvSymbol = useMemo(() => getTradingViewSymbol(instrument), [instrument]);
+  const tvSymbol = useMemo(() => instrument ? getTradingViewSymbol(instrument) : '', [instrument]);
 
   // Generate synthetic high-density realistic candlestick data for Canvas mode
   const candles = useMemo(() => {
+    if (!instrument) return [];
     const list: Candle[] = [];
     let current = instrument.lastPrice * 0.982;
     const baseTime = new Date();
@@ -173,7 +172,7 @@ export const TechnicalChartModal: React.FC<TechnicalChartModalProps> = ({
     }
 
     // Anchor latest candle to live instrument price
-    if (list.length > 0) {
+    if (list.length > 0 && instrument) {
       const last = list[list.length - 1];
       last.close = instrument.lastPrice;
       last.high = Math.max(last.high, instrument.lastPrice);
@@ -181,7 +180,7 @@ export const TechnicalChartModal: React.FC<TechnicalChartModalProps> = ({
     }
 
     return list;
-  }, [instrument.lastPrice, timeframe]);
+  }, [instrument?.lastPrice, timeframe]);
 
   // Compute Moving Averages for canvas
   const ma20Points = useMemo(() => {
@@ -226,6 +225,8 @@ export const TechnicalChartModal: React.FC<TechnicalChartModalProps> = ({
     const encodedSymbol = encodeURIComponent(tvSymbol);
     return `https://s.tradingview.com/widgetembed/?frameElementId=tradingview_chart&symbol=${encodedSymbol}&interval=${tvInterval}&hidesidetoolbar=0&symboledit=1&saveimage=1&toolbarbg=0b111c&studies=%5B%5D&theme=dark&style=1&timezone=Asia%2FKolkata&withdateranges=1&studies_overrides=%7B%7D&overrides=%7B%22paneProperties.background%22%3A%22%23080e1a%22%2C%22paneProperties.vertGridProperties.color%22%3A%22%23121b2d%22%2C%22paneProperties.horzGridProperties.color%22%3A%22%23121b2d%22%7D&enabled_features=%5B%5D&disabled_features=%5B%5D&locale=en&utm_source=localhost&utm_medium=widget&utm_campaign=chart&utm_term=${encodedSymbol}&v=${refreshKey}`;
   }, [tvSymbol, tvInterval, refreshKey]);
+
+  if (!isOpen || !instrument) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/85 backdrop-blur-md select-none animate-in fade-in duration-150">

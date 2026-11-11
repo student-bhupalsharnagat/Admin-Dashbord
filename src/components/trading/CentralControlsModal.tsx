@@ -47,13 +47,13 @@ export const CentralControlsModal: React.FC<CentralControlsModalProps> = ({
   onResetDemoData,
   onReturnToAdmin
 }) => {
-  if (!isOpen) return null;
-
   const [killSwitchActive, setKillSwitchActive] = useState(!isTradingEnabled);
   const [maintenanceMode, setMaintenanceMode] = useState(false);
   const [optionsTradingEnabled, setOptionsTradingEnabled] = useState(isOptionsEnabled);
   const [tenantFrozen, setTenantFrozen] = useState(false);
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
+
+  if (!isOpen) return null;
 
   const handleToggleKillSwitch = () => {
     const nextState = !killSwitchActive;
