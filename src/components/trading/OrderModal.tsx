@@ -633,23 +633,3 @@ export const OrderModal: React.FC<OrderModalProps> = ({
     </div>
   );
 };
-              <span className="text-[11px] font-mono opacity-90 font-normal">
-                ₹{totalMarginRequired.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-              </span>
-            </div>
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
-              <span className="text-[11px] font-mono opacity-90 font-normal">
-                ₹{totalMarginRequired.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-              </span>
-            </div>
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
