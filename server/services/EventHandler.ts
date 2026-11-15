@@ -7,6 +7,7 @@
 import { query } from '../db/connection.ts';
 import { tradingPlatformClient } from './TradingPlatformClient.ts';
 import { EventEmitter } from 'events';
+import { parseCleanNumber, liveLtpLookup } from '../utils/cleanNumber.ts';
 
 export const adminEventBus = new EventEmitter();
 adminEventBus.setMaxListeners(100);
@@ -262,6 +263,15 @@ export class EventHandler {
         case 'position.created':
         case 'position.closed':
           await this.handlePositionUpdated(eventData);
+          break;
+
+        case 'portfolio.mtm':
+          await this.handlePortfolioMtm(eventData);
+          break;
+
+        case 'market.ticks':
+        case 'market.tick':
+          await this.handleMarketTicks(eventData);
           break;
 
         case 'deposit.created':
@@ -1179,7 +1189,7 @@ export class EventHandler {
     const p = event.payload;
     if (!p) return;
 
-    const rawClientId = p.clientId || p.client_id || p.clientCode || p.client_code;
+    const rawClientId = p.clientId || p.client_id || p.clientCode || p.client_code || p.userId || p.user_id;
     const clientCode = String(p.clientCode || p.client_code || rawClientId || 'CLT001');
     let clientId = String(rawClientId || clientCode);
     let clientName = String(p.clientName || p.client_name || 'Trading Client');
@@ -1193,21 +1203,49 @@ export class EventHandler {
     clientId = resolvedClient.id;
     clientName = resolvedClient.name;
 
-    const posId = String(p.id || p.positionId || p.position_id || `POS-${clientId}-${p.symbol}`);
-    const symbol = String(p.symbol || 'NIFTY50');
+    const symbol = String(p.symbol || p.instrumentId || p.instrument_id || 'NIFTY50').trim();
+    const posId = String(p.id || p.positionId || p.position_id || `POS-${clientId}-${symbol}`);
     const exchange = String(p.exchange || 'NSE');
-    const side = String(p.side || 'BUY').toUpperCase();
-    const qty = Number(p.quantity ?? p.qty ?? 0);
-    const buyPrice = Number(p.buyPrice ?? p.buy_price ?? p.avgPrice ?? p.avg_price ?? 0);
-    const curPrice = Number(p.currentPrice ?? p.current_price ?? p.ltp ?? buyPrice);
-    const pnl = Number(p.pnl ?? p.unrealizedPnl ?? p.unrealized_pnl ?? ((curPrice - buyPrice) * qty));
+    const side = String(p.side || p.type || 'BUY').toUpperCase();
+    const qty = parseCleanNumber(p.quantity ?? p.qty ?? p.raw_quantity ?? 0);
+
+    // 1. Resilient Current Price lookup
+    let curPrice = parseCleanNumber(p.currentPrice ?? p.current_price ?? p.ltp ?? p.lastPrice);
+    if (curPrice <= 0 || (curPrice < 25 && ['RELIANCE', 'TCS', 'HDFCBANK', 'NIFTY 50', 'NIFTY', 'GOLD'].some(s => symbol.toUpperCase().includes(s)))) {
+      const lookedUp = liveLtpLookup(symbol);
+      if (lookedUp > 0) curPrice = lookedUp;
+    }
+
+    // 2. Resilient Avg/Buy Price lookup
+    let buyPrice = parseCleanNumber(p.avgPrice ?? p.average_price ?? p.averagePrice ?? p.avg_price ?? p.buyPrice ?? p.buy_price ?? p.entryPrice ?? p.entry_price ?? p.price ?? 0);
+    if (buyPrice <= 0 || (buyPrice < 25 && ['RELIANCE', 'TCS', 'HDFCBANK', 'NIFTY 50', 'NIFTY', 'GOLD'].some(s => symbol.toUpperCase().includes(s)))) {
+      const lookedUp = liveLtpLookup(symbol);
+      buyPrice = lookedUp > 0 ? lookedUp : (curPrice > 0 ? curPrice : 100);
+    }
+
+    // 3. Resilient Unrealized PnL computation
+    let pnl = parseCleanNumber(p.pnl ?? p.unrealizedPnl ?? p.unrealized_pnl ?? 0);
+    if (pnl === 0 && qty !== 0 && buyPrice > 0 && curPrice > 0) {
+      const isLong = side === 'BUY' || side === 'LONG';
+      pnl = isLong ? (curPrice - buyPrice) * qty : (buyPrice - curPrice) * Math.abs(qty);
+    }
+    pnl = Number(pnl.toFixed(2));
+
     const pnlPercentage = Number(p.pnlPercentage ?? p.pnl_percentage ?? (buyPrice > 0 ? ((curPrice - buyPrice) / buyPrice) * 100 : 0));
+    
+    // 4. Resilient Margin computation
+    let margin = parseCleanNumber(p.margin ?? p.margin_used ?? p.usedMargin ?? p.used_margin ?? p.marginUsed ?? 0);
+    if (margin === 0 && buyPrice > 0 && qty !== 0) {
+      margin = Number((buyPrice * Math.abs(qty) * 0.2).toFixed(2));
+    }
+
+    const realizedPnl = parseCleanNumber(p.realizedPnl ?? p.realized_pnl ?? 0);
     const status = String(p.status || (qty === 0 ? 'CLOSED' : 'OPEN')).toUpperCase();
 
     await query(
       `INSERT INTO positions (
-        id, tenant_id, client_id, client_code, client_name, symbol, exchange, side, quantity, buy_price, current_price, pnl, pnl_percentage, status, created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        id, tenant_id, client_id, client_code, client_name, symbol, exchange, side, quantity, buy_price, current_price, pnl, pnl_percentage, margin, realized_pnl, unrealized_pnl, status, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       ON CONFLICT (id) DO UPDATE SET
         client_id = EXCLUDED.client_id,
         client_code = EXCLUDED.client_code,
@@ -1220,6 +1258,9 @@ export class EventHandler {
         current_price = EXCLUDED.current_price,
         pnl = EXCLUDED.pnl,
         pnl_percentage = EXCLUDED.pnl_percentage,
+        margin = EXCLUDED.margin,
+        realized_pnl = EXCLUDED.realized_pnl,
+        unrealized_pnl = EXCLUDED.unrealized_pnl,
         status = EXCLUDED.status,
         updated_at = CURRENT_TIMESTAMP`,
       [
@@ -1236,9 +1277,78 @@ export class EventHandler {
         curPrice,
         pnl,
         pnlPercentage,
+        margin,
+        realizedPnl,
+        pnl,
         status
       ]
     );
+  }
+
+  /**
+   * 4a. Handle Portfolio MTM Event
+   */
+  private async handlePortfolioMtm(event: TradingPlatformEvent): Promise<void> {
+    const p = event.payload;
+    if (!p) return;
+    const positions = Array.isArray(p.positions) ? p.positions : (Array.isArray(p) ? p : [p]);
+    for (const pos of positions) {
+      if (!pos) continue;
+      const posId = pos.id || pos.positionId || pos.position_id;
+      const symbol = pos.symbol || pos.instrumentId;
+      const curPrice = parseCleanNumber(pos.currentPrice || pos.current_price || pos.ltp || pos.lastPrice);
+      const pnl = parseCleanNumber(pos.unrealizedPnl || pos.unrealized_pnl || pos.pnl);
+      const realizedPnl = parseCleanNumber(pos.realizedPnl || pos.realized_pnl);
+      if (curPrice > 0) {
+        if (posId) {
+          await query(
+            `UPDATE positions SET current_price = $1, pnl = $2, unrealized_pnl = $2, realized_pnl = COALESCE($3, realized_pnl), updated_at = CURRENT_TIMESTAMP WHERE id = $4`,
+            [curPrice, pnl, realizedPnl, posId]
+          ).catch(() => {});
+        } else if (symbol) {
+          await query(
+            `UPDATE positions SET current_price = $1, pnl = $2, unrealized_pnl = $2, updated_at = CURRENT_TIMESTAMP WHERE symbol = $3 AND status = 'OPEN'`,
+            [curPrice, pnl, symbol]
+          ).catch(() => {});
+        }
+      }
+    }
+  }
+
+  /**
+   * 4b. Handle Market Ticks Event
+   */
+  private async handleMarketTicks(event: TradingPlatformEvent): Promise<void> {
+    const p = event.payload;
+    if (!p) return;
+    const tickList: Array<{ symbol: string; price: number }> = [];
+    if (Array.isArray(p)) {
+      for (const item of p) {
+        const sym = item.symbol || item.instrumentId;
+        const price = parseCleanNumber(item.ltp || item.price || item.currentPrice);
+        if (sym && price > 0) tickList.push({ symbol: sym, price });
+      }
+    } else if (p.symbol && (p.price || p.ltp)) {
+      const price = parseCleanNumber(p.price || p.ltp);
+      if (price > 0) tickList.push({ symbol: p.symbol, price });
+    } else if (typeof p === 'object') {
+      for (const [k, v] of Object.entries(p)) {
+        const price = parseCleanNumber(v);
+        if (price > 0 && k.length < 20) tickList.push({ symbol: k, price });
+      }
+    }
+
+    for (const tick of tickList) {
+      await query(
+        `UPDATE positions 
+         SET current_price = $1,
+             pnl = CASE WHEN UPPER(side) = 'SELL' THEN (buy_price - $1) * quantity ELSE ($1 - buy_price) * quantity END,
+             unrealized_pnl = CASE WHEN UPPER(side) = 'SELL' THEN (buy_price - $1) * quantity ELSE ($1 - buy_price) * quantity END,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE (UPPER(symbol) = UPPER($2) OR UPPER(REPLACE(symbol, ' ', '')) = UPPER(REPLACE($2, ' ', ''))) AND status = 'OPEN'`,
+        [tick.price, tick.symbol]
+      ).catch(() => {});
+    }
   }
 
   /**
@@ -1800,6 +1910,42 @@ export class EventHandler {
         }
       } catch (err) {
         console.warn(`[Backfill] GET /api/internal/v1/trading/positions for tenant ${tenantId} skipped:`, err);
+      }
+
+      // 7. Auto-heal and repair any existing corrupt position rows in database
+      try {
+        const corruptRows = await query(`
+          SELECT * FROM positions 
+          WHERE (buy_price <= 0 OR current_price <= 0 OR (current_price < 25 AND (UPPER(symbol) LIKE '%RELIANCE%' OR UPPER(symbol) LIKE '%TCS%' OR UPPER(symbol) LIKE '%HDFC%' OR UPPER(symbol) LIKE '%NIFTY%')) OR quantity = 0)
+        `);
+        for (const r of corruptRows.rows) {
+          const sym = String(r.symbol || '');
+          const qty = parseCleanNumber(r.quantity);
+          if (qty === 0) {
+            await query(`UPDATE positions SET status = 'CLOSED', updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [r.id]);
+            continue;
+          }
+          let cur = parseCleanNumber(r.current_price);
+          if (cur <= 0 || (cur < 25 && ['RELIANCE', 'TCS', 'HDFCBANK', 'NIFTY 50', 'NIFTY', 'GOLD'].some(s => sym.toUpperCase().includes(s)))) {
+            const ltp = liveLtpLookup(sym);
+            if (ltp > 0) cur = ltp;
+          }
+          let buy = parseCleanNumber(r.buy_price);
+          if (buy <= 0 || (buy < 25 && ['RELIANCE', 'TCS', 'HDFCBANK', 'NIFTY 50', 'NIFTY', 'GOLD'].some(s => sym.toUpperCase().includes(s)))) {
+            const ltp = liveLtpLookup(sym);
+            buy = ltp > 0 ? ltp : cur;
+          }
+          const isLong = String(r.side || 'BUY').toUpperCase() === 'BUY' || String(r.side || '').toUpperCase() === 'LONG';
+          const pnl = Number((isLong ? (cur - buy) * qty : (buy - cur) * Math.abs(qty)).toFixed(2));
+          const margin = Number((buy * Math.abs(qty) * 0.2).toFixed(2));
+          await query(`
+            UPDATE positions 
+            SET buy_price = $1, current_price = $2, pnl = $3, margin = $4, updated_at = CURRENT_TIMESTAMP
+            WHERE id = $5
+          `, [buy, cur, pnl, margin, r.id]);
+        }
+      } catch (healErr: any) {
+        console.warn('[Backfill] Heal existing positions notice:', healErr?.message);
       }
     }
 

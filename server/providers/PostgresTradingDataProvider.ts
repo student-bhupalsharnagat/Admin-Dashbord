@@ -51,6 +51,7 @@ import { getPool, query, withTransaction } from '../db/connection.ts';
 import { DEFAULT_ROLE_PERMISSIONS } from '../../src/utils/rbac.ts';
 import { tenantConfigCache } from './TenantConfigCache.ts';
 import { tradingPlatformClient } from '../services/TradingPlatformClient.ts';
+import { parseCleanNumber, liveLtpLookup } from '../utils/cleanNumber.ts';
 
 export class PostgresTradingDataProvider implements ITradingDataProvider {
   private pool?: pg.Pool;
@@ -2019,39 +2020,53 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       const s2sRes = await tradingPlatformClient.getClientPositions(cleanId, tenantId);
       const list = Array.isArray(s2sRes.data) ? s2sRes.data : (Array.isArray(s2sRes.data?.positions) ? s2sRes.data.positions : null);
       if (s2sRes.success && Array.isArray(list)) {
-        return list.map((r: any) => {
-          const pnlNum = parseFloat(r.pnl || r.unrealized_pnl || r.unrealizedPnl || '0');
-          let buyPriceNum = parseFloat(r.buy_price || r.avg_price || r.avgPrice || r.averagePrice || r.entryPrice || r.buyPrice || '0');
-          const curPriceNum = parseFloat(r.current_price || r.ltp || r.currentPrice || '0');
-          const qtyNum = parseInt(r.quantity || r.qty || '0', 10);
-          if (buyPriceNum === 0 && curPriceNum > 0) {
-            if (qtyNum > 0 && pnlNum !== 0) {
-              const sideStr = String(r.side || '').toUpperCase();
-              buyPriceNum = (sideStr === 'SELL' || sideStr === 'SHORT')
-                ? curPriceNum + (pnlNum / qtyNum)
-                : curPriceNum - (pnlNum / qtyNum);
-              if (buyPriceNum <= 0) buyPriceNum = curPriceNum;
-            } else {
-              buyPriceNum = curPriceNum;
+        return list
+          .filter((r: any) => parseCleanNumber(r.quantity ?? r.qty ?? r.raw_quantity) > 0 && String(r.status || '').toUpperCase() !== 'CLOSED')
+          .map((r: any) => {
+            const sym = String(r.symbol || r.instrument_id || 'NIFTY50').trim();
+            const side = String(r.side || r.type || 'BUY').toUpperCase();
+            const qtyNum = parseCleanNumber(r.quantity ?? r.qty ?? r.raw_quantity ?? 0);
+
+            let curPriceNum = parseCleanNumber(r.current_price ?? r.currentPrice ?? r.ltp ?? r.lastPrice ?? r.markPrice);
+            if (curPriceNum <= 0 || (curPriceNum < 25 && ['RELIANCE', 'TCS', 'HDFCBANK', 'NIFTY 50', 'NIFTY', 'GOLD'].some(s => sym.toUpperCase().includes(s)))) {
+              const ltp = liveLtpLookup(sym);
+              if (ltp > 0) curPriceNum = ltp;
             }
-          }
-          const marginVal = r.margin !== undefined && r.margin !== null ? parseFloat(String(r.margin)) : (r.margin_used !== undefined ? parseFloat(String(r.margin_used)) : (r.used_margin !== undefined ? parseFloat(String(r.used_margin)) : 0));
-          return {
-            id: r.id || `pos_${cleanId}_${r.symbol}`,
-            symbol: r.symbol,
-            side: r.side || 'BUY',
-            qty: qtyNum,
-            avgPrice: `₹${buyPriceNum.toLocaleString('en-IN')}`,
-            rawAvgPrice: buyPriceNum,
-            ltp: `₹${curPriceNum.toLocaleString('en-IN')}`,
-            currentPrice: `₹${curPriceNum.toLocaleString('en-IN')}`,
-            rawLtp: curPriceNum,
-            pnl: `${pnlNum >= 0 ? '+' : ''}₹${pnlNum.toLocaleString('en-IN')}`,
-            rawPnl: pnlNum,
-            margin: `₹${marginVal.toLocaleString('en-IN')}`,
-            status: r.status || 'OPEN'
-          };
-        });
+
+            let buyPriceNum = parseCleanNumber(r.buy_price ?? r.avg_price ?? r.avgPrice ?? r.average_price ?? r.averagePrice ?? r.entryPrice ?? r.buyPrice ?? r.price ?? 0);
+            if (buyPriceNum <= 0 || (buyPriceNum < 25 && ['RELIANCE', 'TCS', 'HDFCBANK', 'NIFTY 50', 'NIFTY', 'GOLD'].some(s => sym.toUpperCase().includes(s)))) {
+              const ltp = liveLtpLookup(sym);
+              buyPriceNum = ltp > 0 ? ltp : (curPriceNum > 0 ? curPriceNum : 100);
+            }
+
+            let pnlNum = parseCleanNumber(r.unrealized_pnl ?? r.unrealizedPnl ?? r.pnl ?? 0);
+            if (pnlNum === 0 && qtyNum !== 0 && buyPriceNum > 0 && curPriceNum > 0) {
+              const isLong = side === 'BUY' || side === 'LONG';
+              pnlNum = isLong ? (curPriceNum - buyPriceNum) * qtyNum : (buyPriceNum - curPriceNum) * Math.abs(qtyNum);
+            }
+            pnlNum = Number(pnlNum.toFixed(2));
+
+            let marginVal = parseCleanNumber(r.margin ?? r.margin_used ?? r.usedMargin ?? r.used_margin ?? r.marginUsed ?? 0);
+            if (marginVal === 0 && buyPriceNum > 0 && qtyNum !== 0) {
+              marginVal = Number((buyPriceNum * Math.abs(qtyNum) * 0.2).toFixed(2));
+            }
+
+            return {
+              id: r.id || `pos_${cleanId}_${sym}`,
+              symbol: sym,
+              side: side,
+              qty: qtyNum,
+              avgPrice: `₹${buyPriceNum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+              rawAvgPrice: buyPriceNum,
+              ltp: `₹${curPriceNum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+              currentPrice: `₹${curPriceNum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+              rawLtp: curPriceNum,
+              pnl: `${pnlNum >= 0 ? '+' : ''}₹${pnlNum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+              rawPnl: pnlNum,
+              margin: `₹${marginVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+              status: r.status || 'OPEN'
+            };
+          });
       }
     } catch {
       // Fallback
@@ -2059,43 +2074,57 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
 
     // 2. Query local PostgreSQL positions table
     const res = await this.executeQuery(
-      'SELECT * FROM positions WHERE client_id = $1 OR client_id = $2',
+      'SELECT * FROM positions WHERE (client_id = $1 OR client_id = $2 OR LOWER(client_code) = LOWER($1)) AND (status IS NULL OR status != \'CLOSED\')',
       [cleanId, cleanId.replace('-', '')]
     );
 
-    return res.rows.map(r => {
-      const pnlNum = parseFloat(r.unrealized_pnl || r.pnl || '0');
-      let buyPriceNum = parseFloat(r.buy_price || r.avg_price || r.entry_price || '0');
-      const curPriceNum = parseFloat(r.current_price || '0');
-      const qtyNum = parseInt(r.quantity || '0', 10);
-      if (buyPriceNum === 0 && curPriceNum > 0) {
-        if (qtyNum > 0 && pnlNum !== 0) {
-          const sideStr = String(r.side || '').toUpperCase();
-          buyPriceNum = (sideStr === 'SELL' || sideStr === 'SHORT')
-            ? curPriceNum + (pnlNum / qtyNum)
-            : curPriceNum - (pnlNum / qtyNum);
-          if (buyPriceNum <= 0) buyPriceNum = curPriceNum;
-        } else {
-          buyPriceNum = curPriceNum;
+    return res.rows
+      .filter((r: any) => parseCleanNumber(r.quantity) > 0)
+      .map(r => {
+        const sym = String(r.symbol || 'NIFTY50').trim();
+        const side = String(r.side || 'BUY').toUpperCase();
+        const qtyNum = parseCleanNumber(r.quantity);
+
+        let curPriceNum = parseCleanNumber(r.current_price);
+        if (curPriceNum <= 0 || (curPriceNum < 25 && ['RELIANCE', 'TCS', 'HDFCBANK', 'NIFTY 50', 'NIFTY', 'GOLD'].some(s => sym.toUpperCase().includes(s)))) {
+          const ltp = liveLtpLookup(sym);
+          if (ltp > 0) curPriceNum = ltp;
         }
-      }
-      const marginVal = r.margin !== undefined && r.margin !== null ? parseFloat(String(r.margin)) : (r.margin_used !== undefined ? parseFloat(String(r.margin_used)) : 0);
-      return {
-        id: r.id,
-        symbol: r.symbol,
-        side: r.side,
-        qty: r.quantity,
-        avgPrice: `₹${buyPriceNum.toLocaleString('en-IN')}`,
-        rawAvgPrice: buyPriceNum,
-        ltp: `₹${curPriceNum.toLocaleString('en-IN')}`,
-        currentPrice: `₹${curPriceNum.toLocaleString('en-IN')}`,
-        rawLtp: curPriceNum,
-        pnl: `${pnlNum >= 0 ? '+' : ''}₹${pnlNum.toLocaleString('en-IN')}`,
-        rawPnl: pnlNum,
-        margin: `₹${marginVal.toLocaleString('en-IN')}`,
-        status: r.status
-      };
-    });
+
+        let buyPriceNum = parseCleanNumber(r.buy_price ?? r.avg_price ?? r.entry_price ?? 0);
+        if (buyPriceNum <= 0 || (buyPriceNum < 25 && ['RELIANCE', 'TCS', 'HDFCBANK', 'NIFTY 50', 'NIFTY', 'GOLD'].some(s => sym.toUpperCase().includes(s)))) {
+          const ltp = liveLtpLookup(sym);
+          buyPriceNum = ltp > 0 ? ltp : (curPriceNum > 0 ? curPriceNum : 100);
+        }
+
+        let pnlNum = parseCleanNumber(r.unrealized_pnl ?? r.pnl ?? 0);
+        if (pnlNum === 0 && qtyNum !== 0 && buyPriceNum > 0 && curPriceNum > 0) {
+          const isLong = side === 'BUY' || side === 'LONG';
+          pnlNum = isLong ? (curPriceNum - buyPriceNum) * qtyNum : (buyPriceNum - curPriceNum) * Math.abs(qtyNum);
+        }
+        pnlNum = Number(pnlNum.toFixed(2));
+
+        let marginVal = parseCleanNumber(r.margin ?? r.margin_used ?? 0);
+        if (marginVal === 0 && buyPriceNum > 0 && qtyNum !== 0) {
+          marginVal = Number((buyPriceNum * Math.abs(qtyNum) * 0.2).toFixed(2));
+        }
+
+        return {
+          id: r.id,
+          symbol: sym,
+          side: side,
+          qty: qtyNum,
+          avgPrice: `₹${buyPriceNum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+          rawAvgPrice: buyPriceNum,
+          ltp: `₹${curPriceNum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+          currentPrice: `₹${curPriceNum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+          rawLtp: curPriceNum,
+          pnl: `${pnlNum >= 0 ? '+' : ''}₹${pnlNum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+          rawPnl: pnlNum,
+          margin: `₹${marginVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+          status: r.status || 'OPEN'
+        };
+      });
   }
 
   // ----------------------------------------------------
@@ -2757,8 +2786,8 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       symbol: r.symbol,
       type: (r.order_type === 'MARKET' ? 'MARKET' : (r.order_type === 'STOP_LOSS' ? 'STOP_LOSS' : 'LIMIT')) as any,
       side: r.side,
-      quantity: parseFloat(r.quantity),
-      price: parseFloat(r.price),
+      quantity: parseCleanNumber(r.quantity),
+      price: parseCleanNumber(r.price),
       status: r.status,
       created_at: r.created_at ? new Date(r.created_at).toISOString().replace('T', ' ').slice(0, 19) : '2026-03-29 10:00:00'
     }));
@@ -2787,8 +2816,8 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
               symbol: r.symbol,
               type: (r.order_type === 'MARKET' || r.type === 'MARKET') ? 'MARKET' : (r.type === 'STOP_LOSS' ? 'STOP_LOSS' : 'LIMIT'),
               side: r.side,
-              quantity: r.quantity,
-              price: parseFloat(r.price),
+              quantity: parseCleanNumber(r.quantity || r.qty || 1),
+              price: parseCleanNumber(r.price || r.avg_price || r.avgPrice || 0),
               status: r.status,
               created_at: r.created_at ? new Date(r.created_at).toISOString().replace('T', ' ').slice(0, 19) : new Date().toISOString().replace('T', ' ').slice(0, 19)
             });
@@ -2814,24 +2843,28 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
 
     const res = await this.executeQuery(sql, params).catch(() => ({ rows: [] }));
 
-    const dbTrades: Trade[] = res.rows.map(r => ({
-      id: r.id,
-      trade_id: r.trade_id || r.id,
-      order_id: r.order_id || r.originating_order_id || r.orderId || r.orderRef || r.order_ref,
-      orderRef: r.order_id || r.originating_order_id || r.orderId || r.orderRef || r.order_ref,
-      client_id: r.client_id,
-      client_name: r.client_name,
-      tenant_id: r.tenant_id,
-      tenant_name: 'Alpha Prime Capital',
-      symbol: r.symbol,
-      side: r.side,
-      quantity: parseFloat(r.quantity),
-      price: parseFloat(r.price),
-      total_value: parseFloat(r.total_value || (parseFloat(r.price) * parseFloat(r.quantity)).toString()),
-      pl: 0,
-      status: (r.status === 'CANCELLED' ? 'CANCELLED' : (r.status === 'SETTLED' ? 'SETTLED' : 'EXECUTED')) as any,
-      timestamp: r.created_at ? new Date(r.created_at).toISOString().replace('T', ' ').slice(0, 19) : '2026-03-29 10:00:00'
-    }));
+    const dbTrades: Trade[] = res.rows.map(r => {
+      const q = parseCleanNumber(r.quantity);
+      const p = parseCleanNumber(r.price);
+      return {
+        id: r.id,
+        trade_id: r.trade_id || r.id,
+        order_id: r.order_id || r.originating_order_id || r.orderId || r.orderRef || r.order_ref,
+        orderRef: r.order_id || r.originating_order_id || r.orderId || r.orderRef || r.order_ref,
+        client_id: r.client_id,
+        client_name: r.client_name,
+        tenant_id: r.tenant_id,
+        tenant_name: 'Alpha Prime Capital',
+        symbol: r.symbol,
+        side: r.side,
+        quantity: q,
+        price: p,
+        total_value: parseCleanNumber(r.total_value) || (p * q),
+        pl: parseCleanNumber(r.pl || r.pnl || 0),
+        status: (r.status === 'CANCELLED' ? 'CANCELLED' : (r.status === 'SETTLED' ? 'SETTLED' : 'EXECUTED')) as any,
+        timestamp: r.created_at ? new Date(r.created_at).toISOString().replace('T', ' ').slice(0, 19) : '2026-03-29 10:00:00'
+      };
+    });
 
     // Attempt live execution stream from Trading Platform S2S and merge
     try {
@@ -2888,31 +2921,78 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     sql += ' ORDER BY created_at DESC';
 
     const res = await this.executeQuery(sql, params).catch(() => ({ rows: [] }));
-    const dbPositions: any[] = res.rows.map(r => {
-      const pnlNum = parseFloat(r.pnl || '0');
-      let buyPriceNum = parseFloat(r.buy_price || r.avg_price || r.buyPrice || r.avgPrice || r.averagePrice || r.entryPrice || '0');
-      const curPriceNum = parseFloat(r.current_price || '0');
-      const qtyNum = parseFloat(r.quantity || '0');
-      if (buyPriceNum === 0 && curPriceNum > 0 && qtyNum > 0 && pnlNum !== 0) {
-        buyPriceNum = curPriceNum - (pnlNum / qtyNum);
-      }
-      const marginVal = r.margin !== undefined && r.margin !== null ? parseFloat(String(r.margin)) : (r.margin_used !== undefined ? parseFloat(String(r.margin_used)) : 0);
+    const dbPositions: any[] = [];
 
-      return {
+    for (const r of res.rows) {
+      const qtyNum = parseCleanNumber(r.quantity || r.qty || 0);
+      // Filter closed positions or qty = 0 from open positions table
+      if (qtyNum === 0 || r.status === 'CLOSED') {
+        continue;
+      }
+
+      let curPriceNum = parseCleanNumber(r.current_price || r.currentPrice || r.ltp || 0);
+      const isForex = ['USD/INR', 'EUR/INR', 'GBP/INR', 'JPY/INR'].includes(String(r.symbol).toUpperCase());
+      if (curPriceNum <= 0 || (!isForex && curPriceNum < 25)) {
+        const livePrice = liveLtpLookup(r.symbol);
+        if (livePrice > 0) curPriceNum = livePrice;
+      }
+
+      let buyPriceNum = parseCleanNumber(r.buy_price || r.avg_price || r.buyPrice || r.avgPrice || r.averagePrice || r.entryPrice || 0);
+      let pnlNum = parseCleanNumber(r.pnl || r.unrealized_pnl || r.unrealizedPnl || 0);
+
+      // Auto-heal buy price if 0
+      if (buyPriceNum <= 0) {
+        if (curPriceNum > 0 && pnlNum !== 0 && qtyNum !== 0) {
+          buyPriceNum = curPriceNum - (pnlNum / qtyNum);
+        } else if (curPriceNum > 0) {
+          buyPriceNum = curPriceNum;
+        }
+      }
+
+      // Re-calculate unrealized PnL if 0 or missing while curPrice and buyPrice exist
+      const isLong = String(r.side || 'BUY').toUpperCase() !== 'SELL';
+      if (pnlNum === 0 && curPriceNum > 0 && buyPriceNum > 0 && qtyNum > 0) {
+        pnlNum = isLong ? (curPriceNum - buyPriceNum) * qtyNum : (buyPriceNum - curPriceNum) * qtyNum;
+        pnlNum = Math.round(pnlNum * 100) / 100;
+      }
+
+      let marginVal = parseCleanNumber(r.margin ?? r.margin_used ?? r.used_margin ?? 0);
+      if (marginVal <= 0 && buyPriceNum > 0 && qtyNum > 0) {
+        marginVal = Math.round(buyPriceNum * qtyNum * 0.2 * 100) / 100;
+      }
+
+      const realizedPnl = parseCleanNumber(r.realized_pnl ?? r.realizedPnl ?? 0);
+
+      // Opportunistic DB heal if row had corrupted or 0 values
+      if ((parseCleanNumber(r.buy_price) <= 0 && buyPriceNum > 0) || (parseCleanNumber(r.current_price) < 25 && curPriceNum >= 25 && !isForex)) {
+        this.executeQuery(
+          `UPDATE positions SET buy_price = $1, current_price = $2, pnl = $3, margin = $4, updated_at = CURRENT_TIMESTAMP WHERE id = $5`,
+          [buyPriceNum, curPriceNum, pnlNum, marginVal, r.id]
+        ).catch(() => {});
+      }
+
+      dbPositions.push({
         id: r.id,
         client: r.client_name || 'Client',
         symbol: r.symbol,
+        side: r.side || 'BUY',
         qty: qtyNum.toLocaleString('en-IN'),
-        avgPrice: buyPriceNum.toLocaleString('en-IN'),
-        currentPrice: curPriceNum.toLocaleString('en-IN'),
-        unrealizedPL: `${pnlNum >= 0 ? '+' : ''}₹${pnlNum.toLocaleString('en-IN')}`,
-        realizedPL: '+₹0',
-        margin: `₹${marginVal.toLocaleString('en-IN')}`,
+        rawQty: qtyNum,
+        avgPrice: buyPriceNum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+        rawAvgPrice: buyPriceNum,
+        currentPrice: curPriceNum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+        rawCurrentPrice: curPriceNum,
+        unrealizedPL: `${pnlNum >= 0 ? '+' : ''}₹${pnlNum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+        rawUnrealizedPL: pnlNum,
+        realizedPL: `${realizedPnl >= 0 ? '+' : ''}₹${realizedPnl.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+        rawRealizedPL: realizedPnl,
+        margin: `₹${marginVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+        rawMargin: marginVal,
         unrealizedPLPositive: pnlNum >= 0,
-        realizedPLPositive: true,
+        realizedPLPositive: realizedPnl >= 0,
         status: r.status || 'OPEN'
-      };
-    });
+      });
+    }
 
     // Query live positions from Trading Platform once, apply tenant filtering and deduplicate
     try {
@@ -2931,30 +3011,63 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       if (liveRes.success && positionsList && positionsList.length > 0) {
         const seenIds = new Set(dbPositions.map(p => p.id));
         for (const r of positionsList) {
+          const qtyNum = parseCleanNumber(r.quantity || r.qty || 0);
+          if (qtyNum === 0 || r.status === 'CLOSED') continue;
+
           const posId = r.id || r.positionId || `POS-${r.symbol}-${r.side || 'BUY'}`;
           if (!seenIds.has(posId)) {
             seenIds.add(posId);
-            const pnlNum = parseFloat(r.pnl || r.unrealized_pnl || r.unrealizedPnl || '0');
-            let buyPriceNum = parseFloat(r.buy_price || r.avg_price || r.buyPrice || r.avgPrice || r.averagePrice || r.entryPrice || '0');
-            const qtyNum = parseFloat(r.quantity || r.qty || '1');
-            const curPriceNum = parseFloat(r.current_price || r.currentPrice || r.markPrice || buyPriceNum.toString());
-            if (buyPriceNum === 0 && curPriceNum > 0 && qtyNum > 0 && pnlNum !== 0) {
-              buyPriceNum = curPriceNum - (pnlNum / qtyNum);
+
+            let curPriceNum = parseCleanNumber(r.current_price || r.currentPrice || r.ltp || r.markPrice || 0);
+            const isForex = ['USD/INR', 'EUR/INR', 'GBP/INR', 'JPY/INR'].includes(String(r.symbol).toUpperCase());
+            if (curPriceNum <= 0 || (!isForex && curPriceNum < 25)) {
+              const livePrice = liveLtpLookup(r.symbol);
+              if (livePrice > 0) curPriceNum = livePrice;
             }
-            const marginVal = r.margin !== undefined && r.margin !== null ? parseFloat(String(r.margin)) : (r.margin_used !== undefined ? parseFloat(String(r.margin_used)) : (r.used_margin !== undefined ? parseFloat(String(r.used_margin)) : parseFloat(r.marginUsed || '0')));
+
+            let buyPriceNum = parseCleanNumber(r.buy_price || r.avg_price || r.buyPrice || r.avgPrice || r.averagePrice || r.entryPrice || 0);
+            let pnlNum = parseCleanNumber(r.pnl || r.unrealized_pnl || r.unrealizedPnl || 0);
+
+            if (buyPriceNum <= 0) {
+              if (curPriceNum > 0 && pnlNum !== 0 && qtyNum !== 0) {
+                buyPriceNum = curPriceNum - (pnlNum / qtyNum);
+              } else if (curPriceNum > 0) {
+                buyPriceNum = curPriceNum;
+              }
+            }
+
+            const isLong = String(r.side || 'BUY').toUpperCase() !== 'SELL';
+            if (pnlNum === 0 && curPriceNum > 0 && buyPriceNum > 0 && qtyNum > 0) {
+              pnlNum = isLong ? (curPriceNum - buyPriceNum) * qtyNum : (buyPriceNum - curPriceNum) * qtyNum;
+              pnlNum = Math.round(pnlNum * 100) / 100;
+            }
+
+            let marginVal = parseCleanNumber(r.margin ?? r.margin_used ?? r.used_margin ?? r.marginUsed ?? 0);
+            if (marginVal <= 0 && buyPriceNum > 0 && qtyNum > 0) {
+              marginVal = Math.round(buyPriceNum * qtyNum * 0.2 * 100) / 100;
+            }
+
+            const realizedPnl = parseCleanNumber(r.realized_pnl ?? r.realizedPnl ?? 0);
 
             dbPositions.push({
               id: posId,
               client: r.client_name || r.clientName || r.client || r.userId || 'Live Trader',
               symbol: r.symbol,
+              side: r.side || 'BUY',
               qty: qtyNum.toLocaleString('en-IN'),
-              avgPrice: buyPriceNum.toLocaleString('en-IN'),
-              currentPrice: curPriceNum.toLocaleString('en-IN'),
-              unrealizedPL: `${pnlNum >= 0 ? '+' : ''}₹${pnlNum.toLocaleString('en-IN')}`,
-              realizedPL: '+₹0',
-              margin: `₹${marginVal.toLocaleString('en-IN')}`,
+              rawQty: qtyNum,
+              avgPrice: buyPriceNum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+              rawAvgPrice: buyPriceNum,
+              currentPrice: curPriceNum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+              rawCurrentPrice: curPriceNum,
+              unrealizedPL: `${pnlNum >= 0 ? '+' : ''}₹${pnlNum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+              rawUnrealizedPL: pnlNum,
+              realizedPL: `${realizedPnl >= 0 ? '+' : ''}₹${realizedPnl.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+              rawRealizedPL: realizedPnl,
+              margin: `₹${marginVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+              rawMargin: marginVal,
               unrealizedPLPositive: pnlNum >= 0,
-              realizedPLPositive: true,
+              realizedPLPositive: realizedPnl >= 0,
               status: r.status || 'OPEN'
             });
           }

@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { ClientDetailView } from '../components/clients/ClientDetailView';
 import { initialClientsData } from './HierarchyViews';
+import { parseCleanNumber } from '../utils/cleanNumber';
 
 export interface OrderItem {
   orderId: string;
@@ -82,15 +83,21 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
               ? String(rawFilled !== undefined && rawFilled !== null && rawFilled !== '' ? rawFilled : '0')
               : (rawFilled !== undefined && rawFilled !== null && rawFilled !== '' ? String(rawFilled) : (status === 'FILLED' ? String(o.quantity || o.qty || '1') : '0'));
 
+            const numPrice = parseCleanNumber(o.price);
+            const formattedPrice = numPrice > 0
+              ? `₹${numPrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+              : (o.price ? String(o.price) : 'Market');
+            const numQty = parseCleanNumber(o.quantity || o.qty || '1') || 1;
+
             return {
               orderId,
               client: o.client || o.client_name || 'Retail Client',
               clientId: o.clientId || o.client_id,
               symbol: o.symbol || 'NIFTY50',
               side: ((o.side || 'BUY').toUpperCase() === 'SELL' ? 'SELL' : 'BUY') as 'BUY' | 'SELL',
-              quantity: String(o.quantity || o.qty || '1'),
+              quantity: numQty.toLocaleString('en-IN'),
               type: (o.type || o.order_type || 'Market') as any,
-              price: typeof o.price === 'number' ? `₹${o.price.toLocaleString('en-IN')}` : String(o.price || 'Market'),
+              price: formattedPrice,
               status,
               created: o.created || (o.created_at ? o.created_at.slice(0, 19).replace('T', ' ') : new Date().toISOString().slice(0, 19).replace('T', ' ')),
               filledQty: resolvedFilledQty,

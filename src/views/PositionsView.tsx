@@ -9,6 +9,7 @@ import {
   PieChart,
   Shield
 } from 'lucide-react';
+import { parseCleanNumber, liveLtpLookup } from '../utils/cleanNumber';
 
 export interface PositionItem {
   id: string;
@@ -47,34 +48,58 @@ export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify }) => {
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data)) {
-          const mapped: PositionItem[] = data.map((p: any, idx: number) => {
-            const pnlNum = typeof p.unrealizedPL === 'number' ? p.unrealizedPL : parseFloat(String(p.pnl || p.unrealized_pnl || 0));
-            const qtyNum = parseFloat(String(p.qty || p.quantity || '1')) || 1;
-            const rawCurrent = typeof p.currentPrice === 'number' ? p.currentPrice : parseFloat(String(p.currentPrice || p.last_price || 0));
-            let rawAvg = typeof p.avgPrice === 'number' ? p.avgPrice : parseFloat(String(p.avgPrice || p.averagePrice || p.entryPrice || p.buyPrice || p.buy_price || 0));
-
-            // Bug #29: If avgPrice is 0 while currentPrice & unrealizedPnl are non-zero, derive avgPrice = currentPrice - (unrealizedPnl / qty)
-            if ((!rawAvg || rawAvg === 0) && rawCurrent > 0 && pnlNum !== 0 && qtyNum !== 0) {
-              const derived = rawCurrent - (pnlNum / qtyNum);
-              if (derived > 0) {
-                rawAvg = derived;
+          const mapped: PositionItem[] = data
+            .filter((p: any) => {
+              const qty = parseCleanNumber(p.rawQty ?? p.qty ?? p.quantity ?? 0);
+              return qty !== 0 && (p.status || '').toUpperCase() !== 'CLOSED';
+            })
+            .map((p: any, idx: number) => {
+              const qtyNum = parseCleanNumber(p.rawQty ?? p.qty ?? p.quantity ?? 1) || 1;
+              let rawCurrent = parseCleanNumber(p.rawCurrentPrice ?? p.currentPrice ?? p.last_price ?? p.ltp ?? 0);
+              const isForex = ['USD/INR', 'EUR/INR', 'GBP/INR', 'JPY/INR'].includes(String(p.symbol).toUpperCase());
+              if (rawCurrent <= 0 || (!isForex && rawCurrent < 25)) {
+                const ltp = liveLtpLookup(p.symbol);
+                if (ltp > 0) rawCurrent = ltp;
               }
-            }
 
-            return {
-              id: p.id || `POS-${idx + 1}`,
-              client: p.client || p.client_name || 'Retail Client',
-              symbol: p.symbol || 'NIFTY50',
-              qty: String(p.qty || p.quantity || '1'),
-              avgPrice: rawAvg > 0 ? `₹${rawAvg.toLocaleString('en-IN', { minimumFractionDigits: 1, maximumFractionDigits: 2 })}` : (typeof p.avgPrice === 'number' ? `₹${p.avgPrice.toLocaleString('en-IN')}` : String(p.avgPrice || p.buy_price || '—')),
-              currentPrice: rawCurrent > 0 ? `₹${rawCurrent.toLocaleString('en-IN', { minimumFractionDigits: 1, maximumFractionDigits: 2 })}` : (typeof p.currentPrice === 'number' ? `₹${p.currentPrice.toLocaleString('en-IN')}` : String(p.currentPrice || p.last_price || '0')),
-              unrealizedPL: typeof p.unrealizedPL === 'string' ? p.unrealizedPL : `${pnlNum >= 0 ? '+' : ''}₹${pnlNum.toLocaleString('en-IN')}`,
-              realizedPL: typeof p.realizedPL === 'string' ? p.realizedPL : '+₹0',
-              margin: typeof p.margin === 'string' ? p.margin : `₹${p.margin || '15,000'}`,
-              unrealizedPLPositive: p.unrealizedPLPositive !== undefined ? p.unrealizedPLPositive : pnlNum >= 0,
-              realizedPLPositive: p.realizedPLPositive !== undefined ? p.realizedPLPositive : true
-            };
-          });
+              let rawAvg = parseCleanNumber(p.rawAvgPrice ?? p.avgPrice ?? p.averagePrice ?? p.entryPrice ?? p.buyPrice ?? p.buy_price ?? 0);
+              let pnlNum = parseCleanNumber(p.rawUnrealizedPL ?? p.unrealizedPL ?? p.pnl ?? p.unrealized_pnl ?? 0);
+
+              if (rawAvg <= 0) {
+                if (rawCurrent > 0 && pnlNum !== 0 && qtyNum !== 0) {
+                  rawAvg = rawCurrent - (pnlNum / qtyNum);
+                } else if (rawCurrent > 0) {
+                  rawAvg = rawCurrent;
+                }
+              }
+
+              const isLong = String(p.side || 'BUY').toUpperCase() !== 'SELL';
+              if (pnlNum === 0 && rawCurrent > 0 && rawAvg > 0 && qtyNum > 0) {
+                pnlNum = isLong ? (rawCurrent - rawAvg) * qtyNum : (rawAvg - rawCurrent) * qtyNum;
+                pnlNum = Math.round(pnlNum * 100) / 100;
+              }
+
+              let marginVal = parseCleanNumber(p.rawMargin ?? p.margin ?? p.margin_used ?? p.used_margin ?? 0);
+              if (marginVal <= 0 && rawAvg > 0 && qtyNum > 0) {
+                marginVal = Math.round(rawAvg * qtyNum * 0.2 * 100) / 100;
+              }
+
+              const realizedNum = parseCleanNumber(p.rawRealizedPL ?? p.realizedPL ?? p.realized_pnl ?? 0);
+
+              return {
+                id: p.id || `POS-${idx + 1}`,
+                client: p.client || p.client_name || 'Retail Client',
+                symbol: p.symbol || 'NIFTY50',
+                qty: qtyNum.toLocaleString('en-IN'),
+                avgPrice: `₹${rawAvg.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                currentPrice: `₹${rawCurrent.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                unrealizedPL: `${pnlNum >= 0 ? '+' : ''}₹${pnlNum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                realizedPL: `${realizedNum >= 0 ? '+' : ''}₹${realizedNum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                margin: `₹${marginVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                unrealizedPLPositive: pnlNum >= 0,
+                realizedPLPositive: realizedNum >= 0
+              };
+            });
           setPositions(mapped);
         }
       }
@@ -89,18 +114,88 @@ export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify }) => {
     // Listen to shared window admin:live-event to avoid socket starvation
     const handleLiveEvent = (e: any) => {
       const evt = e.detail;
+      if (!evt) return;
+
       if (
-        evt?.eventType === 'position.updated' ||
-        evt?.eventType === 'position.closed' ||
-        evt?.eventType === 'trade.executed'
+        evt.eventType === 'position.updated' ||
+        evt.eventType === 'position.created' ||
+        evt.eventType === 'position.closed' ||
+        evt.eventType === 'trade.executed'
       ) {
+        fetchPositions();
+      } else if (evt.eventType === 'market.ticks' || evt.eventType === 'market.tick') {
+        const payload = evt.payload;
+        if (!payload) return;
+
+        const tickMap: Record<string, number> = {};
+        if (Array.isArray(payload)) {
+          for (const item of payload) {
+            const sym = (item.symbol || '').toUpperCase();
+            const price = parseCleanNumber(item.ltp || item.price || item.currentPrice);
+            if (sym && price > 0) tickMap[sym] = price;
+          }
+        } else if (payload.symbol && (payload.price || payload.ltp)) {
+          const sym = String(payload.symbol).toUpperCase();
+          const price = parseCleanNumber(payload.price || payload.ltp);
+          if (price > 0) tickMap[sym] = price;
+        } else if (typeof payload === 'object') {
+          for (const [key, val] of Object.entries(payload)) {
+            const price = parseCleanNumber(val);
+            if (price > 0) tickMap[key.toUpperCase()] = price;
+          }
+        }
+
+        if (Object.keys(tickMap).length > 0) {
+          setPositions(prev =>
+            prev.map(pos => {
+              const symUpper = pos.symbol.toUpperCase();
+              const newPrice = tickMap[symUpper] || tickMap[symUpper.replace(/\s+/g, '')];
+              if (!newPrice) return pos;
+
+              const avg = parseCleanNumber(pos.avgPrice);
+              const qty = parseCleanNumber(pos.qty);
+              const pnl = avg > 0 && qty > 0 ? (newPrice - avg) * qty : parseCleanNumber(pos.unrealizedPL);
+
+              return {
+                ...pos,
+                currentPrice: `₹${newPrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                unrealizedPL: `${pnl >= 0 ? '+' : ''}₹${pnl.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                unrealizedPLPositive: pnl >= 0
+              };
+            })
+          );
+        }
+      } else if (evt.eventType === 'portfolio.mtm') {
         fetchPositions();
       }
     };
 
     window.addEventListener('admin:live-event', handleLiveEvent);
+
+    // Optional direct WebSocket connection to live tick stream if available
+    let ws: WebSocket | null = null;
+    try {
+      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${wsProtocol}//${window.location.hostname}:4000/ws`;
+      ws = new WebSocket(wsUrl);
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'tick' || msg.eventType === 'market.ticks' || msg.type === 'market.ticks') {
+            window.dispatchEvent(new CustomEvent('admin:live-event', { detail: { eventType: 'market.ticks', payload: msg.data || msg.payload || msg } }));
+          } else if (msg.type === 'position.updated' || msg.eventType === 'position.updated') {
+            window.dispatchEvent(new CustomEvent('admin:live-event', { detail: { eventType: 'position.updated', payload: msg.data || msg.payload } }));
+          }
+        } catch {}
+      };
+      ws.onerror = () => {};
+    } catch {}
+
     return () => {
       window.removeEventListener('admin:live-event', handleLiveEvent);
+      if (ws) {
+        try { ws.close(); } catch {}
+      }
     };
   }, []);
 
