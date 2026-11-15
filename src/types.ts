@@ -227,6 +227,8 @@ export interface FundDepositItem {
   status: 'COMPLETED' | 'PENDING' | 'PROCESSING' | 'FAILED';
   date: string;
   rawAmount: number;
+  utr_number?: string;
+  proof_image_url?: string;
 }
 
 export interface FundWithdrawalItem {

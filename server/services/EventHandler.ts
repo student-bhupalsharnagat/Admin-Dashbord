@@ -37,6 +37,10 @@ export type TradingPlatformEventType =
   | 'deposit.updated'
   | 'deposit.approved'
   | 'deposit.rejected'
+  | 'manual_deposit.created'
+  | 'manual_deposit.updated'
+  | 'manual_deposit.approved'
+  | 'manual_deposit.rejected'
   | 'fund.deposit_created'
   | 'fund.deposit_updated'
   | 'fund.deposit_approved'
@@ -264,6 +268,10 @@ export class EventHandler {
         case 'deposit.updated':
         case 'deposit.approved':
         case 'deposit.rejected':
+        case 'manual_deposit.created':
+        case 'manual_deposit.updated':
+        case 'manual_deposit.approved':
+        case 'manual_deposit.rejected':
         case 'fund.deposit_created':
         case 'fund.deposit_updated':
         case 'fund.deposit_approved':
@@ -1257,8 +1265,10 @@ export class EventHandler {
 
     const amount = Number(p.amount ?? p.rawAmount ?? 0);
     const currency = String(p.currency || 'INR');
-    const paymentMethod = String(p.paymentMethod || p.method || 'Bank Transfer');
-    const transactionRef = String(p.transactionRef || p.reference || `TXN-${Date.now()}`);
+    const paymentMethod = String(p.payment_method || p.paymentMethod || p.method || 'Bank Transfer');
+    const transactionRef = String(p.transactionRef || p.reference || p.utr_number || p.utr || `TXN-${Date.now()}`);
+    const utrNumber = p.utr_number || p.utr || p.utrNumber || (p.reference && !String(p.reference).startsWith('TXN-') && !String(p.reference).startsWith('DEP-') ? p.reference : (p.transactionRef && !p.transactionRef.startsWith('TXN-') ? p.transactionRef : null));
+    const proofImageUrl = p.proof_image_url || p.proof_image || p.proofUrl || p.proofImageUrl || null;
     
     // Normalize status
     let status = 'PENDING';
@@ -1279,14 +1289,18 @@ export class EventHandler {
 
     await query(
       `INSERT INTO fund_deposits (
-        id, tenant_id, client_id, client_code, client_name, amount, currency, payment_method, transaction_ref, status, approved_by, approved_at, notes, created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        id, tenant_id, client_id, client_code, client_name, amount, currency, payment_method, transaction_ref, status, approved_by, approved_at, notes, utr_number, proof_image_url, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       ON CONFLICT (id) DO UPDATE SET
         amount = EXCLUDED.amount,
         status = EXCLUDED.status,
+        payment_method = COALESCE(EXCLUDED.payment_method, fund_deposits.payment_method),
+        transaction_ref = COALESCE(EXCLUDED.transaction_ref, fund_deposits.transaction_ref),
         approved_by = COALESCE(EXCLUDED.approved_by, fund_deposits.approved_by),
         approved_at = COALESCE(EXCLUDED.approved_at, fund_deposits.approved_at),
         notes = COALESCE(EXCLUDED.notes, fund_deposits.notes),
+        utr_number = COALESCE(EXCLUDED.utr_number, fund_deposits.utr_number),
+        proof_image_url = COALESCE(EXCLUDED.proof_image_url, fund_deposits.proof_image_url),
         updated_at = CURRENT_TIMESTAMP`,
       [
         depId,
@@ -1301,20 +1315,26 @@ export class EventHandler {
         status,
         approvedBy,
         approvedAt,
-        notes
+        notes,
+        utrNumber,
+        proofImageUrl
       ]
     );
 
     // Projection into unified fund_transactions table
     await query(
       `INSERT INTO fund_transactions (
-        id, tenant_id, client_id, client_code, type, amount, method, status, reference_note, created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, 'DEPOSIT', $5, $6, $7, $8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        id, tenant_id, client_id, client_code, type, amount, method, status, reference_note, utr_number, proof_image_url, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, 'DEPOSIT', $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       ON CONFLICT (id) DO UPDATE SET
         amount = EXCLUDED.amount,
         status = EXCLUDED.status,
+        method = COALESCE(EXCLUDED.method, fund_transactions.method),
+        reference_note = COALESCE(EXCLUDED.reference_note, fund_transactions.reference_note),
+        utr_number = COALESCE(EXCLUDED.utr_number, fund_transactions.utr_number),
+        proof_image_url = COALESCE(EXCLUDED.proof_image_url, fund_transactions.proof_image_url),
         updated_at = CURRENT_TIMESTAMP`,
-      [depId, event.tenantId, clientId, clientCode, amount, paymentMethod, status, transactionRef]
+      [depId, event.tenantId, clientId, clientCode, amount, paymentMethod, status, transactionRef, utrNumber, proofImageUrl]
     );
 
     // If approved, update client balance and ledger if not already recorded

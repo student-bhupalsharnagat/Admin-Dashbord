@@ -60,6 +60,7 @@ const initialKycData: KycItem[] = [];
 // SCREENSHOT 2: FUNDS MANAGEMENT DATASET
 // ----------------------------------------------------------------------
 interface FundDepositItem {
+  id?: string;
   txnId: string;
   client: string;
   amount: string;
@@ -68,6 +69,8 @@ interface FundDepositItem {
   status: 'COMPLETED' | 'PENDING' | 'PROCESSING' | 'FAILED';
   date: string;
   rawAmount: number;
+  utr_number?: string;
+  proof_image_url?: string;
 }
 
 const initialDepositsData: FundDepositItem[] = [];
@@ -218,7 +221,7 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
         const depData = await depRes.json();
         const mappedDep = (Array.isArray(depData) ? depData : []).map(d => ({
           ...d,
-          reference: cleanTxnRef(d.reference, d.transaction_ref || d.txnId || d.id)
+          reference: cleanTxnRef(d.utr_number || d.reference, d.transaction_ref || d.txnId || d.id)
         }));
         setDepositsList(mappedDep);
       }
@@ -1146,7 +1149,7 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
                     <td className="py-3.5 px-4 font-bold text-white">{item.client}</td>
                     <td className="py-3.5 px-4 font-mono font-bold text-[#34d399]">{item.amount}</td>
                     <td className="py-3.5 px-4 text-slate-300">{item.method}</td>
-                    <td className="py-3.5 px-4 font-mono text-slate-400">{cleanTxnRef(item.reference, item.txnId)}</td>
+                    <td className="py-3.5 px-4 font-mono text-slate-400">{cleanTxnRef((item as any).utr_number || item.reference, item.txnId)}</td>
                     <td className="py-3.5 px-4">{renderStatusBadge(item.status)}</td>
                     <td className="py-3.5 px-4 font-mono text-slate-400">{item.date}</td>
                     <td className="py-3.5 px-4">
@@ -1271,13 +1274,37 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-slate-400">UTR / Reference No</span>
-                    <span className="font-mono text-cyan-400">{cleanTxnRef(selectedTxnDetail.reference, selectedTxnDetail.txnId)}</span>
+                    <span className="font-mono text-cyan-400">{cleanTxnRef(selectedTxnDetail.utr_number || selectedTxnDetail.reference, selectedTxnDetail.txnId)}</span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-slate-400">Date Logged</span>
                     <span className="font-mono text-slate-300">{selectedTxnDetail.date}</span>
                   </div>
                 </div>
+
+                {Boolean(selectedTxnDetail.proof_image_url || selectedTxnDetail.proof_image || selectedTxnDetail.proofUrl) && (
+                  <div className="p-3 bg-[#0c162b] border border-[#162238] rounded-lg space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400 font-medium">Payment Proof</span>
+                      <a
+                        href={selectedTxnDetail.proof_image_url || selectedTxnDetail.proof_image || selectedTxnDetail.proofUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[11px] text-cyan-400 hover:text-cyan-300 hover:underline flex items-center gap-1 font-medium"
+                      >
+                        Open Full Image ↗
+                      </a>
+                    </div>
+                    <div className="mt-1 rounded-md overflow-hidden border border-[#162238] max-h-48 flex items-center justify-center bg-black/40">
+                      <img
+                        src={selectedTxnDetail.proof_image_url || selectedTxnDetail.proof_image || selectedTxnDetail.proofUrl}
+                        alt="Payment Proof Screenshot"
+                        className="object-contain max-h-48 w-full cursor-pointer hover:opacity-95 transition-opacity"
+                        onClick={() => window.open(selectedTxnDetail.proof_image_url || selectedTxnDetail.proof_image || selectedTxnDetail.proofUrl, '_blank')}
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="p-4 bg-[#080e1c] border-t border-[#162238] flex items-center justify-end gap-2">

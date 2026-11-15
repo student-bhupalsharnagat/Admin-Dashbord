@@ -326,7 +326,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ onNotify, currentUser 
           const name = (d.client_name || d.client_id || '').replace(/"/g, '""');
           const amt = `₹${cleanNumber(d.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
           const gateway = d.payment_gateway || d.method || 'UPI/IMPS';
-          const ref = d.bank_reference || d.reference_no || '';
+          const ref = d.utr_number || d.bank_reference || d.reference_no || d.reference || '';
           const status = d.status || '';
           const date = d.created_at || '';
           return `${id},"${name}","${amt}",${gateway},${ref},${status},${date}`;

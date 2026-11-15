@@ -2243,7 +2243,9 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       reference: r.transaction_ref,
       status: (r.status as any) || 'PENDING',
       date: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : '2026-03-29',
-      rawAmount: parseFloat(r.amount)
+      rawAmount: parseFloat(r.amount),
+      utr_number: r.utr_number || null,
+      proof_image_url: r.proof_image_url || null
     }));
 
     try {
@@ -2258,18 +2260,28 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
           const type = (rf.type || rf.transaction_type || '').toUpperCase();
           if (type.includes('DEPOSIT') || (!type.includes('WITHDRAW') && parseFloat(rf.amount || '0') > 0)) {
             const id = rf.id || rf.transactionId || `DEP-${Date.now()}`;
-            if (!seenIds.has(id)) {
+            const existing = dbDeposits.find(d => d.id === id || d.txnId === id);
+            if (existing) {
+              if (!existing.utr_number && (rf.utr_number || rf.utr)) {
+                existing.utr_number = rf.utr_number || rf.utr;
+              }
+              if (!existing.proof_image_url && (rf.proof_image_url || rf.proof_image || rf.proofUrl)) {
+                existing.proof_image_url = rf.proof_image_url || rf.proof_image || rf.proofUrl;
+              }
+            } else if (!seenIds.has(id)) {
               seenIds.add(id);
               dbDeposits.push({
                 id,
                 txnId: id,
                 client: rf.clientName || rf.client_name || rf.name || 'Client',
                 amount: `₹${parseFloat(rf.amount || '0').toLocaleString('en-IN')}`,
-                method: rf.method || rf.gateway || 'UPI/IMPS',
-                reference: rf.reference || rf.refNo || id,
+                method: rf.payment_method || rf.method || rf.gateway || 'UPI/IMPS',
+                reference: rf.reference || rf.refNo || rf.utr_number || rf.utr || id,
                 status: (rf.status || 'COMPLETED').toUpperCase(),
                 date: rf.createdAt ? new Date(rf.createdAt).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
-                rawAmount: parseFloat(rf.amount || '0')
+                rawAmount: parseFloat(rf.amount || '0'),
+                utr_number: rf.utr_number || rf.utr || null,
+                proof_image_url: rf.proof_image_url || rf.proof_image || rf.proofUrl || null
               });
             }
           }
@@ -2283,8 +2295,28 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
   async approveFundDeposit(id: string, actor: string = 'Compliance Officer'): Promise<any> {
     return withTransaction(async (client) => {
       const depRes = await client.query('SELECT * FROM fund_deposits WHERE id = $1 FOR UPDATE', [id]);
-      if (depRes.rows.length === 0) throw new Error(`Deposit ${id} not found`);
-      const dep = depRes.rows[0];
+      let dep = depRes.rows[0];
+      if (!dep) {
+        const txRes = await client.query('SELECT * FROM fund_transactions WHERE id = $1', [id]);
+        if (txRes.rows.length > 0) {
+          const tx = txRes.rows[0];
+          const insRes = await client.query(`
+            INSERT INTO fund_deposits (
+              id, tenant_id, client_id, client_code, client_name, amount, currency,
+              payment_method, transaction_ref, status, utr_number, proof_image_url, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, 'INR', $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP)
+            RETURNING *
+          `, [
+            tx.id, tx.tenant_id, tx.client_id || 'CLT-001', tx.client_code || 'CLT001',
+            tx.client_name || 'Trading Client', tx.amount, tx.method || 'Manual Deposit',
+            tx.reference_note || tx.id, tx.status || 'PENDING', tx.utr_number || null,
+            tx.proof_image_url || null, tx.created_at || new Date()
+          ]);
+          dep = insRes.rows[0];
+        } else {
+          throw new Error(`Deposit ${id} not found`);
+        }
+      }
 
       if (dep.status === 'COMPLETED') {
         return { success: true, message: 'Deposit already completed', deposit: dep };
@@ -2378,17 +2410,19 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
 
   async createFundDeposit(data: any): Promise<any> {
     const id = data.id || `DEP${Date.now().toString().slice(-4)}`;
+    const utrNumber = data.utr_number || data.utr || null;
+    const proofImageUrl = data.proof_image_url || data.proof_image || data.proofUrl || null;
     const res = await this.executeQuery(`
       INSERT INTO fund_deposits (
         id, tenant_id, client_id, client_code, client_name, amount, currency,
-        payment_method, transaction_ref, status, notes
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        payment_method, transaction_ref, status, notes, utr_number, proof_image_url
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
       RETURNING *
     `, [
       id, data.tenant_id || 'TNT-001', data.client_id || 'CLT-001', data.client_code || 'CLT001',
       data.client_name || 'Client', data.amount || 10000.00, data.currency || 'INR',
       data.payment_method || 'Bank Transfer', data.transaction_ref || `TXN-${Date.now()}`,
-      data.status || 'PENDING', data.notes || null
+      data.status || 'PENDING', data.notes || null, utrNumber, proofImageUrl
     ]);
     return res.rows[0];
   }
