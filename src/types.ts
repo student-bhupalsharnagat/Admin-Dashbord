@@ -112,6 +112,7 @@ export interface Broker {
   name: string;
   code: string;
   email: string;
+  phone?: string;
   sub_brokers_count: number;
   total_sub_brokers?: number;
   clients_count: number;
@@ -133,6 +134,7 @@ export interface SubBroker {
   name: string;
   code: string;
   email: string;
+  phone?: string;
   clients_count: number;
   total_clients?: number;
   turnover: string;

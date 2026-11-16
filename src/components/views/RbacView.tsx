@@ -46,7 +46,7 @@ import {
 
 interface RbacViewProps {
   currentUser?: AuthUser | null;
-  onSwitchUserRole?: (role: UserRole) => void;
+  onSwitchUserRole?: (role: UserRole, hierarchyId?: string) => void;
 }
 
 export const RbacView: React.FC<RbacViewProps> = ({
@@ -938,7 +938,7 @@ export const RbacView: React.FC<RbacViewProps> = ({
 
                             {onSwitchUserRole && (
                               <button
-                                onClick={() => onSwitchUserRole(user.role as UserRole)}
+                                onClick={() => onSwitchUserRole(user.role as UserRole, (user as any).hierarchyId || (user as any).hierarchy_id)}
                                 title={`Simulate UI as ${user.name} (${user.role})`}
                                 className="p-1.5 rounded-lg bg-[#142240] hover:bg-[#1a2d54] text-slate-300 hover:text-white transition-colors cursor-pointer"
                               >

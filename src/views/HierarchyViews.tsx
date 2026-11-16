@@ -822,6 +822,8 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
         name: '',
         company: '',
         email: '',
+        phone: '',
+        password: '',
         status: 'ACTIVE',
         brokers: 0,
         clients: 0,
@@ -835,6 +837,8 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
         name: '',
         master: mastersList[0]?.name || 'Apex Capital Group',
         email: '',
+        phone: '',
+        password: '',
         status: 'ACTIVE',
         subBrokers: 0,
         clients: 0,
@@ -848,6 +852,8 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
         name: '',
         parentBroker: brokersList[0]?.name || 'Ryan Chen',
         email: '',
+        phone: '',
+        password: '',
         status: 'ACTIVE',
         clients: 0,
         turnover: '$0.0M',
@@ -859,8 +865,12 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
         id: `CLT00${clientsList.length + 1}`,
         name: '',
         email: '',
+        phone: '',
+        password: '',
         master: mastersList[0]?.name || 'Apex Capital',
         broker: brokersList[0]?.name || 'Ryan Chen',
+        subBroker: subBrokersList[0]?.name || 'Sub-Broker Admin',
+        subBrokerId: subBrokersList[0]?.id || 'SBK001',
         kyc: 'PENDING',
         account: 'ACTIVE',
         balance: '$10,000',
@@ -870,7 +880,9 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
     } else {
       setFormData({
         id: `NEW-${Date.now().toString().slice(-4)}`,
-        status: 'ACTIVE'
+        status: 'ACTIVE',
+        password: '',
+        phone: ''
       });
       setModalType('create');
     }
@@ -897,10 +909,12 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
           clients: Number(formData.clients) || 0,
           turnover: formData.turnover || '₹0.0M',
           commission: formData.commission || '₹0',
+          commissionShare: formData.commission || '₹0',
           status: formData.status || 'ACTIVE',
           created: today,
           region: formData.region || 'West (Mumbai)',
-          phone: formData.phone || '+91 98000 00000'
+          phone: formData.phone || '+91 98000 00000',
+          password: formData.password || 'Password@123'
         };
         const res = await fetch('/api/admin/masters', {
           method: 'POST',
@@ -910,6 +924,7 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
         const saved = res.ok ? await res.json() : newMaster;
         setMastersList([saved, ...mastersList]);
         notify(`Master ${saved.name} (${saved.id}) created successfully!`, 'success');
+        onRefresh?.();
       } else if (level === 'brokers') {
         const selectedMaster = mastersList.find(m => m.id === formData.masterId || m.name === formData.master || m.id === formData.master);
         const resolvedMasterName = formData.masterName || selectedMaster?.name || formData.master || 'Apex Capital Group';
@@ -926,9 +941,11 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
           clients: Number(formData.clients) || 0,
           turnover: formData.turnover || '$0.0M',
           commission: formData.commission || '$0',
+          commissionShare: formData.commission || '$0',
           status: formData.status || 'ACTIVE',
           created: today,
-          phone: formData.phone || '+1 555-0100'
+          phone: formData.phone || '+91 98111 00000',
+          password: formData.password || 'Password@123'
         };
         const res = await fetch('/api/admin/brokers', {
           method: 'POST',
@@ -938,6 +955,7 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
         const saved = res.ok ? await res.json() : newBroker;
         setBrokersList([saved, ...brokersList]);
         notify(`Broker ${saved.name} (${saved.id}) registered!`, 'success');
+        onRefresh?.();
       } else if (level === 'sub-brokers') {
         const selectedBroker = brokersList.find(b => b.id === formData.brokerId || b.name === formData.parentBroker || b.id === formData.parentBroker);
         const resolvedBrokerName = formData.brokerName || selectedBroker?.name || formData.parentBroker || 'Ryan Chen';
@@ -948,13 +966,16 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
           parentBroker: resolvedBrokerName,
           brokerName: resolvedBrokerName,
           brokerId: resolvedBrokerId,
+          broker_id: resolvedBrokerId,
           email: formData.email || `sub@${formData.name.toLowerCase().replace(/\s+/g, '')}.com`,
           clients: Number(formData.clients) || 0,
           turnover: formData.turnover || '$0.0M',
           commission: formData.commission || '$0',
+          commissionShare: formData.commission || '$0',
           status: formData.status || 'ACTIVE',
           created: today,
-          phone: formData.phone || '+1 555-0200'
+          phone: formData.phone || '+91 98222 00000',
+          password: formData.password || 'Password@123'
         };
         const res = await fetch('/api/admin/sub-brokers', {
           method: 'POST',
@@ -964,20 +985,27 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
         const saved = res.ok ? await res.json() : newSub;
         setSubBrokersList([saved, ...subBrokersList]);
         notify(`Sub-Broker ${saved.name} (${saved.id}) added!`, 'success');
+        onRefresh?.();
       } else if (level === 'clients') {
+        const selectedBroker = brokersList.find(b => b.name === formData.broker || b.id === formData.broker || b.id === formData.brokerId);
+        const selectedSub = subBrokersList.find(sb => sb.id === formData.subBrokerId || sb.name === formData.subBroker || sb.id === formData.subBroker);
         const newClient = {
           id: formData.id || `CLT00${clientsList.length + 1}`,
           name: formData.name,
           email: formData.email || `client@mail.com`,
           master: formData.master || 'Apex Capital',
-          broker: formData.broker || 'Ryan Chen',
+          broker: selectedBroker?.name || formData.broker || 'Ryan Chen',
+          broker_id: selectedBroker?.id || formData.brokerId || 'BRK001',
+          sub_broker_id: selectedSub?.id || formData.subBrokerId || 'SBK001',
+          sub_broker_name: selectedSub?.name || formData.subBroker || 'Sub-Broker Admin',
           kyc: formData.kyc || 'PENDING',
           account: formData.account || 'ACTIVE',
           balance: formData.balance || '$10,000',
           pl: '+0',
           openPositions: 0,
           created: today,
-          phone: formData.phone || '+1 555-0300'
+          phone: formData.phone || '+91 98333 00000',
+          password: formData.password || 'Password@123'
         };
         const res = await fetch('/api/admin/clients', {
           method: 'POST',
@@ -987,6 +1015,7 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
         const saved = res.ok ? await res.json() : newClient;
         setClientsList([saved, ...clientsList]);
         notify(`Client ${saved.name} (${saved.id}) onboarded!`, 'success');
+        onRefresh?.();
       }
     } catch {
       notify(`Failed to save ${level} entity`, 'warning');
@@ -1963,35 +1992,63 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
               )}
 
               {level === 'clients' && (
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="block text-slate-400 text-[11px] mb-1 font-medium">
-                      Master
-                    </label>
-                    <select
-                      value={formData.master || ''}
-                      onChange={e => setFormData({ ...formData, master: e.target.value })}
-                      className="w-full px-2.5 py-1.5 bg-[#080e1c] border border-[#152342] rounded-lg text-slate-200 focus:outline-none focus:border-blue-500"
-                    >
-                      {mastersList.map(m => (
-                        <option key={m.id} value={m.name}>
-                          {m.name}
-                        </option>
-                      ))}
-                    </select>
+                <div className="space-y-2">
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-slate-400 text-[11px] mb-1 font-medium">
+                        Master
+                      </label>
+                      <select
+                        value={formData.master || ''}
+                        onChange={e => setFormData({ ...formData, master: e.target.value })}
+                        className="w-full px-2.5 py-1.5 bg-[#080e1c] border border-[#152342] rounded-lg text-slate-200 focus:outline-none focus:border-blue-500"
+                      >
+                        {mastersList.map(m => (
+                          <option key={m.id} value={m.name}>
+                            {m.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-slate-400 text-[11px] mb-1 font-medium">
+                        Broker
+                      </label>
+                      <select
+                        value={formData.broker || ''}
+                        onChange={e => {
+                          const sel = brokersList.find(b => b.name === e.target.value || b.id === e.target.value);
+                          setFormData({ ...formData, broker: sel?.name || e.target.value, brokerId: sel?.id || '' });
+                        }}
+                        className="w-full px-2.5 py-1.5 bg-[#080e1c] border border-[#152342] rounded-lg text-slate-200 focus:outline-none focus:border-blue-500"
+                      >
+                        {brokersList.map(b => (
+                          <option key={b.id} value={b.name}>
+                            {b.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
                   <div>
                     <label className="block text-slate-400 text-[11px] mb-1 font-medium">
-                      Broker
+                      Assigned Sub-Broker
                     </label>
                     <select
-                      value={formData.broker || ''}
-                      onChange={e => setFormData({ ...formData, broker: e.target.value })}
+                      value={formData.subBrokerId || formData.subBroker || ''}
+                      onChange={e => {
+                        const sel = subBrokersList.find(sb => sb.id === e.target.value || sb.name === e.target.value);
+                        setFormData({
+                          ...formData,
+                          subBrokerId: sel?.id || e.target.value,
+                          subBroker: sel?.name || e.target.value
+                        });
+                      }}
                       className="w-full px-2.5 py-1.5 bg-[#080e1c] border border-[#152342] rounded-lg text-slate-200 focus:outline-none focus:border-blue-500"
                     >
-                      {brokersList.map(b => (
-                        <option key={b.id} value={b.name}>
-                          {b.name}
+                      {subBrokersList.map(sb => (
+                        <option key={sb.id} value={sb.id}>
+                          {sb.name} ({sb.id})
                         </option>
                       ))}
                     </select>
@@ -1999,16 +2056,43 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
                 </div>
               )}
 
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-slate-400 text-[11px] mb-1 font-medium">
+                    Email Address
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    placeholder="name@firm.com"
+                    value={formData.email || ''}
+                    onChange={e => setFormData({ ...formData, email: e.target.value })}
+                    className="w-full px-3 py-1.5 bg-[#080e1c] border border-[#152342] rounded-lg text-slate-200 focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-400 text-[11px] mb-1 font-medium">
+                    Phone Number
+                  </label>
+                  <input
+                    type="tel"
+                    placeholder="+91 98000 00000"
+                    value={formData.phone || ''}
+                    onChange={e => setFormData({ ...formData, phone: e.target.value })}
+                    className="w-full px-3 py-1.5 bg-[#080e1c] border border-[#152342] rounded-lg text-slate-200 focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+              </div>
+
               <div>
                 <label className="block text-slate-400 text-[11px] mb-1 font-medium">
-                  Email Address
+                  Initial Password
                 </label>
                 <input
-                  type="email"
-                  required
-                  placeholder="name@firm.com"
-                  value={formData.email || ''}
-                  onChange={e => setFormData({ ...formData, email: e.target.value })}
+                  type="password"
+                  placeholder="Password@123 (Default)"
+                  value={formData.password || ''}
+                  onChange={e => setFormData({ ...formData, password: e.target.value })}
                   className="w-full px-3 py-1.5 bg-[#080e1c] border border-[#152342] rounded-lg text-slate-200 focus:outline-none focus:border-blue-500"
                 />
               </div>

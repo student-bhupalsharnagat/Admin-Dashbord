@@ -21,6 +21,8 @@ export const CreateMasterModal: React.FC<CreateMasterModalProps> = ({
   const [code, setCode] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
+  const [password, setPassword] = useState('');
+  const [commissionShare, setCommissionShare] = useState('');
   const [region, setRegion] = useState('West (Mumbai)');
   const [loading, setLoading] = useState(false);
 
@@ -37,6 +39,9 @@ export const CreateMasterModal: React.FC<CreateMasterModalProps> = ({
         code,
         email,
         phone,
+        password: password || 'Password@123',
+        commissionShare: commissionShare || '20%',
+        commission: commissionShare || '20%',
         region
       });
       onClose();
@@ -147,6 +152,29 @@ export const CreateMasterModal: React.FC<CreateMasterModalProps> = ({
                 placeholder="+91 98200 00000"
                 className="w-full px-3 py-2 bg-[#121c33] border border-[#1e2f52] rounded-lg text-slate-200 focus:outline-none focus:border-blue-500"
                 required
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block font-medium text-slate-300 mb-1.5">Initial Password</label>
+              <input
+                type="password"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                placeholder="Password@123 (Default)"
+                className="w-full px-3 py-2 bg-[#121c33] border border-[#1e2f52] rounded-lg text-slate-200 focus:outline-none focus:border-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block font-medium text-slate-300 mb-1.5">Commission Share / Markup</label>
+              <input
+                type="text"
+                value={commissionShare}
+                onChange={e => setCommissionShare(e.target.value)}
+                placeholder="e.g. 20% or ₹50,000"
+                className="w-full px-3 py-2 bg-[#121c33] border border-[#1e2f52] rounded-lg text-slate-200 focus:outline-none focus:border-blue-500"
               />
             </div>
           </div>

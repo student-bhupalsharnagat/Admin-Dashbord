@@ -1270,6 +1270,36 @@ export class TradingPlatformClient {
   }
 
   /**
+   * Cross-Platform S2S Synchronization of 4-tier Hierarchy Nodes (Master, Broker, Sub-Broker, Client)
+   * Dispatches payload to Trading Platform /api/internal/v1/hierarchy/sync
+   */
+  public async syncHierarchyNode(data: {
+    type: 'master' | 'broker' | 'sub_broker' | 'client';
+    action: 'created' | 'updated' | 'status_updated';
+    tenantId?: string;
+    node: any;
+  }): Promise<S2SResponse> {
+    const outboundTenantId = await this.resolveOutboundTenantId(data.tenantId || data.node?.tenant_id);
+    return this.request({
+      method: 'POST',
+      path: '/api/internal/v1/hierarchy/sync',
+      body: {
+        event: 'HIERARCHY_NODE_SYNC',
+        type: data.type,
+        action: data.action,
+        tenantId: outboundTenantId,
+        node: data.node,
+        timestamp: new Date().toISOString()
+      },
+      tenantId: outboundTenantId,
+      idempotencyKey: `hrc_${data.type}_${data.node?.id || Date.now()}_${Date.now()}`
+    }).catch(err => {
+      console.warn(`[TradingPlatformClient] Hierarchy sync notice for ${data.type} ${data.node?.id}:`, err?.message || err);
+      return { success: false, error: err?.message, status: 500, cached: false, durationMs: 0 } as any;
+    });
+  }
+
+  /**
    * Canonical alias for trading halt endpoint: POST /emergency/trading-halt
    */
   public async tradingHalt(active: boolean, actor: string, reason?: string, tenantId?: string): Promise<S2SResponse> {

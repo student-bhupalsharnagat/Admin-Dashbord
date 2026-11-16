@@ -20,6 +20,8 @@ export const CreateBrokerModal: React.FC<CreateBrokerModalProps> = ({
   const [code, setCode] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
+  const [password, setPassword] = useState('');
+  const [commissionShare, setCommissionShare] = useState('');
   const [loading, setLoading] = useState(false);
 
   if (!isOpen) return null;
@@ -41,7 +43,10 @@ export const CreateBrokerModal: React.FC<CreateBrokerModalProps> = ({
         name,
         code,
         email,
-        phone
+        phone,
+        password: password || 'Password@123',
+        commissionShare: commissionShare || '15%',
+        commission: commissionShare || '15%'
       });
       onClose();
     } catch (err) {
@@ -135,6 +140,29 @@ export const CreateBrokerModal: React.FC<CreateBrokerModalProps> = ({
                 placeholder="+91 98000 00000"
                 className="w-full px-3 py-2 bg-[#121c33] border border-[#1e2f52] rounded-lg text-slate-200 focus:outline-none focus:border-blue-500"
                 required
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block font-medium text-slate-300 mb-1.5">Initial Password</label>
+              <input
+                type="password"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                placeholder="Password@123 (Default)"
+                className="w-full px-3 py-2 bg-[#121c33] border border-[#1e2f52] rounded-lg text-slate-200 focus:outline-none focus:border-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block font-medium text-slate-300 mb-1.5">Commission Share / Markup</label>
+              <input
+                type="text"
+                value={commissionShare}
+                onChange={e => setCommissionShare(e.target.value)}
+                placeholder="e.g. 15% or ₹30,000"
+                className="w-full px-3 py-2 bg-[#121c33] border border-[#1e2f52] rounded-lg text-slate-200 focus:outline-none focus:border-blue-500"
               />
             </div>
           </div>

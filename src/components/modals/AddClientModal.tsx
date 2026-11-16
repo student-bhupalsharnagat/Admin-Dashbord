@@ -28,12 +28,20 @@ export const AddClientModal: React.FC<AddClientModalProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
+    const activeSubBrokerId = subBrokerId || subBrokers[0]?.id || '';
+    const selectedSub = subBrokers.find(sb => sb.id === activeSubBrokerId);
+    const brokerId = selectedSub?.broker_id || (selectedSub as any)?.brokerId || '';
     try {
       await onSubmit({
-        sub_broker_id: subBrokerId,
+        sub_broker_id: activeSubBrokerId,
+        subBrokerId: activeSubBrokerId,
+        broker_id: brokerId,
+        brokerId: brokerId,
+        sub_broker_name: selectedSub?.name || 'Sub-Broker Admin',
         name,
         email,
         phone,
+        password: 'Password@123',
         wallet_balance: parseFloat(initialDeposit) || 0,
         available_margin: (parseFloat(initialDeposit) || 0) * (parseInt(marginMultiplier) || 4)
       });

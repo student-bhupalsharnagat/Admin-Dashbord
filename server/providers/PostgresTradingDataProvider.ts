@@ -835,7 +835,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         data.brokers_count || 0,
         data.clients_count || 0,
         data.turnover || '₹0',
-        data.commission_earned || '₹0'
+        data.commission_earned || (data as any).commissionShare || data.commission || '₹0'
       ]);
       r = res.rows[0];
     } catch (err) {
@@ -1010,12 +1010,12 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         company,
         data.code || `BRK-${id.slice(-3)}`,
         data.email || 'broker@tradematrix.io',
-        '+91 98111 00000',
+        data.phone || '+91 98111 00000',
         data.status || 'ACTIVE',
         data.sub_brokers_count || 0,
         data.clients_count || 0,
         data.turnover || '₹0',
-        data.commission_earned || '₹0'
+        data.commission_earned || (data as any).commissionShare || data.commission || '₹0'
       ]);
       r = res.rows[0];
 
@@ -1041,11 +1041,12 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       company: r?.company || company,
       code: r?.code || data.code || `BRK-${id.slice(-3)}`,
       email: r?.email || data.email || 'broker@tradematrix.io',
+      phone: r?.phone || data.phone || '+91 98111 00000',
       status: (r?.status || data.status || 'ACTIVE') as 'ACTIVE' | 'SUSPENDED',
       sub_brokers_count: r?.sub_brokers_count || 0,
       clients_count: r?.clients_count || 0,
       turnover: r?.turnover || data.turnover || '₹0',
-      commission_earned: r?.commission || data.commission_earned || '₹0',
+      commission_earned: r?.commission || (data as any).commissionShare || data.commission_earned || '₹0',
       created_at: r?.created_at ? new Date(r.created_at).toISOString().split('T')[0] : todayStr
     } as any;
 
@@ -1191,11 +1192,11 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         data.name || 'New Sub-Broker',
         data.code || `SBRK-${id.slice(-3)}`,
         data.email || 'subbroker@tradematrix.io',
-        '+91 98222 00000',
+        data.phone || '+91 98222 00000',
         data.status || 'ACTIVE',
         data.clients_count || 0,
         data.turnover || '₹0',
-        data.commission_earned || '₹0'
+        data.commission_earned || (data as any).commissionShare || data.commission || '₹0'
       ]);
       r = res.rows[0];
 
@@ -1219,10 +1220,11 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       name: r?.name || data.name || 'New Sub-Broker',
       code: r?.code || data.code || `SBRK-${id.slice(-3)}`,
       email: r?.email || data.email || 'subbroker@tradematrix.io',
+      phone: r?.phone || data.phone || '+91 98222 00000',
       status: (r?.status || data.status || 'ACTIVE') as 'ACTIVE' | 'SUSPENDED',
       clients_count: r?.clients_count || 0,
       turnover: r?.turnover || data.turnover || '₹0',
-      commission_earned: r?.commission || data.commission_earned || '₹0',
+      commission_earned: r?.commission || (data as any).commissionShare || data.commission_earned || '₹0',
       created_at: r?.created_at ? new Date(r.created_at).toISOString().split('T')[0] : todayStr
     } as any;
 
@@ -5130,11 +5132,14 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       email: r.email,
       role: r.role,
       roleName: r.role,
-      tenantId: 'TNT-001',
+      tenantId: r.tenant_id || 'TNT-001',
       tenantName: 'Alpha Prime Capital',
+      hierarchyLevel: r.hierarchy_level || (r.role === 'SUPER_ADMIN' ? 'PLATFORM' : 'TENANT'),
+      hierarchyId: r.hierarchy_id || undefined,
+      hierarchy_id: r.hierarchy_id || undefined,
       status: (r.status === 'ACTIVE' ? 'ACTIVE' : 'SUSPENDED') as any,
       twoFactorEnabled: true,
-      lastLogin: '2026-03-29 10:00'
+      lastLogin: r.last_login ? new Date(r.last_login).toISOString().replace('T', ' ').substring(0, 16) : '2026-03-29 10:00'
     }));
   }
 

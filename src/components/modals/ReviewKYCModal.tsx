@@ -7,14 +7,17 @@ interface ReviewKYCModalProps {
   onClose: () => void;
   kyc: KYCRecord | null;
   onUpdateStatus: (id: string, status: KYCRecord['kyc_status'], notes?: string) => Promise<void>;
+  currentUser?: any;
 }
 
 export const ReviewKYCModal: React.FC<ReviewKYCModalProps> = ({
   isOpen,
   onClose,
   kyc,
-  onUpdateStatus
+  onUpdateStatus,
+  currentUser
 }) => {
+  const isReadOnly = currentUser?.role === 'SUB_BROKER';
   const [notes, setNotes] = useState(kyc?.notes || '');
   const [loading, setLoading] = useState(false);
 
@@ -107,28 +110,43 @@ export const ReviewKYCModal: React.FC<ReviewKYCModalProps> = ({
           </div>
 
           {/* Actions */}
-          <div className="pt-3 border-t border-[#18243e] grid grid-cols-1 sm:grid-cols-3 gap-2">
-            <button
-              disabled={loading}
-              onClick={() => handleAction('CORRECTION_REQUIRED')}
-              className="px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 hover:bg-amber-500/20 text-amber-400 font-semibold flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50"
-            >
-              <AlertCircle size={14} /> Request Fix
-            </button>
-            <button
-              disabled={loading}
-              onClick={() => handleAction('REJECTED')}
-              className="px-3 py-2 rounded-lg bg-rose-500/10 border border-rose-500/30 hover:bg-rose-500/20 text-rose-400 font-semibold flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50"
-            >
-              <XCircle size={14} /> Reject
-            </button>
-            <button
-              disabled={loading}
-              onClick={() => handleAction('APPROVED')}
-              className="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold flex items-center justify-center gap-1.5 transition-colors shadow-md shadow-emerald-600/20 disabled:opacity-50"
-            >
-              <CheckCircle2 size={14} /> Approve KYC
-            </button>
+          <div className="pt-3 border-t border-[#18243e]">
+            {isReadOnly ? (
+              <div className="flex items-center justify-between p-2.5 rounded-lg bg-blue-500/10 border border-blue-500/20 text-slate-300">
+                <span className="text-xs text-slate-400">Sub-Broker monitoring mode: Read-only access</span>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="px-3.5 py-1.5 rounded-lg bg-[#142240] hover:bg-[#1a2d54] text-slate-200 text-xs font-semibold"
+                >
+                  Close
+                </button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <button
+                  disabled={loading}
+                  onClick={() => handleAction('CORRECTION_REQUIRED')}
+                  className="px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 hover:bg-amber-500/20 text-amber-400 font-semibold flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50"
+                >
+                  <AlertCircle size={14} /> Request Fix
+                </button>
+                <button
+                  disabled={loading}
+                  onClick={() => handleAction('REJECTED')}
+                  className="px-3 py-2 rounded-lg bg-rose-500/10 border border-rose-500/30 hover:bg-rose-500/20 text-rose-400 font-semibold flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50"
+                >
+                  <XCircle size={14} /> Reject
+                </button>
+                <button
+                  disabled={loading}
+                  onClick={() => handleAction('APPROVED')}
+                  className="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold flex items-center justify-center gap-1.5 transition-colors shadow-md shadow-emerald-600/20 disabled:opacity-50"
+                >
+                  <CheckCircle2 size={14} /> Approve KYC
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>

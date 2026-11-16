@@ -29,9 +29,11 @@ const initialPositionsData: PositionItem[] = [];
 
 interface PositionsViewProps {
   onNotify?: (message: string, type?: 'info' | 'success' | 'warning') => void;
+  currentUser?: any;
 }
 
-export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify }) => {
+export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify, currentUser }) => {
+  const isSubBroker = currentUser?.role === 'SUB_BROKER';
   const [positions, setPositions] = useState<PositionItem[]>(initialPositionsData);
   const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
@@ -402,7 +404,9 @@ export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify }) => {
             </div>
 
             <div className="p-4 bg-[#080e1c] border-t border-[#162238] flex items-center justify-between">
-              {selectedPosition.qty !== '0' ? (
+              {isSubBroker ? (
+                <span className="text-slate-500 text-[11px] font-mono">Read-Only (Square-Off Restricted)</span>
+              ) : selectedPosition.qty !== '0' ? (
                 <button
                   onClick={() => handleSquareOff(selectedPosition)}
                   className="px-3.5 py-1.5 rounded-lg bg-rose-600/20 hover:bg-rose-600/30 border border-rose-500/40 text-rose-300 font-semibold text-xs"

@@ -417,6 +417,12 @@ export default function App() {
               break;
             }
 
+            case 'hierarchy.updated': {
+              loadHierarchyData();
+              loadDashboardData();
+              break;
+            }
+
             case 'login.succeeded':
             case 'user.login':
             case 'user.active': {
@@ -755,21 +761,21 @@ export default function App() {
     }
   };
 
-  const handleSwitchUserRole = async (newRole: UserRole) => {
+  const handleSwitchUserRole = async (newRole: UserRole, targetHierarchyId?: string) => {
     if (currentUser) {
-      let hierarchyId = currentUser.hierarchyId;
+      let hierarchyId = targetHierarchyId || currentUser.hierarchyId;
       let hierarchyLevel = currentUser.hierarchyLevel;
       if (newRole === 'MASTER') {
-        hierarchyId = 'MST-001';
+        hierarchyId = targetHierarchyId || 'MST-001';
         hierarchyLevel = 'MASTER';
       } else if (newRole === 'BROKER') {
-        hierarchyId = 'BRK-001';
+        hierarchyId = targetHierarchyId || 'BRK-001';
         hierarchyLevel = 'BROKER';
       } else if (newRole === 'SUB_BROKER') {
-        hierarchyId = 'SBRK-001';
+        hierarchyId = targetHierarchyId || 'SBRK-001';
         hierarchyLevel = 'SUB_BROKER';
       } else if (newRole === 'CLIENT') {
-        hierarchyId = 'CLT-001';
+        hierarchyId = targetHierarchyId || 'CLT-001';
         hierarchyLevel = 'CLIENT';
       } else if (newRole === 'SUPER_ADMIN' || newRole === 'PLATFORM_OWNER') {
         hierarchyId = undefined;
@@ -1065,7 +1071,7 @@ export default function App() {
 
               {/* Open Positions View - matching user screenshot */}
               {activeTab === 'positions' && (
-                <PositionsView onNotify={showToast} />
+                <PositionsView onNotify={showToast} currentUser={currentUser} />
               )}
 
               {/* Commission Management View - matching user screenshot */}
@@ -1256,6 +1262,7 @@ export default function App() {
         onClose={() => setSelectedKycForReview(null)}
         kyc={selectedKycForReview}
         onUpdateStatus={handleUpdateKYCStatus}
+        currentUser={currentUser}
       />
 
       <CreateTenantModal
