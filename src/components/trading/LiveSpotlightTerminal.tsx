@@ -34,11 +34,16 @@ export const LiveSpotlightTerminal: React.FC<LiveSpotlightTerminalProps> = ({
   onOpenWallet,
   currentLanguage = 'en'
 }) => {
-  const isPositive = instrument.change >= 0;
+  if (!instrument) return null;
+  const changeVal = instrument?.change ?? 0;
+  const changePct = instrument?.changePercent ?? 0;
+  const isPositive = changeVal >= 0;
 
   // Calculate 24h range percentage
-  const rangeSpan = Math.max(0.01, instrument.high - instrument.low);
-  const currentRangeOffset = Math.min(100, Math.max(0, ((instrument.lastPrice - instrument.low) / rangeSpan) * 100));
+  const highVal = instrument.high || instrument.lastPrice || 0;
+  const lowVal = instrument.low || instrument.lastPrice || 0;
+  const rangeSpan = Math.max(0.01, highVal - lowVal);
+  const currentRangeOffset = Math.min(100, Math.max(0, (((instrument.lastPrice || 0) - lowVal) / rangeSpan) * 100));
 
   // Margin health calculation
   const totalMargin = (wallet.availableBalance || 0) + (wallet.usedMargin || 0);
@@ -99,8 +104,8 @@ export const LiveSpotlightTerminal: React.FC<LiveSpotlightTerminalProps> = ({
           >
             {isPositive ? <ArrowUpRight className="w-4 h-4" /> : <ArrowDownRight className="w-4 h-4" />}
             <span>
-              {isPositive ? '+' : ''}{instrument.change.toFixed(2)} ({isPositive ? '+' : ''}
-              {instrument.changePercent.toFixed(2)}%)
+              {isPositive ? '+' : ''}{changeVal.toFixed(2)} ({isPositive ? '+' : ''}
+              {changePct.toFixed(2)}%)
             </span>
           </span>
         </div>
@@ -223,7 +228,9 @@ export const LiveSpotlightTerminal: React.FC<LiveSpotlightTerminalProps> = ({
 
         <div className="space-y-2">
           {benchmarks.map(bm => {
-            const isBmPos = bm.change >= 0;
+            const bmChange = bm?.change ?? 0;
+            const bmChangePct = bm?.changePercent ?? 0;
+            const isBmPos = bmChange >= 0;
             return (
               <div key={bm.symbol} className="flex items-center justify-between text-xs py-0.5">
                 <span className="font-semibold text-slate-700 dark:text-slate-300">
@@ -231,10 +238,10 @@ export const LiveSpotlightTerminal: React.FC<LiveSpotlightTerminalProps> = ({
                 </span>
                 <div className="text-right font-mono">
                   <span className="font-bold text-slate-900 dark:text-white mr-2">
-                    {bm.price.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    {(bm.price ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                   </span>
                   <span className={`text-[11px] font-bold ${isBmPos ? 'text-emerald-500' : 'text-rose-500'}`}>
-                    {isBmPos ? '+' : ''}{bm.change.toFixed(2)} ({isBmPos ? '+' : ''}{bm.changePercent.toFixed(2)}%)
+                    {isBmPos ? '+' : ''}{bmChange.toFixed(2)} ({isBmPos ? '+' : ''}{bmChangePct.toFixed(2)}%)
                   </span>
                 </div>
               </div>

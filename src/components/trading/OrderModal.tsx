@@ -119,7 +119,7 @@ export const OrderModal: React.FC<OrderModalProps> = ({
   const totalMarginRequired = marginPerLot * effectiveLots;
   const hasSufficientMargin = wallet.availableBalance >= totalMarginRequired;
 
-  const isPositive = instrument.change >= 0;
+  const isPositive = (instrument?.change ?? 0) >= 0;
 
   // Execute order handler (works for either BUY or SELL button)
   const handleExecute = (side: 'BUY' | 'SELL') => {
@@ -186,7 +186,7 @@ export const OrderModal: React.FC<OrderModalProps> = ({
             <p className="text-xs font-mono text-slate-400 mt-1 flex items-baseline gap-2 flex-wrap">
               <span>{instrument.name} • LTP ₹{instrument.lastPrice.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
               <span className={`font-bold ${isPositive ? 'text-emerald-400' : 'text-rose-400'}`}>
-                {isPositive ? '+' : ''}{instrument.change.toFixed(2)} ({isPositive ? '+' : ''}{instrument.changePercent.toFixed(2)}%)
+                {isPositive ? '+' : ''}{(instrument?.change ?? 0).toFixed(2)} ({isPositive ? '+' : ''}{(instrument?.changePercent ?? 0).toFixed(2)}%)
               </span>
             </p>
           </div>

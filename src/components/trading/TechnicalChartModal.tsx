@@ -204,7 +204,7 @@ export const TechnicalChartModal: React.FC<TechnicalChartModalProps> = ({
     return chartHeight - ((val - minPrice) / priceRange) * (chartHeight - 60) - 30;
   };
 
-  const isPositive = instrument.change >= 0;
+  const isPositive = (instrument?.change ?? 0) >= 0;
 
   // TradingView Interval mapping
   const tvInterval =
@@ -269,8 +269,8 @@ export const TechnicalChartModal: React.FC<TechnicalChartModalProps> = ({
                   }`}
                 >
                   {isPositive ? '+' : ''}
-                  {instrument.change.toFixed(2)} ({isPositive ? '+' : ''}
-                  {instrument.changePercent.toFixed(2)}%)
+                  {(instrument?.change ?? 0).toFixed(2)} ({isPositive ? '+' : ''}
+                  {(instrument?.changePercent ?? 0).toFixed(2)}%)
                 </span>
               </div>
             </div>

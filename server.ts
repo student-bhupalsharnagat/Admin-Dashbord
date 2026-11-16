@@ -572,6 +572,14 @@ async function startServer() {
   // ----------------------------------------------------
   app.get('/api/auth/me', authenticate, async (req, res) => {
     const user = req.user!;
+    const userRoleUpper = (user.role || '').toUpperCase();
+    if (userRoleUpper === 'CLIENT' || userRoleUpper === 'TRADER' || userRoleUpper === 'TRADER_CLIENT') {
+      res.clearCookie('tradepro_session');
+      return res.status(403).json({
+        error: 'FORBIDDEN',
+        message: 'Access Denied: Trader Clients cannot access the Admin Portal. Please login via the Trading Platform.'
+      });
+    }
     res.json({
       user: {
         id: user.id,
@@ -687,6 +695,23 @@ async function startServer() {
         return res.status(401).json({
           error: 'INVALID_CREDENTIALS',
           message: 'Invalid email or password.'
+        });
+      }
+
+      // Explicitly reject non-admin roles (CLIENT, TRADER) attempting to log into Admin Panel
+      const userRoleUpper = (userRecord.role || '').toUpperCase();
+      if (userRoleUpper === 'CLIENT' || userRoleUpper === 'TRADER' || userRoleUpper === 'TRADER_CLIENT') {
+        await writeSecurityAuditLog({
+          tenantId: userRecord.tenant_id,
+          userName: userRecord.name,
+          action: 'LOGIN_REJECTED_TRADER_CLIENT',
+          module: 'AUTH',
+          details: `Access Denied: Trader client '${userRecord.email}' attempted to log into Admin Portal`,
+          ipAddress
+        });
+        return res.status(403).json({
+          error: 'FORBIDDEN',
+          message: 'Access Denied: Trader Clients cannot access the Admin Portal. Please login via the Trading Platform.'
         });
       }
 
@@ -3791,13 +3816,20 @@ async function startServer() {
   // 1-Click Demo Login Endpoint
   app.post('/api/auth/demo', async (req, res) => {
     try {
-      const { role = 'CLIENT' } = req.body;
-      const isClient = role === 'CLIENT';
-      const email = isClient ? 'client@alphaprime.com' : 'admin@platform.com';
-      const name = isClient ? 'Demo Trader' : 'Admin John';
-      const tenantId = isClient ? 'TNT-001' : null;
-      const tenantName = isClient ? 'VERTEX Trading' : 'All Tenants (Global Scope)';
-      const clientCode = isClient ? 'vtx123' : undefined;
+      const { role = 'SUPER_ADMIN' } = req.body;
+      const roleUpper = String(role).toUpperCase();
+      if (roleUpper === 'CLIENT' || roleUpper === 'TRADER' || roleUpper === 'TRADER_CLIENT') {
+        return res.status(403).json({
+          error: 'FORBIDDEN',
+          message: 'Access Denied: Trader Clients cannot access the Admin Portal. Please login via the Trading Platform.'
+        });
+      }
+      const isClient = false;
+      const email = 'admin@platform.com';
+      const name = 'Admin John';
+      const tenantId = null;
+      const tenantName = 'All Tenants (Global Scope)';
+      const clientCode = undefined;
 
       const ipAddress = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
       const userAgent = (req.headers['user-agent'] as string) || 'Demo Session';

@@ -457,17 +457,20 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
           // Subtle price walk
           const volatility = inst.lastPrice * (inst.category === 'CRYPTO' ? 0.0015 : 0.0006);
           const delta = (Math.random() - 0.49) * volatility;
-          const newPrice = Math.max(1, inst.lastPrice + delta);
-          const newChange = inst.change + delta;
-          const newChangePercent = ((newPrice - (inst.lastPrice - inst.change)) / (inst.lastPrice - inst.change)) * 100;
-          const newHigh = Math.max(inst.high, newPrice);
-          const newLow = Math.min(inst.low, newPrice);
-          const spread = inst.lastPrice < 100 ? 0.05 : 0.5;
+          const newPrice = Math.max(1, (inst?.lastPrice ?? 100) + delta);
+          const instChange = inst?.change ?? 0;
+          const instLastPrice = inst?.lastPrice ?? newPrice;
+          const newChange = instChange + delta;
+          const prevBase = instLastPrice - instChange;
+          const newChangePercent = prevBase !== 0 ? ((newPrice - prevBase) / prevBase) * 100 : 0;
+          const newHigh = Math.max(inst?.high ?? newPrice, newPrice);
+          const newLow = Math.min(inst?.low ?? newPrice, newPrice);
+          const spread = instLastPrice < 100 ? 0.05 : 0.5;
 
           return {
             ...inst,
-            lastPrice: Number(newPrice.toFixed(inst.lastPrice < 10 ? 4 : 2)),
-            change: Number(newChange.toFixed(inst.lastPrice < 10 ? 4 : 2)),
+            lastPrice: Number(newPrice.toFixed(instLastPrice < 10 ? 4 : 2)),
+            change: Number(newChange.toFixed(instLastPrice < 10 ? 4 : 2)),
             changePercent: Number(newChangePercent.toFixed(2)),
             high: Number(newHigh.toFixed(2)),
             low: Number(newLow.toFixed(2)),
@@ -480,14 +483,16 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
       // Also gently update Benchmarks
       setBenchmarks(prevBms =>
         prevBms.map(bm => {
-          const delta = (Math.random() - 0.49) * (bm.price * 0.0004);
-          const newPrice = bm.price + delta;
-          const newChange = bm.change + delta;
+          const delta = (Math.random() - 0.49) * ((bm?.price ?? 1000) * 0.0004);
+          const newPrice = (bm?.price ?? 1000) + delta;
+          const bmChange = bm?.change ?? 0;
+          const newChange = bmChange + delta;
+          const bmBase = (bm?.price ?? newPrice) - bmChange;
           return {
             ...bm,
             price: Number(newPrice.toFixed(2)),
             change: Number(newChange.toFixed(2)),
-            changePercent: Number(((newChange / (bm.price - bm.change)) * 100).toFixed(2))
+            changePercent: Number((bmBase !== 0 ? ((newChange / bmBase) * 100) : 0).toFixed(2))
           };
         })
       );

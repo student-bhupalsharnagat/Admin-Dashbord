@@ -278,7 +278,8 @@ export const TradingWatchlist: React.FC<TradingWatchlistProps> = ({
       {/* 5. Instruments List Cards */}
       <div className="space-y-3">
         {filteredInstruments.map(inst => {
-          const isPositive = inst.change >= 0;
+          if (!inst) return null;
+          const isPositive = (inst?.change ?? 0) >= 0;
           const isSelected = selectedInstrumentId === inst.id;
           const isFav = favorites[inst.id] || false;
 
@@ -379,8 +380,8 @@ export const TradingWatchlist: React.FC<TradingWatchlistProps> = ({
                       {isPositive ? <ArrowUpRight className="w-3.5 h-3.5" /> : <ArrowDownRight className="w-3.5 h-3.5" />}
                       <span>
                         {isPositive ? '+' : ''}
-                        {inst.change.toFixed(inst.lastPrice < 10 ? 4 : 2)} ({isPositive ? '+' : ''}
-                        {inst.changePercent.toFixed(2)}%)
+                        {(inst?.change ?? 0).toFixed((inst?.lastPrice ?? 0) < 10 ? 4 : 2)} ({isPositive ? '+' : ''}
+                        {(inst?.changePercent ?? 0).toFixed(2)}%)
                       </span>
                     </div>
                   </div>

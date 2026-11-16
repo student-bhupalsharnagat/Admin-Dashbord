@@ -165,25 +165,17 @@ export default function App() {
         if (res.ok) {
           const data = await res.json();
           if (data.user && isMounted) {
+            const roleUpper = (data.user.role || '').toUpperCase();
+            if (roleUpper === 'CLIENT' || roleUpper === 'TRADER' || roleUpper === 'TRADER_CLIENT') {
+              localStorage.removeItem('auth_token');
+              sessionStorage.removeItem('auth_token');
+              setCurrentUser(null);
+              showToast('Access Denied: Trader Clients cannot access the Admin Portal. Please login via the Trading Platform.', 'warning');
+              return;
+            }
             setCurrentUser(data.user);
             if (data.user.tenant_id && data.user.tenant_id !== 'GLOBAL') {
               setSelectedTenantScope(data.user.tenant_id);
-            }
-            if (data.user.role === 'CLIENT') {
-              const clientInfo = {
-                id: data.user.id,
-                userId: data.user.client_code || data.user.id || 'vtx123',
-                fullName: data.user.name || 'Demo Trader',
-                email: data.user.email,
-                tenantId: data.user.tenant_id,
-                tenantName: data.user.tenant_name || 'VERTEX Trading',
-                tenantCode: 'VTX',
-                initials: data.user.name
-                  ? data.user.name.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase()
-                  : 'DT'
-              };
-              setActiveTradingClient(clientInfo);
-              setAppMode('trading-platform');
             }
             loadDashboardData();
             loadHierarchyData();
@@ -205,6 +197,14 @@ export default function App() {
   }, []);
 
   const handleLogin = (user: AuthUser) => {
+    const roleUpper = (user.role || '').toUpperCase();
+    if (roleUpper === 'CLIENT' || roleUpper === 'TRADER' || roleUpper === 'TRADER_CLIENT') {
+      localStorage.removeItem('auth_token');
+      sessionStorage.removeItem('auth_token');
+      setCurrentUser(null);
+      showToast('Access Denied: Trader Clients cannot access the Admin Portal. Please login via the Trading Platform.', 'warning');
+      return;
+    }
     setCurrentUser(user);
     if (user.tenant_id && user.tenant_id !== 'GLOBAL') {
       setSelectedTenantScope(user.tenant_id);
@@ -213,30 +213,6 @@ export default function App() {
     }
     loadDashboardData();
     loadHierarchyData();
-
-    // If client account registers or signs in, open Trading Platform with client account details
-    if (user.role === 'CLIENT') {
-      const clientInfo = {
-        id: user.id,
-        userId: (user as any).client_code || user.id || 'vtx123',
-        fullName: user.name || 'Demo Trader',
-        email: user.email,
-        tenantId: user.tenant_id,
-        tenantName: (user as any).tenant_name || 'VERTEX Trading',
-        tenantCode: 'VTX',
-        initials: user.name
-          ? user.name.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase()
-          : 'DT'
-      };
-      setActiveTradingClient(clientInfo);
-      const matchedTenant = tenants.find(t => t.id === user.tenant_id);
-      if (matchedTenant?.domain) {
-        setActiveTradingDomain(matchedTenant.domain);
-      }
-      setAppMode('trading-platform');
-      showToast(`Welcome to ${clientInfo.tenantName}, ${user.name}! Trading console initialized.`, 'success');
-      return;
-    }
 
     showToast(`Welcome back, ${user.name}! Signed in as ${user.role}.`, 'success');
   };

@@ -130,13 +130,22 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin, tenants = [] })
     const demo = DEMO_ACCOUNTS[roleKey];
     setEmail(demo.email);
     setPassword(demo.password);
-    setErrorMessage('');
+    if (demo.role === 'CLIENT') {
+      setErrorMessage('Access Denied: Trader Clients cannot access the Admin Portal. Please login via the Trading Platform.');
+    } else {
+      setErrorMessage('');
+    }
   };
 
   // Handle Sign In submission
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
+
+    if (email.trim().toLowerCase() === 'client@alphaprime.com') {
+      setErrorMessage('Access Denied: Trader Clients cannot access the Admin Portal. Please login via the Trading Platform.');
+      return;
+    }
 
     if (!email.trim() || !password) {
       setErrorMessage('Please enter your email and password.');
@@ -173,11 +182,15 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin, tenants = [] })
         throw new Error('No user data returned from authentication server');
       }
     } catch (err: any) {
+      if (err.message && (err.message.includes('Trader Clients cannot access') || err.message.includes('Access Denied'))) {
+        setErrorMessage(err.message);
+        return;
+      }
       // If server returned invalid credentials or offline, fallback smoothly via real demo session
       const matchingDemo = Object.values(DEMO_ACCOUNTS).find(
         d => d.email.toLowerCase() === email.trim().toLowerCase()
       );
-      if (matchingDemo) {
+      if (matchingDemo && matchingDemo.role !== 'CLIENT') {
         try {
           const demoRes = await fetch('/api/auth/demo', {
             method: 'POST',
