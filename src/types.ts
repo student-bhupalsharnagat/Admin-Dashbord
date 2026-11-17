@@ -163,6 +163,18 @@ export interface Client {
   open_positions_count?: number;
   status: EntityStatus;
   created_at: string;
+  balance?: string | number;
+  equity?: string | number;
+  pl?: string;
+  pnl?: number;
+  margin?: string;
+  trades?: number;
+  joined?: string;
+  account?: string;
+  kyc?: string;
+  broker?: string;
+  master?: string;
+  subBroker?: string;
 }
 
 export interface Trade {

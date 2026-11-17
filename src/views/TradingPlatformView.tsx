@@ -501,6 +501,56 @@ export const TradingPlatformView: React.FC<TradingPlatformViewProps> = ({
     return () => clearInterval(interval);
   }, [marketStatus]);
 
+  // Listen to shared live ticks to synchronize TradingPlatformView with live tick engine
+  useEffect(() => {
+    const handleLiveEvent = (e: any) => {
+      const evt = e.detail;
+      if (!evt) return;
+      if (evt.eventType === 'market.ticks' || evt.eventType === 'market.tick') {
+        const payload = evt.payload;
+        if (!payload) return;
+        const tickMap: Record<string, number> = {};
+        if (Array.isArray(payload)) {
+          for (const item of payload) {
+            const sym = (item.symbol || '').toUpperCase();
+            const price = Number(item.ltp || item.price);
+            if (sym && price > 0) tickMap[sym] = price;
+          }
+        } else if (payload.symbol && (payload.price || payload.ltp)) {
+          const sym = String(payload.symbol).toUpperCase();
+          const price = Number(payload.price || payload.ltp);
+          if (price > 0) tickMap[sym] = price;
+        } else if (typeof payload === 'object') {
+          for (const [k, v] of Object.entries(payload)) {
+            const price = Number(v);
+            if (price > 0) tickMap[k.toUpperCase()] = price;
+          }
+        }
+
+        if (Object.keys(tickMap).length > 0) {
+          setInstruments(prev =>
+            prev.map(inst => {
+              const symUpper = inst.symbol.toUpperCase();
+              const newPrice = tickMap[symUpper] || tickMap[symUpper.replace(/\s+/g, '')];
+              if (!newPrice) return inst;
+              const delta = newPrice - inst.lastPrice;
+              return {
+                ...inst,
+                lastPrice: newPrice,
+                change: Number((inst.change + delta).toFixed(2)),
+                bid: Number((newPrice - 0.2).toFixed(2)),
+                ask: Number((newPrice + 0.2).toFixed(2))
+              };
+            })
+          );
+        }
+      }
+    };
+
+    window.addEventListener('admin:live-event', handleLiveEvent);
+    return () => window.removeEventListener('admin:live-event', handleLiveEvent);
+  }, []);
+
   // Keep selectedInstrument in sync with price updates
   useEffect(() => {
     const updated = instruments.find(i => i.id === selectedInstrument.id);

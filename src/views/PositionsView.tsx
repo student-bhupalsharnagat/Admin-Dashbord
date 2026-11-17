@@ -14,12 +14,19 @@ import { parseCleanNumber, liveLtpLookup } from '../utils/cleanNumber';
 export interface PositionItem {
   id: string;
   client: string;
+  clientId?: string;
   symbol: string;
+  side?: string;
   qty: string;
+  rawQty?: number;
   avgPrice: string;
+  rawAvgPrice?: number;
   currentPrice: string;
+  rawCurrentPrice?: number;
   unrealizedPL: string;
+  rawUnrealizedPL?: number;
   realizedPL: string;
+  rawRealizedPL?: number;
   margin: string;
   unrealizedPLPositive: boolean;
   realizedPLPositive: boolean;
@@ -44,7 +51,7 @@ export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify, currentU
     if (onNotify) onNotify(msg, type);
   };
 
-  const fetchPositions = async () => {
+  const fetchPositions = async (_silent = false) => {
     try {
       const res = await fetch('/api/admin/positions', { credentials: 'include' });
       if (res.ok) {
@@ -59,9 +66,11 @@ export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify, currentU
               const qtyNum = parseCleanNumber(p.rawQty ?? p.qty ?? p.quantity ?? 1) || 1;
               let rawCurrent = parseCleanNumber(p.rawCurrentPrice ?? p.currentPrice ?? p.last_price ?? p.ltp ?? 0);
               const isForex = ['USD/INR', 'EUR/INR', 'GBP/INR', 'JPY/INR'].includes(String(p.symbol).toUpperCase());
-              if (rawCurrent <= 0 || (!isForex && rawCurrent < 25)) {
-                const ltp = liveLtpLookup(p.symbol);
-                if (ltp > 0) rawCurrent = ltp;
+              const livePrice = liveLtpLookup(p.symbol);
+              if (livePrice > 0) {
+                rawCurrent = livePrice;
+              } else if (rawCurrent <= 0 || (!isForex && rawCurrent < 25)) {
+                if (livePrice > 0) rawCurrent = livePrice;
               }
 
               let rawAvg = parseCleanNumber(p.rawAvgPrice ?? p.avgPrice ?? p.averagePrice ?? p.entryPrice ?? p.buyPrice ?? p.buy_price ?? 0);
@@ -75,8 +84,8 @@ export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify, currentU
                 }
               }
 
-              const isLong = String(p.side || 'BUY').toUpperCase() !== 'SELL';
-              if (pnlNum === 0 && rawCurrent > 0 && rawAvg > 0 && qtyNum > 0) {
+              const isLong = String(p.side || 'BUY').toUpperCase() !== 'SELL' && String(p.side || 'BUY').toUpperCase() !== 'SHORT';
+              if (rawCurrent > 0 && rawAvg > 0 && qtyNum > 0) {
                 pnlNum = isLong ? (rawCurrent - rawAvg) * qtyNum : (rawAvg - rawCurrent) * qtyNum;
                 pnlNum = Math.round(pnlNum * 100) / 100;
               }
@@ -91,12 +100,19 @@ export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify, currentU
               return {
                 id: p.id || `POS-${idx + 1}`,
                 client: p.client || p.client_name || 'Retail Client',
+                clientId: p.clientId || p.client_id || '',
                 symbol: p.symbol || 'NIFTY50',
+                side: p.side || (isLong ? 'BUY' : 'SELL'),
                 qty: qtyNum.toLocaleString('en-IN'),
+                rawQty: qtyNum,
                 avgPrice: `₹${rawAvg.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                rawAvgPrice: rawAvg,
                 currentPrice: `₹${rawCurrent.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                rawCurrentPrice: rawCurrent,
                 unrealizedPL: `${pnlNum >= 0 ? '+' : ''}₹${pnlNum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                rawUnrealizedPL: pnlNum,
                 realizedPL: `${realizedNum >= 0 ? '+' : ''}₹${realizedNum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                rawRealizedPL: realizedNum,
                 margin: `₹${marginVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
                 unrealizedPLPositive: pnlNum >= 0,
                 realizedPLPositive: realizedNum >= 0
@@ -124,7 +140,7 @@ export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify, currentU
         evt.eventType === 'position.closed' ||
         evt.eventType === 'trade.executed'
       ) {
-        fetchPositions();
+        fetchPositions(true);
       } else if (evt.eventType === 'market.ticks' || evt.eventType === 'market.tick') {
         const payload = evt.payload;
         if (!payload) return;
@@ -154,13 +170,42 @@ export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify, currentU
               const newPrice = tickMap[symUpper] || tickMap[symUpper.replace(/\s+/g, '')];
               if (!newPrice) return pos;
 
-              const avg = parseCleanNumber(pos.avgPrice);
-              const qty = parseCleanNumber(pos.qty);
-              const pnl = avg > 0 && qty > 0 ? (newPrice - avg) * qty : parseCleanNumber(pos.unrealizedPL);
+              const isLong = String(pos.side || 'BUY').toUpperCase() !== 'SELL' && String(pos.side || 'BUY').toUpperCase() !== 'SHORT';
+              const avg = parseCleanNumber(pos.rawAvgPrice ?? pos.avgPrice);
+              const qty = parseCleanNumber(pos.rawQty ?? pos.qty);
+              const pnl = avg > 0 && qty > 0 ? (isLong ? (newPrice - avg) * qty : (avg - newPrice) * qty) : parseCleanNumber(pos.unrealizedPL);
+              const roundedPnl = Math.round(pnl * 100) / 100;
 
               return {
                 ...pos,
+                rawCurrentPrice: newPrice,
                 currentPrice: `₹${newPrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                rawUnrealizedPL: roundedPnl,
+                unrealizedPL: `${roundedPnl >= 0 ? '+' : ''}₹${roundedPnl.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                unrealizedPLPositive: roundedPnl >= 0
+              };
+            })
+          );
+        }
+      } else if (evt.eventType === 'positions.live_mtm' || evt.eventType === 'positions.mtm_batch') {
+        const deltas = Array.isArray(evt.payload) ? evt.payload : (Array.isArray(evt.payload?.deltas) ? evt.payload.deltas : []);
+        if (deltas.length > 0) {
+          const deltaMap = new Map<string, any>();
+          for (const d of deltas) {
+            const id = d.positionId || d.id;
+            if (id) deltaMap.set(String(id), d);
+          }
+          setPositions(prev =>
+            prev.map(pos => {
+              const delta = deltaMap.get(String(pos.id));
+              if (!delta) return pos;
+              const ltp = parseCleanNumber(delta.ltp ?? delta.currentPrice);
+              const pnl = parseCleanNumber(delta.unrealizedPnL ?? delta.unrealizedPL ?? delta.pnl);
+              return {
+                ...pos,
+                rawCurrentPrice: ltp > 0 ? ltp : pos.rawCurrentPrice,
+                currentPrice: ltp > 0 ? `₹${ltp.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : pos.currentPrice,
+                rawUnrealizedPL: pnl,
                 unrealizedPL: `${pnl >= 0 ? '+' : ''}₹${pnl.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
                 unrealizedPLPositive: pnl >= 0
               };
@@ -168,33 +213,53 @@ export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify, currentU
           );
         }
       } else if (evt.eventType === 'portfolio.mtm') {
-        fetchPositions();
+        fetchPositions(true);
       }
     };
 
     window.addEventListener('admin:live-event', handleLiveEvent);
 
-    // Optional direct WebSocket connection to live tick stream if available
+    // Direct WebSocket connection to Admin Panel real-time tick and MTM stream
     let ws: WebSocket | null = null;
-    try {
-      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${wsProtocol}//${window.location.hostname}:4000/ws`;
-      ws = new WebSocket(wsUrl);
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          if (msg.type === 'tick' || msg.eventType === 'market.ticks' || msg.type === 'market.ticks') {
-            window.dispatchEvent(new CustomEvent('admin:live-event', { detail: { eventType: 'market.ticks', payload: msg.data || msg.payload || msg } }));
-          } else if (msg.type === 'position.updated' || msg.eventType === 'position.updated') {
-            window.dispatchEvent(new CustomEvent('admin:live-event', { detail: { eventType: 'position.updated', payload: msg.data || msg.payload } }));
-          }
-        } catch {}
-      };
-      ws.onerror = () => {};
-    } catch {}
+    let wsReconnectTimeout: any = null;
+
+    const connectWs = () => {
+      try {
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${wsProtocol}//${window.location.host}/ws`;
+        ws = new WebSocket(wsUrl);
+
+        ws.onmessage = (event) => {
+          try {
+            const msg = JSON.parse(event.data);
+            if (msg.type === 'market.ticks' || msg.eventType === 'market.ticks' || msg.type === 'market.tick' || msg.eventType === 'market.tick') {
+              window.dispatchEvent(new CustomEvent('admin:live-event', { detail: { eventType: 'market.ticks', payload: msg.payload || msg.data || msg } }));
+            } else if (msg.type === 'positions.live_mtm' || msg.eventType === 'positions.live_mtm' || msg.type === 'positions.mtm_batch' || msg.eventType === 'positions.mtm_batch') {
+              window.dispatchEvent(new CustomEvent('admin:live-event', { detail: { eventType: 'positions.live_mtm', payload: msg.payload || msg.data } }));
+            } else if (msg.type === 'position.updated' || msg.eventType === 'position.updated') {
+              window.dispatchEvent(new CustomEvent('admin:live-event', { detail: { eventType: 'position.updated', payload: msg.data || msg.payload } }));
+            }
+          } catch {}
+        };
+
+        ws.onclose = () => {
+          wsReconnectTimeout = setTimeout(connectWs, 2000);
+        };
+        ws.onerror = () => {};
+      } catch {}
+    };
+
+    connectWs();
+
+    // Background fallback position sync interval at 2500ms (silent state merging)
+    const fallbackInterval = setInterval(() => {
+      fetchPositions(true);
+    }, 2500);
 
     return () => {
       window.removeEventListener('admin:live-event', handleLiveEvent);
+      clearInterval(fallbackInterval);
+      if (wsReconnectTimeout) clearTimeout(wsReconnectTimeout);
       if (ws) {
         try { ws.close(); } catch {}
       }

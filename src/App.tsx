@@ -30,6 +30,7 @@ import { RbacView } from './components/views/RbacView';
 import { useTheme } from './context/ThemeContext';
 import { apiFetch } from './utils/api';
 import { canAccessTab } from './utils/rbac';
+import { parseCleanNumber, liveLtpLookup, updateLivePrices } from './utils/cleanNumber';
 import { ShieldAlert } from 'lucide-react';
 import { ErrorBoundary } from './components/ErrorBoundary';
 
@@ -124,6 +125,7 @@ export default function App() {
   const [clients, setClients] = useState<Client[]>([]);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [kycRecords, setKycRecords] = useState<KYCRecord[]>([]);
+  const [quotesMap, setQuotesMap] = useState<Record<string, number>>({});
   const [selectedTradeForDetail, setSelectedTradeForDetail] = useState<any | null>(null);
   const [selectedClientForDetail, setSelectedClientForDetail] = useState<any | null>(null);
 
@@ -257,11 +259,11 @@ export default function App() {
   };
 
   // Fetch Dashboard & System Data
-  const loadDashboardData = useCallback(async () => {
+  const loadDashboardData = useCallback(async (silent = false) => {
     try {
       const url = selectedTenantScope
-        ? `/api/admin/dashboard?tenantId=${selectedTenantScope}`
-        : '/api/admin/dashboard';
+        ? `/api/admin/metrics?tenantId=${selectedTenantScope}`
+        : '/api/admin/metrics';
       const res = await apiFetch(url);
       if (res.ok) {
         const data: any = await res.json();
@@ -281,7 +283,7 @@ export default function App() {
         if (data.recentTrades && Array.isArray(data.recentTrades)) setRecentTrades(data.recentTrades);
         if (data.pendingKYC && Array.isArray(data.pendingKYC)) setPendingKYC(data.pendingKYC);
         if (data.activeUsersCount !== undefined) setActiveUsersCount(Number(data.activeUsersCount));
-      } else {
+      } else if (!silent) {
         if (res.status === 401 || res.status === 403) {
           setDashboardError(null);
         } else {
@@ -291,9 +293,11 @@ export default function App() {
       }
     } catch (err: any) {
       if (err.name === 'AbortError') return;
-      console.warn('Dashboard API fetch error:', err);
-      setDashboardError(err.message || 'Dashboard live telemetry unavailable');
-      setDashboardData(prev => ({ ...prev, kpis: null }));
+      if (!silent) {
+        console.warn('Dashboard API fetch error:', err);
+        setDashboardError(err.message || 'Dashboard live telemetry unavailable');
+        setDashboardData(prev => ({ ...prev, kpis: null }));
+      }
     }
   }, [selectedTenantScope]);
 
@@ -301,9 +305,9 @@ export default function App() {
   const [isHierarchyLoading, setIsHierarchyLoading] = useState(false);
   const [hierarchyError, setHierarchyError] = useState<string | null>(null);
 
-  const loadHierarchyData = useCallback(async () => {
-    setIsHierarchyLoading(true);
-    setHierarchyError(null);
+  const loadHierarchyData = useCallback(async (silent = false) => {
+    if (!silent) setIsHierarchyLoading(true);
+    if (!silent) setHierarchyError(null);
     try {
       const scopeParam = selectedTenantScope ? `?tenantId=${selectedTenantScope}` : '';
       const [mRes, bRes, sbRes, cRes, kRes, tRes, tnRes] = await Promise.all([
@@ -327,10 +331,12 @@ export default function App() {
         if (Array.isArray(tnList)) setTenants(tnList);
       }
     } catch (err: any) {
-      console.warn('Hierarchy API sync warning:', err);
-      setHierarchyError('Failed to load hierarchy entities from central API');
+      if (!silent) {
+        console.warn('Hierarchy API sync warning:', err);
+        setHierarchyError('Failed to load hierarchy entities from central API');
+      }
     } finally {
-      setIsHierarchyLoading(false);
+      if (!silent) setIsHierarchyLoading(false);
     }
   }, [selectedTenantScope]);
 
@@ -393,9 +399,10 @@ export default function App() {
               break;
             }
 
+            case 'broker.added':
             case 'hierarchy.updated': {
-              loadHierarchyData();
-              loadDashboardData();
+              loadHierarchyData(true);
+              loadDashboardData(true);
               break;
             }
 
@@ -449,12 +456,17 @@ export default function App() {
               loadDashboardData();
               break;
 
+            case 'fund.transaction_updated':
             case 'deposit.created':
             case 'deposit.approved':
             case 'deposit.rejected':
-              loadDashboardData();
-              loadHierarchyData();
+              loadDashboardData(true);
+              loadHierarchyData(true);
               showToast(`Deposit Event (${event.payload?.status || 'UPDATED'}): ₹${event.payload?.amount || 0}`, 'info');
+              break;
+
+            case 'ledger.updated':
+              loadDashboardData(true);
               break;
 
             case 'withdrawal.created':
@@ -482,9 +494,10 @@ export default function App() {
               loadDashboardData();
               break;
 
+            case 'risk.alert_triggered':
             case 'risk.margin_breach':
-              showToast(`Critical Risk Alert: Margin breach on position for ${event.payload?.clientName || 'Client'}`, 'warning');
-              loadDashboardData();
+              showToast(`Critical Risk Alert: ${event.payload?.reason || `Margin breach on position for ${event.payload?.clientName || 'Client'}`}`, 'warning');
+              loadDashboardData(true);
               break;
 
             case 'execution.failure':
@@ -520,6 +533,155 @@ export default function App() {
       if (eventSource) {
         eventSource.close();
       }
+    };
+  }, [currentUser?.id, loadDashboardData, loadHierarchyData]);
+
+  // Sub-Second Real-Time WebSocket & Fallback Live MTM Sync
+  useEffect(() => {
+    if (!currentUser) return;
+    let ws: WebSocket | null = null;
+    let reconnectTimer: any = null;
+
+    const connectWebSocket = () => {
+      try {
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${wsProtocol}//${window.location.host}/ws`;
+        ws = new WebSocket(wsUrl);
+
+        ws.onmessage = (e) => {
+          try {
+            const msg = JSON.parse(e.data);
+            if (!msg) return;
+
+            const evtType = msg.eventType || msg.type;
+            const payload = msg.payload || msg.data;
+
+            if (evtType === 'market.ticks' || evtType === 'market.tick') {
+              const tickMap: Record<string, number> = {};
+              if (Array.isArray(payload)) {
+                for (const item of payload) {
+                  const s = (item.symbol || '').toUpperCase();
+                  const p = parseCleanNumber(item.ltp ?? item.price);
+                  if (s && p > 0) tickMap[s] = p;
+                }
+              } else if (payload?.symbol && (payload.ltp || payload.price)) {
+                const s = String(payload.symbol).toUpperCase();
+                const p = parseCleanNumber(payload.ltp ?? payload.price);
+                if (s && p > 0) tickMap[s] = p;
+              } else if (typeof payload === 'object') {
+                for (const [k, v] of Object.entries(payload)) {
+                  const p = parseCleanNumber(v);
+                  if (k && p > 0) tickMap[k.toUpperCase()] = p;
+                }
+              }
+
+              if (Object.keys(tickMap).length > 0) {
+                updateLivePrices(tickMap);
+                setQuotesMap(prev => ({ ...prev, ...tickMap }));
+                window.dispatchEvent(new CustomEvent('admin:live-event', { detail: { eventType: 'market.ticks', payload: tickMap } }));
+              }
+            } else if (evtType === 'positions.live_mtm' || evtType === 'positions.mtm_batch') {
+              const deltas = Array.isArray(payload) ? payload : (Array.isArray(payload?.deltas) ? payload.deltas : []);
+              if (deltas.length > 0) {
+                // Update Clients live P&L in memory
+                const clientMtmMap = new Map<string, { pnl: number; count: number }>();
+                let totalNetMtm = 0;
+
+                for (const d of deltas) {
+                  const pnl = parseCleanNumber(d.unrealizedPnL ?? d.unrealizedPL ?? d.pnl);
+                  totalNetMtm += pnl;
+                  const cId = String(d.clientId || d.client || '').toLowerCase().trim();
+                  if (cId) {
+                    const cur = clientMtmMap.get(cId) || { pnl: 0, count: 0 };
+                    cur.pnl += pnl;
+                    cur.count += 1;
+                    clientMtmMap.set(cId, cur);
+                  }
+                }
+
+                if (clientMtmMap.size > 0) {
+                  setClients(prevClients =>
+                    prevClients.map(c => {
+                      const idKey = String(c.id || '').toLowerCase().trim();
+                      const codeKey = String(c.client_code || '').toLowerCase().trim();
+                      const nameKey = String(c.name || '').toLowerCase().trim();
+                      const m = clientMtmMap.get(idKey) || clientMtmMap.get(codeKey) || clientMtmMap.get(nameKey);
+                      if (!m) return c;
+                      const rawPnl = Math.round(m.pnl * 100) / 100;
+                      const walletBal = parseCleanNumber(c.wallet_balance ?? c.balance);
+                      const totalEq = walletBal + rawPnl;
+                      return {
+                        ...c,
+                        todays_pl: rawPnl,
+                        pnl: rawPnl,
+                        pl: `${rawPnl >= 0 ? '+' : ''}₹${rawPnl.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                        open_positions_count: m.count,
+                        available_margin: totalEq,
+                        equity: `₹${totalEq.toLocaleString('en-IN')}`
+                      };
+                    })
+                  );
+                }
+
+                // Update Total MTM P&L KPI card in real time
+                setDashboardData(prev => {
+                  if (!prev.kpis) return prev;
+                  const prevKpis = { ...prev.kpis };
+                  if (prevKpis.total_pl) {
+                    const formattedMtm = `${totalNetMtm >= 0 ? '+' : ''}₹${Math.abs(totalNetMtm).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+                    prevKpis.total_pl = {
+                      ...prevKpis.total_pl,
+                      value: formattedMtm,
+                      raw: totalNetMtm,
+                      badge: totalNetMtm >= 0 ? '+Net Profit' : '-Net Loss'
+                    };
+                  }
+                  return { ...prev, kpis: prevKpis };
+                });
+
+                window.dispatchEvent(new CustomEvent('admin:live-event', { detail: { eventType: 'positions.live_mtm', payload: deltas } }));
+              }
+            } else {
+              window.dispatchEvent(new CustomEvent('admin:live-event', { detail: { eventType: evtType, payload } }));
+              if (
+                evtType === 'client.registered' ||
+                evtType === 'broker.added' ||
+                evtType === 'trade.executed' ||
+                evtType === 'fund.transaction_updated' ||
+                evtType === 'ledger.updated' ||
+                evtType === 'risk.alert_triggered' ||
+                evtType === 'risk.margin_breach'
+              ) {
+                loadDashboardData(true);
+                if (evtType === 'client.registered' || evtType === 'broker.added' || evtType === 'fund.transaction_updated') {
+                  loadHierarchyData(true);
+                }
+              }
+            }
+          } catch {}
+        };
+
+        ws.onclose = () => {
+          reconnectTimer = setTimeout(connectWebSocket, 2000);
+        };
+        ws.onerror = () => {};
+      } catch {}
+    };
+
+    connectWebSocket();
+
+    // 2.5s Background fallback position sync with silent state merging
+    const fallbackSync = setInterval(() => {
+      loadDashboardData(true);
+      loadHierarchyData(true);
+    }, 2500);
+
+    return () => {
+      if (ws) {
+        try { ws.close(); } catch {}
+      }
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      clearInterval(fallbackSync);
     };
   }, [currentUser?.id, loadDashboardData, loadHierarchyData]);
 

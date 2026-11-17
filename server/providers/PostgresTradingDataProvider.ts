@@ -1429,6 +1429,47 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       };
     });
 
+    // Enrich clients with live MTM PnL and active position counts from open positions
+    try {
+      const positions = await this.getPositions(tenantId).catch(() => []);
+      if (positions && positions.length > 0) {
+        const pnlByClient = new Map<string, { pnl: number; count: number }>();
+        for (const p of positions) {
+          const clientId = String(p.clientId || '').toLowerCase().trim();
+          const clientName = String(p.client || '').toLowerCase().trim();
+          const pnl = parseCleanNumber(p.rawUnrealizedPL ?? p.unrealizedPL);
+
+          const keys = [clientId, clientName].filter(Boolean);
+          for (const k of keys) {
+            const cur = pnlByClient.get(k) || { pnl: 0, count: 0 };
+            cur.pnl += pnl;
+            cur.count += 1;
+            pnlByClient.set(k, cur);
+          }
+        }
+
+        for (const c of finalClients) {
+          const cIdKey = String(c.id || '').toLowerCase().trim();
+          const cCodeKey = String(c.client_code || '').toLowerCase().trim();
+          const cNameKey = String(c.name || '').toLowerCase().trim();
+          const metrics = pnlByClient.get(cIdKey) || pnlByClient.get(cCodeKey) || pnlByClient.get(cNameKey);
+          if (metrics) {
+            const rawPnl = Math.round(metrics.pnl * 100) / 100;
+            const walletBal = parseCleanNumber(c.wallet_balance ?? c.balance);
+            const totalEq = walletBal + rawPnl;
+            c.todays_pl = rawPnl;
+            c.pnl = rawPnl;
+            c.pl = `${rawPnl >= 0 ? '+' : ''}₹${rawPnl.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+            c.open_positions_count = metrics.count;
+            c.available_margin = totalEq;
+            (c as any).equity = `₹${totalEq.toLocaleString('en-IN')}`;
+          }
+        }
+      }
+    } catch {
+      // Non-blocking enrichment fallback
+    }
+
     if (subBrokerId) {
       return finalClients.filter(c => c.sub_broker_id === subBrokerId);
     }
@@ -2932,10 +2973,10 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         continue;
       }
 
-      let curPriceNum = parseCleanNumber(r.current_price || r.currentPrice || r.ltp || 0);
+      const livePrice = liveLtpLookup(r.symbol);
+      let curPriceNum = livePrice > 0 ? livePrice : parseCleanNumber(r.current_price || r.currentPrice || r.ltp || 0);
       const isForex = ['USD/INR', 'EUR/INR', 'GBP/INR', 'JPY/INR'].includes(String(r.symbol).toUpperCase());
       if (curPriceNum <= 0 || (!isForex && curPriceNum < 25)) {
-        const livePrice = liveLtpLookup(r.symbol);
         if (livePrice > 0) curPriceNum = livePrice;
       }
 
@@ -2951,9 +2992,9 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         }
       }
 
-      // Re-calculate unrealized PnL if 0 or missing while curPrice and buyPrice exist
-      const isLong = String(r.side || 'BUY').toUpperCase() !== 'SELL';
-      if (pnlNum === 0 && curPriceNum > 0 && buyPriceNum > 0 && qtyNum > 0) {
+      // Re-calculate unrealized PnL dynamically based on latest tick price
+      const isLong = String(r.side || 'BUY').toUpperCase() !== 'SELL' && String(r.side || 'BUY').toUpperCase() !== 'SHORT';
+      if (curPriceNum > 0 && buyPriceNum > 0 && qtyNum > 0) {
         pnlNum = isLong ? (curPriceNum - buyPriceNum) * qtyNum : (buyPriceNum - curPriceNum) * qtyNum;
         pnlNum = Math.round(pnlNum * 100) / 100;
       }
@@ -2975,6 +3016,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
 
       dbPositions.push({
         id: r.id,
+        clientId: r.client_id || r.clientId || r.user_id || r.userId || '',
         client: r.client_name || 'Client',
         symbol: r.symbol,
         side: r.side || 'BUY',
@@ -3020,10 +3062,10 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
           if (!seenIds.has(posId)) {
             seenIds.add(posId);
 
-            let curPriceNum = parseCleanNumber(r.current_price || r.currentPrice || r.ltp || r.markPrice || 0);
+            const livePrice = liveLtpLookup(r.symbol);
+            let curPriceNum = livePrice > 0 ? livePrice : parseCleanNumber(r.current_price || r.currentPrice || r.ltp || r.markPrice || 0);
             const isForex = ['USD/INR', 'EUR/INR', 'GBP/INR', 'JPY/INR'].includes(String(r.symbol).toUpperCase());
             if (curPriceNum <= 0 || (!isForex && curPriceNum < 25)) {
-              const livePrice = liveLtpLookup(r.symbol);
               if (livePrice > 0) curPriceNum = livePrice;
             }
 
@@ -3038,8 +3080,8 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
               }
             }
 
-            const isLong = String(r.side || 'BUY').toUpperCase() !== 'SELL';
-            if (pnlNum === 0 && curPriceNum > 0 && buyPriceNum > 0 && qtyNum > 0) {
+            const isLong = String(r.side || 'BUY').toUpperCase() !== 'SELL' && String(r.side || 'BUY').toUpperCase() !== 'SHORT';
+            if (curPriceNum > 0 && buyPriceNum > 0 && qtyNum > 0) {
               pnlNum = isLong ? (curPriceNum - buyPriceNum) * qtyNum : (buyPriceNum - curPriceNum) * qtyNum;
               pnlNum = Math.round(pnlNum * 100) / 100;
             }
@@ -3053,6 +3095,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
 
             dbPositions.push({
               id: posId,
+              clientId: r.client_id || r.clientId || r.userId || r.user_id || '',
               client: r.client_name || r.clientName || r.client || r.userId || 'Live Trader',
               symbol: r.symbol,
               side: r.side || 'BUY',

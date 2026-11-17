@@ -66,3 +66,32 @@ export function liveLtpLookup(symbol?: string): number {
   return 0;
 }
 
+export function updateLivePrice(symbol: string, price: number): void {
+  if (!symbol || !price || isNaN(price) || price <= 0) return;
+  const raw = String(symbol).toUpperCase().trim();
+  const clean = raw.replace(/^(NSE|BSE|MCX|NFO|FX|CRYPTO|TVC|BINANCE):/i, '').trim();
+  const normalized = clean.replace(/[\s\-_./]/g, '');
+  LIVE_PRICE_DIRECTORY[raw] = price;
+  LIVE_PRICE_DIRECTORY[clean] = price;
+  LIVE_PRICE_DIRECTORY[normalized] = price;
+}
+
+export function updateLivePrices(quotes: Record<string, number> | Array<{ symbol: string; ltp?: number; price?: number }>): void {
+  if (!quotes) return;
+  if (Array.isArray(quotes)) {
+    for (const q of quotes) {
+      const p = parseCleanNumber(q.ltp ?? q.price);
+      if (q.symbol && p > 0) updateLivePrice(q.symbol, p);
+    }
+  } else if (typeof quotes === 'object') {
+    for (const [sym, val] of Object.entries(quotes)) {
+      const p = parseCleanNumber(val);
+      if (sym && p > 0) updateLivePrice(sym, p);
+    }
+  }
+}
+
+export function getAllLivePrices(): Record<string, number> {
+  return { ...LIVE_PRICE_DIRECTORY };
+}
+
