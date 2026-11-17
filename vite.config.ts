@@ -11,6 +11,35 @@ export default defineConfig(() => {
         '@': path.resolve(__dirname, '.'),
       },
     },
+    build: {
+      sourcemap: false,
+      reportCompressedSize: false,
+      minify: 'esbuild' as const,
+      chunkSizeWarningLimit: 2000,
+      rollupOptions: {
+        maxParallelFileOps: 3,
+        output: {
+          manualChunks(id: string) {
+            const normalized = id.replace(/\\/g, '/');
+            if (!normalized.includes('/node_modules/')) return;
+            if (normalized.includes('/node_modules/recharts/') || normalized.includes('/node_modules/d3-')) {
+              return 'vendor-recharts';
+            }
+            if (normalized.includes('/node_modules/lucide-react/')) {
+              return 'vendor-lucide';
+            }
+            if (
+              normalized.includes('/node_modules/react/') ||
+              normalized.includes('/node_modules/react-dom/') ||
+              normalized.includes('/node_modules/react-is/') ||
+              normalized.includes('/node_modules/scheduler/')
+            ) {
+              return 'vendor-react';
+            }
+          },
+        },
+      },
+    },
     server: {
       // Render पर डोमेन ब्लॉक होने की एरर को ठीक करने के लिए
       allowedHosts: true as true,
