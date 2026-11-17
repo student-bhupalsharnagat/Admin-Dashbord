@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Search,
   ChevronDown,
@@ -210,12 +210,11 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
     return ref;
   };
 
-  const fetchFundsData = async () => {
+  const fetchFundsData = useCallback(async () => {
     try {
-      const statusParam = fundsStatusFilter && fundsStatusFilter !== 'All Status' ? `?status=${fundsStatusFilter}` : '';
       const [depRes, wdrRes] = await Promise.all([
-        fetch(`/api/admin/compliance/deposits${statusParam}`, { credentials: 'include' }),
-        fetch(`/api/admin/compliance/withdrawals${statusParam}`, { credentials: 'include' })
+        fetch('/api/admin/compliance/deposits', { credentials: 'include' }),
+        fetch('/api/admin/compliance/withdrawals', { credentials: 'include' })
       ]);
       if (depRes.ok) {
         const depData = await depRes.json();
@@ -236,7 +235,7 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
     } catch (e) {
       console.error('Error fetching funds:', e);
     }
-  };
+  }, []);
 
   const resolveAccountName = (item: any) => {
     if (!item) return '';
@@ -313,7 +312,21 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
 
   useEffect(() => {
     fetchFundsData();
-  }, [fundsTab, fundsStatusFilter]);
+  }, [fundsTab, fundsStatusFilter, fetchFundsData]);
+
+  // 2.5s silent polling for live Funds / Ledger / KYC totals
+  useEffect(() => {
+    const pollId = setInterval(() => {
+      if (section === 'funds') {
+        fetchFundsData();
+      } else if (section === 'ledger') {
+        fetchLedgerData();
+      } else if (section === 'kyc') {
+        fetchKycData();
+      }
+    }, 2500);
+    return () => clearInterval(pollId);
+  }, [section, fetchFundsData, ledgerTypeFilter, kycStatusFilter]);
 
   useEffect(() => {
     fetchLedgerData();
@@ -323,15 +336,19 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
   useEffect(() => {
     const handleLiveEvent = (e: any) => {
       const evt = e.detail;
-      if (evt?.eventType?.startsWith('deposit.') || evt?.eventType?.startsWith('fund.')) {
+      const evtType = evt?.eventType || evt?.event || '';
+      if (
+        evtType === 'fund.transaction_updated' ||
+        evtType.startsWith('deposit.') ||
+        evtType.startsWith('fund.') ||
+        evtType.startsWith('manual_deposit.') ||
+        evtType.startsWith('withdrawal.')
+      ) {
         fetchFundsData();
         fetchLedgerData();
-      } else if (evt?.eventType?.startsWith('withdrawal.')) {
-        fetchFundsData();
+      } else if (evtType === 'trade.executed' || evtType === 'ledger.updated') {
         fetchLedgerData();
-      } else if (evt?.eventType === 'trade.executed') {
-        fetchLedgerData();
-      } else if (evt?.eventType?.startsWith('kyc.')) {
+      } else if (evtType.startsWith('kyc.')) {
         fetchKycData();
       }
     };
@@ -340,7 +357,7 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
     return () => {
       window.removeEventListener('admin:live-event', handleLiveEvent);
     };
-  }, []);
+  }, [fetchFundsData]);
 
   // ----------------------------------------------------------------------
   // KYC ACTIONS
@@ -867,6 +884,24 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
   // ======================================================================
   if (section === 'funds') {
     const isDeposits = fundsTab === 'deposits';
+    const parseFundAmt = (item: { rawAmount?: number; amount?: string | number }) => {
+      if (typeof item.rawAmount === 'number' && !isNaN(item.rawAmount)) return item.rawAmount;
+      const cleaned = Number(String(item.amount || '0').replace(/[^0-9.-]/g, ''));
+      return isNaN(cleaned) ? 0 : cleaned;
+    };
+    const formatCompactInr = (val: number) => {
+      if (val >= 10000000) return `₹${(val / 10000000).toFixed(2)}Cr`;
+      if (val >= 100000) return `₹${(val / 100000).toFixed(2)}L`;
+      if (val >= 1000) return `₹${(val / 1000).toFixed(val % 1000 === 0 ? 0 : 1)}K`;
+      return `₹${val.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
+    };
+
+    const totalDepositsAmount = depositsList
+      .filter(d => d.status !== 'FAILED')
+      .reduce((sum, d) => sum + parseFundAmt(d), 0);
+    const totalWithdrawalsAmount = withdrawalsList
+      .filter(w => w.status !== 'FAILED')
+      .reduce((sum, w) => sum + parseFundAmt(w), 0);
     const pendingDepositsCount = depositsList.filter(d => d.status === 'PENDING').length;
     const pendingWithdrawalsCount = withdrawalsList.filter(w => w.status === 'PENDING').length;
 
@@ -925,7 +960,7 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
           >
             <div>
               <p className="text-[11px] font-bold text-slate-400 group-hover:text-emerald-400 transition-colors uppercase tracking-wider">TOTAL DEPOSITS</p>
-              <p className="text-2xl font-bold text-white mt-1">₹50K</p>
+              <p className="text-2xl font-bold text-white mt-1">{formatCompactInr(totalDepositsAmount)}</p>
             </div>
             <div className="w-10 h-10 rounded-lg bg-[#06261f] border border-[#065f46] flex items-center justify-center text-[#34d399]">
               <ArrowDownLeft size={18} />
@@ -949,7 +984,7 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
           >
             <div>
               <p className="text-[11px] font-bold text-slate-400 group-hover:text-red-400 transition-colors uppercase tracking-wider">TOTAL WITHDRAWALS</p>
-              <p className="text-2xl font-bold text-white mt-1">₹5K</p>
+              <p className="text-2xl font-bold text-white mt-1">{formatCompactInr(totalWithdrawalsAmount)}</p>
             </div>
             <div className="w-10 h-10 rounded-lg bg-[#310e18] border border-[#7f1d1d] flex items-center justify-center text-[#f87171]">
               <ArrowUpRight size={18} />

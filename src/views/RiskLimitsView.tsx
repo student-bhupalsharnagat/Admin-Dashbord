@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   Plus,
   Pencil,
@@ -119,80 +119,106 @@ export const RiskLimitsView: React.FC<RiskLimitsViewProps> = ({ onNotify }) => {
     if (onNotify) onNotify(msg, type);
   };
 
-  React.useEffect(() => {
-    let isMounted = true;
-    const fetchRiskData = async () => {
+  const fetchRiskData = useCallback(async () => {
+    try {
+      let localProfiles: RiskProfileItem[] = [];
       try {
-        let localProfiles: RiskProfileItem[] = [];
-        try {
-          localProfiles = JSON.parse(localStorage.getItem('admin_risk_profiles') || '[]');
-        } catch {}
+        localProfiles = JSON.parse(localStorage.getItem('admin_risk_profiles') || '[]');
+      } catch {}
 
-        let resolvedEvents: string[] = [];
-        try {
-          resolvedEvents = JSON.parse(localStorage.getItem('admin_resolved_risk_events') || '[]');
-        } catch {}
+      let resolvedEvents: string[] = [];
+      try {
+        resolvedEvents = JSON.parse(localStorage.getItem('admin_resolved_risk_events') || '[]');
+      } catch {}
 
-        const [profilesRes, eventsRes] = await Promise.all([
-          fetch('/api/admin/risk/profiles', { credentials: 'include' }),
-          fetch('/api/admin/risk/events', { credentials: 'include' })
-        ]);
+      const [profilesRes, eventsRes] = await Promise.all([
+        fetch('/api/admin/risk/profiles', { credentials: 'include' }),
+        fetch('/api/admin/risk/events', { credentials: 'include' })
+      ]);
 
-        if (profilesRes.ok) {
-          const profilesData = await profilesRes.json();
-          if (isMounted && Array.isArray(profilesData)) {
-            const mappedProfiles: RiskProfileItem[] = profilesData.map((p: any) => ({
-              profileId: p.id || p.profileId,
-              name: p.name,
-              maxOrderQty: p.max_order_qty ? String(p.max_order_qty) : (p.max_leverage ? `${p.max_leverage}x` : (p.maxOrderQty || '100,000')),
-              maxExposure: p.max_order_value ? `₹${parseFloat(p.max_order_value).toLocaleString('en-IN')}` : (p.max_exposure || p.maxExposure || '₹500,000'),
-              dailyLossLimit: p.daily_loss_limit ? `₹${parseFloat(p.daily_loss_limit).toLocaleString('en-IN')}` : (p.dailyLossLimit || '₹10,000'),
-              marginReq: p.margin_call_threshold ? `${p.margin_call_threshold}%` : (p.marginReq || '2%'),
-              status: p.status === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE',
-              description: p.description || `${p.name} risk governance tier`
-            }));
+      if (profilesRes.ok) {
+        const profilesData = await profilesRes.json();
+        if (Array.isArray(profilesData)) {
+          const mappedProfiles: RiskProfileItem[] = profilesData.map((p: any) => ({
+            profileId: p.id || p.profileId,
+            name: p.name,
+            maxOrderQty: p.max_order_qty ? String(p.max_order_qty) : (p.max_leverage ? `${p.max_leverage}x` : (p.maxOrderQty || '100,000')),
+            maxExposure: p.max_order_value ? `₹${parseFloat(p.max_order_value).toLocaleString('en-IN')}` : (p.max_exposure || p.maxExposure || '₹500,000'),
+            dailyLossLimit: p.daily_loss_limit ? `₹${parseFloat(p.daily_loss_limit).toLocaleString('en-IN')}` : (p.dailyLossLimit || '₹10,000'),
+            marginReq: p.margin_call_threshold ? `${p.margin_call_threshold}%` : (p.marginReq || '2%'),
+            status: p.status === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE',
+            description: p.description || `${p.name} risk governance tier`
+          }));
 
-            // Merge local profiles
-            const seenIds = new Set(mappedProfiles.map(p => p.profileId));
-            for (const lp of localProfiles) {
-              if (!seenIds.has(lp.profileId)) {
-                mappedProfiles.push(lp);
-                seenIds.add(lp.profileId);
-              }
+          // Merge local profiles
+          const seenIds = new Set(mappedProfiles.map(p => p.profileId));
+          for (const lp of localProfiles) {
+            if (!seenIds.has(lp.profileId)) {
+              mappedProfiles.push(lp);
+              seenIds.add(lp.profileId);
             }
-            setProfiles(mappedProfiles);
           }
-        } else if (localProfiles.length > 0) {
-          setProfiles(localProfiles);
+          setProfiles(mappedProfiles);
         }
+      } else if (localProfiles.length > 0) {
+        setProfiles(localProfiles);
+      }
 
-        if (eventsRes.ok) {
-          const eventsData = await eventsRes.json();
-          if (isMounted && Array.isArray(eventsData)) {
-            const mappedEvents: RiskEventItem[] = eventsData.map((ev: any, idx: number) => {
-              const eventId = ev.id || `RE00${idx + 1}`;
-              const isResolvedLocally = resolvedEvents.includes(eventId);
-              return {
-                eventId,
-                client: ev.client_name || ev.client_code || 'Client Trader',
-                symbol: ev.symbol || (ev.details && ev.details.symbol) || 'NIFTY50',
-                event: (ev.details && ev.details.message) || ev.event_type || 'Risk Threshold Alert',
-                severity: (ev.severity === 'HIGH' || ev.severity === 'CRITICAL') ? 'HIGH' : (ev.severity === 'LOW' ? 'LOW' : 'MEDIUM'),
-                date: ev.timestamp ? new Date(ev.timestamp).toISOString().replace('T', ' ').slice(0, 16) : '2026-03-29 10:00',
-                status: (isResolvedLocally || ev.status === 'RESOLVED' || (ev.details && ev.details.resolved)) ? 'RESOLVED' : 'ACTIVE'
-              };
-            });
-            setEvents(mappedEvents);
-          }
+      if (eventsRes.ok) {
+        const eventsData = await eventsRes.json();
+        if (Array.isArray(eventsData)) {
+          const mappedEvents: RiskEventItem[] = eventsData.map((ev: any, idx: number) => {
+            const eventId = ev.id || `RE00${idx + 1}`;
+            const isResolvedLocally = resolvedEvents.includes(eventId);
+            return {
+              eventId,
+              client: ev.client_name || ev.client_code || 'Client Trader',
+              symbol: ev.symbol || (ev.details && ev.details.symbol) || 'NIFTY50',
+              event: (ev.details && ev.details.message) || ev.event_type || 'Risk Threshold Alert',
+              severity: (ev.severity === 'HIGH' || ev.severity === 'CRITICAL') ? 'HIGH' : (ev.severity === 'LOW' ? 'LOW' : 'MEDIUM'),
+              date: ev.timestamp ? new Date(ev.timestamp).toISOString().replace('T', ' ').slice(0, 16) : '2026-03-29 10:00',
+              status: (isResolvedLocally || ev.status === 'RESOLVED' || (ev.details && ev.details.resolved)) ? 'RESOLVED' : 'ACTIVE'
+            };
+          });
+          setEvents(mappedEvents);
         }
-      } catch (err) {
-        console.warn('Risk API fetch error:', err);
+      }
+    } catch (err) {
+      console.warn('Risk API fetch error:', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchRiskData();
+    const pollId = setInterval(() => {
+      fetchRiskData();
+    }, 2500);
+    return () => clearInterval(pollId);
+  }, [fetchRiskData]);
+
+  useEffect(() => {
+    const handleLiveRisk = (e: any) => {
+      const evt = e.detail;
+      const evtType = evt?.eventType || evt?.event || '';
+      if (evtType === 'risk.alert_triggered' || evtType === 'risk.margin_breach' || evtType === 'execution.failure') {
+        const p = evt?.payload || {};
+        const liveItem: RiskEventItem = {
+          eventId: p.eventId || p.orderId || `RE-LIVE-${Date.now()}`,
+          client: p.clientName || p.userId || 'Client Trader',
+          symbol: p.symbol || 'PORTFOLIO',
+          event: p.reason || p.alertType || (evtType === 'risk.margin_breach' ? 'Margin shortfall alert' : 'Order blocked: risk check'),
+          severity: p.severity === 'LOW' ? 'LOW' : (p.severity === 'MEDIUM' ? 'MEDIUM' : 'HIGH'),
+          date: (p.detectedAt || p.failedAt || new Date().toISOString()).replace('T', ' ').slice(0, 16),
+          status: 'ACTIVE'
+        };
+        setEvents(prev => [liveItem, ...prev.filter(item => item.eventId !== liveItem.eventId)]);
+        fetchRiskData();
       }
     };
 
-    fetchRiskData();
-    return () => { isMounted = false; };
-  }, []);
+    window.addEventListener('admin:live-event', handleLiveRisk);
+    return () => window.removeEventListener('admin:live-event', handleLiveRisk);
+  }, [fetchRiskData]);
 
   const handleCreateProfile = async (e: React.FormEvent) => {
     e.preventDefault();
