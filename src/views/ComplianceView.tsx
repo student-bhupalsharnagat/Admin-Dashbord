@@ -212,10 +212,10 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
 
   const fetchFundsData = async () => {
     try {
-      // Fetch full list so KPI totals (Total Deposits/Withdrawals & Pending counts) stay accurate under status filters
+      const statusParam = fundsStatusFilter && fundsStatusFilter !== 'All Status' ? `?status=${fundsStatusFilter}` : '';
       const [depRes, wdrRes] = await Promise.all([
-        fetch('/api/admin/compliance/deposits', { credentials: 'include' }),
-        fetch('/api/admin/compliance/withdrawals', { credentials: 'include' })
+        fetch(`/api/admin/compliance/deposits${statusParam}`, { credentials: 'include' }),
+        fetch(`/api/admin/compliance/withdrawals${statusParam}`, { credentials: 'include' })
       ]);
       if (depRes.ok) {
         const depData = await depRes.json();
@@ -319,38 +319,19 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
     fetchLedgerData();
   }, [ledgerTypeFilter]);
 
-  // 2.5s silent polling loop for real-time Funds & Ledger updates
-  useEffect(() => {
-    const pollInterval = setInterval(() => {
-      if (section === 'funds') {
-        fetchFundsData();
-      } else if (section === 'ledger') {
-        fetchLedgerData();
-      } else if (section === 'kyc') {
-        fetchKycData();
-      }
-    }, 2500);
-
-    return () => clearInterval(pollInterval);
-  }, [section, fundsStatusFilter, ledgerTypeFilter, kycStatusFilter]);
-
   // Listen to shared window admin:live-event to avoid socket starvation
   useEffect(() => {
     const handleLiveEvent = (e: any) => {
       const evt = e.detail;
-      const evtType = evt?.eventType || '';
-      if (
-        evtType === 'fund.transaction_updated' ||
-        evtType.startsWith('deposit.') ||
-        evtType.startsWith('manual_deposit.') ||
-        evtType.startsWith('fund.') ||
-        evtType.startsWith('withdrawal.')
-      ) {
+      if (evt?.eventType?.startsWith('deposit.') || evt?.eventType?.startsWith('fund.')) {
         fetchFundsData();
         fetchLedgerData();
-      } else if (evtType === 'trade.executed' || evtType === 'ledger.updated') {
+      } else if (evt?.eventType?.startsWith('withdrawal.')) {
+        fetchFundsData();
         fetchLedgerData();
-      } else if (evtType.startsWith('kyc.')) {
+      } else if (evt?.eventType === 'trade.executed') {
+        fetchLedgerData();
+      } else if (evt?.eventType?.startsWith('kyc.')) {
         fetchKycData();
       }
     };
@@ -359,7 +340,7 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
     return () => {
       window.removeEventListener('admin:live-event', handleLiveEvent);
     };
-  }, [fundsStatusFilter, ledgerTypeFilter, kycStatusFilter]);
+  }, []);
 
   // ----------------------------------------------------------------------
   // KYC ACTIONS
@@ -886,23 +867,6 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
   // ======================================================================
   if (section === 'funds') {
     const isDeposits = fundsTab === 'deposits';
-    const parseFundAmt = (item: any) => {
-      if (typeof item.rawAmount === 'number' && !isNaN(item.rawAmount)) return item.rawAmount;
-      const num = parseFloat(String(item.amount || '0').replace(/[^0-9.-]/g, ''));
-      return isNaN(num) ? 0 : num;
-    };
-    const formatFundTotal = (val: number) => {
-      if (val >= 10000000) return `₹${(val / 10000000).toFixed(2)} Cr`;
-      if (val >= 100000) return `₹${(val / 100000).toFixed(2)} L`;
-      if (val >= 1000) return `₹${(val / 1000).toFixed(1).replace(/\.0$/, '')}K`;
-      return `₹${val.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
-    };
-    const totalDepositsAmount = depositsList
-      .filter(d => d.status === 'COMPLETED' || (d.status as string) === 'APPROVED')
-      .reduce((sum, d) => sum + parseFundAmt(d), 0);
-    const totalWithdrawalsAmount = withdrawalsList
-      .filter(w => w.status === 'COMPLETED' || (w.status as string) === 'APPROVED')
-      .reduce((sum, w) => sum + parseFundAmt(w), 0);
     const pendingDepositsCount = depositsList.filter(d => d.status === 'PENDING').length;
     const pendingWithdrawalsCount = withdrawalsList.filter(w => w.status === 'PENDING').length;
 
@@ -961,7 +925,7 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
           >
             <div>
               <p className="text-[11px] font-bold text-slate-400 group-hover:text-emerald-400 transition-colors uppercase tracking-wider">TOTAL DEPOSITS</p>
-              <p className="text-2xl font-bold text-white mt-1">{formatFundTotal(totalDepositsAmount)}</p>
+              <p className="text-2xl font-bold text-white mt-1">₹50K</p>
             </div>
             <div className="w-10 h-10 rounded-lg bg-[#06261f] border border-[#065f46] flex items-center justify-center text-[#34d399]">
               <ArrowDownLeft size={18} />
@@ -985,7 +949,7 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
           >
             <div>
               <p className="text-[11px] font-bold text-slate-400 group-hover:text-red-400 transition-colors uppercase tracking-wider">TOTAL WITHDRAWALS</p>
-              <p className="text-2xl font-bold text-white mt-1">{formatFundTotal(totalWithdrawalsAmount)}</p>
+              <p className="text-2xl font-bold text-white mt-1">₹5K</p>
             </div>
             <div className="w-10 h-10 rounded-lg bg-[#310e18] border border-[#7f1d1d] flex items-center justify-center text-[#f87171]">
               <ArrowUpRight size={18} />

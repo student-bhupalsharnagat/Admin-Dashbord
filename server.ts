@@ -1049,7 +1049,7 @@ async function startServer() {
   // ----------------------------------------------------
   // ADMIN DASHBOARD APIS (Matches Figma screenshot data)
   // ----------------------------------------------------
-  app.get(['/api/admin/dashboard', '/api/admin/metrics'], authenticate, requirePermission('dashboard.view'), async (req, res) => {
+  app.get('/api/admin/dashboard', authenticate, requirePermission('dashboard.view'), async (req, res) => {
     try {
       const tenantScope = resolveStrictTenantScope(req);
       const kpis = await activeTradingDataProvider.getDashboardKPIs(tenantScope);
@@ -4366,13 +4366,11 @@ async function startServer() {
   }
 
   // Forward EventBus events to connected admin WebSocket clients
-  const forwardEventToWs = (evt: any) => {
+  adminEventBus.on('live-event', (evt: any) => {
     if (evt?.eventType) {
       broadcastToAdminClients(evt.eventType, evt.payload);
     }
-  };
-  adminEventBus.on('live-event', forwardEventToWs);
-  adminEventBus.on('event', forwardEventToWs);
+  });
 
   // Real-Time Tick-to-Position MTM Recalculation Engine (every 1s)
   const tickInterval = setInterval(async () => {

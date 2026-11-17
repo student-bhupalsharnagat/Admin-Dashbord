@@ -259,11 +259,11 @@ export default function App() {
   };
 
   // Fetch Dashboard & System Data
-  const loadDashboardData = useCallback(async (silent = false) => {
+  const loadDashboardData = useCallback(async () => {
     try {
       const url = selectedTenantScope
-        ? `/api/admin/metrics?tenantId=${selectedTenantScope}`
-        : '/api/admin/metrics';
+        ? `/api/admin/dashboard?tenantId=${selectedTenantScope}`
+        : '/api/admin/dashboard';
       const res = await apiFetch(url);
       if (res.ok) {
         const data: any = await res.json();
@@ -283,7 +283,7 @@ export default function App() {
         if (data.recentTrades && Array.isArray(data.recentTrades)) setRecentTrades(data.recentTrades);
         if (data.pendingKYC && Array.isArray(data.pendingKYC)) setPendingKYC(data.pendingKYC);
         if (data.activeUsersCount !== undefined) setActiveUsersCount(Number(data.activeUsersCount));
-      } else if (!silent) {
+      } else {
         if (res.status === 401 || res.status === 403) {
           setDashboardError(null);
         } else {
@@ -293,11 +293,9 @@ export default function App() {
       }
     } catch (err: any) {
       if (err.name === 'AbortError') return;
-      if (!silent) {
-        console.warn('Dashboard API fetch error:', err);
-        setDashboardError(err.message || 'Dashboard live telemetry unavailable');
-        setDashboardData(prev => ({ ...prev, kpis: null }));
-      }
+      console.warn('Dashboard API fetch error:', err);
+      setDashboardError(err.message || 'Dashboard live telemetry unavailable');
+      setDashboardData(prev => ({ ...prev, kpis: null }));
     }
   }, [selectedTenantScope]);
 
@@ -399,10 +397,9 @@ export default function App() {
               break;
             }
 
-            case 'broker.added':
             case 'hierarchy.updated': {
-              loadHierarchyData(true);
-              loadDashboardData(true);
+              loadHierarchyData();
+              loadDashboardData();
               break;
             }
 
@@ -456,17 +453,12 @@ export default function App() {
               loadDashboardData();
               break;
 
-            case 'fund.transaction_updated':
             case 'deposit.created':
             case 'deposit.approved':
             case 'deposit.rejected':
-              loadDashboardData(true);
-              loadHierarchyData(true);
+              loadDashboardData();
+              loadHierarchyData();
               showToast(`Deposit Event (${event.payload?.status || 'UPDATED'}): ₹${event.payload?.amount || 0}`, 'info');
-              break;
-
-            case 'ledger.updated':
-              loadDashboardData(true);
               break;
 
             case 'withdrawal.created':
@@ -494,10 +486,9 @@ export default function App() {
               loadDashboardData();
               break;
 
-            case 'risk.alert_triggered':
             case 'risk.margin_breach':
-              showToast(`Critical Risk Alert: ${event.payload?.reason || `Margin breach on position for ${event.payload?.clientName || 'Client'}`}`, 'warning');
-              loadDashboardData(true);
+              showToast(`Critical Risk Alert: Margin breach on position for ${event.payload?.clientName || 'Client'}`, 'warning');
+              loadDashboardData();
               break;
 
             case 'execution.failure':
@@ -643,20 +634,6 @@ export default function App() {
               }
             } else {
               window.dispatchEvent(new CustomEvent('admin:live-event', { detail: { eventType: evtType, payload } }));
-              if (
-                evtType === 'client.registered' ||
-                evtType === 'broker.added' ||
-                evtType === 'trade.executed' ||
-                evtType === 'fund.transaction_updated' ||
-                evtType === 'ledger.updated' ||
-                evtType === 'risk.alert_triggered' ||
-                evtType === 'risk.margin_breach'
-              ) {
-                loadDashboardData(true);
-                if (evtType === 'client.registered' || evtType === 'broker.added' || evtType === 'fund.transaction_updated') {
-                  loadHierarchyData(true);
-                }
-              }
             }
           } catch {}
         };
@@ -672,7 +649,7 @@ export default function App() {
 
     // 2.5s Background fallback position sync with silent state merging
     const fallbackSync = setInterval(() => {
-      loadDashboardData(true);
+      loadDashboardData();
       loadHierarchyData(true);
     }, 2500);
 

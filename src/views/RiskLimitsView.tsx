@@ -191,27 +191,7 @@ export const RiskLimitsView: React.FC<RiskLimitsViewProps> = ({ onNotify }) => {
     };
 
     fetchRiskData();
-
-    // Fast 2.5s silent poll for Risk & Limits
-    const pollInterval = setInterval(() => {
-      fetchRiskData();
-    }, 2500);
-
-    // Instant live event refresh on risk.alert_triggered & risk.margin_breach
-    const handleLiveRiskEvent = (e: any) => {
-      const evt = e.detail;
-      const type = evt?.eventType || '';
-      if (type === 'risk.alert_triggered' || type === 'risk.margin_breach' || type === 'execution.failure') {
-        fetchRiskData();
-      }
-    };
-    window.addEventListener('admin:live-event', handleLiveRiskEvent);
-
-    return () => {
-      isMounted = false;
-      clearInterval(pollInterval);
-      window.removeEventListener('admin:live-event', handleLiveRiskEvent);
-    };
+    return () => { isMounted = false; };
   }, []);
 
   const handleCreateProfile = async (e: React.FormEvent) => {
