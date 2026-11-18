@@ -23,7 +23,8 @@ import {
   ArrowDownRight,
   TrendingUp,
   AlertTriangle,
-  ExternalLink
+  ExternalLink,
+  Key
 } from 'lucide-react';
 import { Master, Broker, SubBroker, Client, Tenant } from '../types';
 import { ClientDetailView } from '../components/clients/ClientDetailView';
@@ -387,61 +388,89 @@ export const initialClientsData = [
 ];
 
 // Normalization helpers to ensure both initial static mock data and backend API entities render seamlessly without crashes
-const normalizeMaster = (m: any) => ({
-  ...m,
-  id: String(m.id || `MST-${Math.random().toString().slice(2, 6)}`),
-  name: m.name || m.tenant_name || 'Master Admin',
-  company: m.company || m.companyName || m.tenant_name || (m.name ? `${m.name} Capital Ltd` : 'Master Corp'),
-  email: m.email || 'master@tradematrix.io',
-  brokers: typeof m.brokers === 'number' ? m.brokers : (m.brokers_count ?? 0),
-  clients: typeof m.clients === 'number' ? m.clients : (m.clients_count ?? 0),
-  turnover: m.turnover || '₹0',
-  commission: m.commission || m.commission_earned || '₹0',
-  status: (m.status || 'ACTIVE').toUpperCase(),
-  created: m.created || m.created_at || m.createdDate || new Date().toISOString().split('T')[0],
-  region: m.region || 'North India',
-  phone: m.phone || '+91 98000 00000',
-  tenant_id: m.tenant_id,
-  tenant_name: m.tenant_name
-});
+const deriveReferralCode = (prefix: 'MST' | 'BRK' | 'SUB', item: any): string => {
+  if (item?.referralCode) return String(item.referralCode).toUpperCase();
+  if (item?.referral_code) return String(item.referral_code).toUpperCase();
+  if (item?.code && /^(MST|BRK|SUB)-[A-Z0-9]{3,}$/i.test(String(item.code))) {
+    return String(item.code).toUpperCase();
+  }
+  const tail = String(item?.id || '0001').replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(-4).padStart(4, '0');
+  return `${prefix}-${tail}`;
+};
 
-const normalizeBroker = (b: any) => ({
-  ...b,
-  id: String(b.id || `BRK-${Math.random().toString().slice(2, 6)}`),
-  name: b.name || 'Broker Admin',
-  master: b.master || b.masterName || b.master_name || b.parent_master_name || 'Master Admin',
-  masterId: b.masterId || b.master_id,
-  master_id: b.masterId || b.master_id,
-  company: b.company || b.companyName || b.tenant_name || b.name || 'Broker Services',
-  email: b.email || 'broker@tradematrix.io',
-  subBrokers: typeof b.subBrokers === 'number' ? b.subBrokers : (b.sub_brokers_count ?? 0),
-  clients: typeof b.clients === 'number' ? b.clients : (b.clients_count ?? 0),
-  turnover: b.turnover || '₹0',
-  commission: b.commission || b.commission_earned || '₹0',
-  status: (b.status || 'ACTIVE').toUpperCase(),
-  created: b.created || b.created_at || b.createdDate || new Date().toISOString().split('T')[0],
-  phone: b.phone || '+91 98000 00000',
-  tenant_id: b.tenant_id,
-  tenant_name: b.tenant_name
-});
+const normalizeMaster = (m: any) => {
+  const id = String(m.id || `MST-${Math.random().toString().slice(2, 6)}`);
+  const referralCode = deriveReferralCode('MST', { ...m, id });
+  return {
+    ...m,
+    id,
+    referralCode,
+    referral_code: referralCode,
+    name: m.name || m.tenant_name || 'Master Admin',
+    company: m.company || m.companyName || m.tenant_name || (m.name ? `${m.name} Capital Ltd` : 'Master Corp'),
+    email: m.email || 'master@tradematrix.io',
+    brokers: typeof m.brokers === 'number' ? m.brokers : (m.brokers_count ?? 0),
+    clients: typeof m.clients === 'number' ? m.clients : (m.clients_count ?? 0),
+    turnover: m.turnover || '₹0',
+    commission: m.commission || m.commission_earned || '₹0',
+    status: (m.status || 'ACTIVE').toUpperCase(),
+    created: m.created || m.created_at || m.createdDate || new Date().toISOString().split('T')[0],
+    region: m.region || 'North India',
+    phone: m.phone || '+91 98000 00000',
+    tenant_id: m.tenant_id,
+    tenant_name: m.tenant_name
+  };
+};
 
-const normalizeSubBroker = (sb: any) => ({
-  ...sb,
-  id: String(sb.id || `SBRK-${Math.random().toString().slice(2, 6)}`),
-  name: sb.name || 'Sub-Broker Admin',
-  parentBroker: sb.parentBroker || sb.brokerName || sb.broker_name || sb.parent_broker_name || 'Broker Admin',
-  brokerId: sb.brokerId || sb.broker_id,
-  broker_id: sb.brokerId || sb.broker_id,
-  email: sb.email || 'subbroker@tradematrix.io',
-  clients: typeof sb.clients === 'number' ? sb.clients : (sb.clients_count ?? 0),
-  turnover: sb.turnover || '₹0',
-  commission: sb.commission || sb.commission_earned || '₹0',
-  status: (sb.status || 'ACTIVE').toUpperCase(),
-  created: sb.created || sb.created_at || sb.createdDate || new Date().toISOString().split('T')[0],
-  phone: sb.phone || '+91 98000 00000',
-  tenant_id: sb.tenant_id,
-  tenant_name: sb.tenant_name
-});
+const normalizeBroker = (b: any) => {
+  const id = String(b.id || `BRK-${Math.random().toString().slice(2, 6)}`);
+  const referralCode = deriveReferralCode('BRK', { ...b, id });
+  return {
+    ...b,
+    id,
+    referralCode,
+    referral_code: referralCode,
+    name: b.name || 'Broker Admin',
+    master: b.master || b.masterName || b.master_name || b.parent_master_name || 'Master Admin',
+    masterId: b.masterId || b.master_id,
+    master_id: b.masterId || b.master_id,
+    company: b.company || b.companyName || b.tenant_name || b.name || 'Broker Services',
+    email: b.email || 'broker@tradematrix.io',
+    subBrokers: typeof b.subBrokers === 'number' ? b.subBrokers : (b.sub_brokers_count ?? 0),
+    clients: typeof b.clients === 'number' ? b.clients : (b.clients_count ?? 0),
+    turnover: b.turnover || '₹0',
+    commission: b.commission || b.commission_earned || '₹0',
+    status: (b.status || 'ACTIVE').toUpperCase(),
+    created: b.created || b.created_at || b.createdDate || new Date().toISOString().split('T')[0],
+    phone: b.phone || '+91 98000 00000',
+    tenant_id: b.tenant_id,
+    tenant_name: b.tenant_name
+  };
+};
+
+const normalizeSubBroker = (sb: any) => {
+  const id = String(sb.id || `SBRK-${Math.random().toString().slice(2, 6)}`);
+  const referralCode = deriveReferralCode('SUB', { ...sb, id });
+  return {
+    ...sb,
+    id,
+    referralCode,
+    referral_code: referralCode,
+    name: sb.name || 'Sub-Broker Admin',
+    parentBroker: sb.parentBroker || sb.brokerName || sb.broker_name || sb.parent_broker_name || 'Broker Admin',
+    brokerId: sb.brokerId || sb.broker_id,
+    broker_id: sb.brokerId || sb.broker_id,
+    email: sb.email || 'subbroker@tradematrix.io',
+    clients: typeof sb.clients === 'number' ? sb.clients : (sb.clients_count ?? 0),
+    turnover: sb.turnover || '₹0',
+    commission: sb.commission || sb.commission_earned || '₹0',
+    status: (sb.status || 'ACTIVE').toUpperCase(),
+    created: sb.created || sb.created_at || sb.createdDate || new Date().toISOString().split('T')[0],
+    phone: sb.phone || '+91 98000 00000',
+    tenant_id: sb.tenant_id,
+    tenant_name: sb.tenant_name
+  };
+};
 
 const normalizeClient = (c: any) => {
   const cleanEmail = (c.email || 'trader@tradematrix.io')
@@ -510,6 +539,20 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
     return role !== 'SUB_BROKER' && role !== 'CLIENT';
   }, [currentUser?.role]);
 
+  const canResetPassword = React.useMemo(() => {
+    const role = (currentUser?.role || 'SUPER_ADMIN').toUpperCase();
+    if (role === 'SUPER_ADMIN' || role === 'PLATFORM_OWNER' || role === 'ADMIN' || role === 'TENANT_ADMIN') {
+      return true;
+    }
+    if (role === 'MASTER') {
+      return level === 'brokers' || level === 'sub-brokers' || level === 'clients';
+    }
+    if (role === 'BROKER') {
+      return level === 'sub-brokers' || level === 'clients';
+    }
+    return false;
+  }, [currentUser?.role, level]);
+
   // Local state for entities ensuring live PostgreSQL data and empty states are synchronized
   const [mastersList, setMastersList] = useState(() => (propMasters || []).map(normalizeMaster));
   const [brokersList, setBrokersList] = useState(() => (propBrokers || []).map(normalizeBroker));
@@ -563,8 +606,14 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
   // Interactive Modals State
   const [selectedEntity, setSelectedEntity] = useState<any | null>(null);
   const [modalType, setModalType] = useState<
-    'view' | 'edit' | 'create' | 'link' | 'stats' | 'wallet' | 'kyc' | null
+    'view' | 'edit' | 'create' | 'link' | 'stats' | 'wallet' | 'kyc' | 'reset-password' | null
   >(null);
+
+  // Reset Password Modal State (top-level hooks)
+  const [resetPasswordValue, setResetPasswordValue] = useState('');
+  const [resetPasswordConfirm, setResetPasswordConfirm] = useState('');
+  const [resetPasswordSubmitting, setResetPasswordSubmitting] = useState(false);
+  const [resetPasswordError, setResetPasswordError] = useState('');
 
   // Form state for creating or editing
   const [formData, setFormData] = useState<any>({});
@@ -1084,8 +1133,64 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
       setModalType('wallet');
     } else if (action === 'kyc') {
       setModalType('kyc');
+    } else if (action === 'reset-password') {
+      setResetPasswordValue('');
+      setResetPasswordConfirm('');
+      setResetPasswordError('');
+      setModalType('reset-password');
     } else if (action === 'userplus') {
       notify(`Provisioning downline delegate under ${entity.name}...`, 'info');
+    }
+  };
+
+  const handleCopyReferralCode = (code: string, name: string) => {
+    navigator.clipboard?.writeText?.(code).catch(() => {});
+    notify(`Copied referral code ${code} for ${name}`, 'success');
+  };
+
+  const handleResetPasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedEntity) return;
+    setResetPasswordError('');
+    if (resetPasswordValue.trim().length < 6) {
+      setResetPasswordError('New password must be at least 6 characters.');
+      return;
+    }
+    if (resetPasswordValue !== resetPasswordConfirm) {
+      setResetPasswordError('Passwords do not match.');
+      return;
+    }
+    setResetPasswordSubmitting(true);
+    try {
+      const entityTypeMap: Record<string, string> = {
+        masters: 'master',
+        brokers: 'broker',
+        'sub-brokers': 'sub_broker',
+        clients: 'client'
+      };
+      const res = await fetch(`/api/admin/users/${encodeURIComponent(selectedEntity.id)}/reset-password`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          newPassword: resetPasswordValue.trim(),
+          entityType: entityTypeMap[level] || level,
+          email: selectedEntity.email
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setResetPasswordError(data.message || data.error || 'Failed to reset password.');
+        return;
+      }
+      notify(data.message || `Password reset for ${selectedEntity.name} and synced across platforms.`, 'success');
+      setModalType(null);
+      setResetPasswordValue('');
+      setResetPasswordConfirm('');
+    } catch (err: any) {
+      setResetPasswordError(err?.message || 'Network error resetting password.');
+    } finally {
+      setResetPasswordSubmitting(false);
     }
   };
 
@@ -1257,6 +1362,7 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
               <thead>
                 <tr className="border-b border-[#121d33] text-[10px] font-bold text-slate-400 uppercase tracking-wider bg-[#060c18]">
                   <th className="py-3 px-4">MASTER ID</th>
+                  <th className="py-3 px-4">REFERRAL CODE</th>
                   <th className="py-3 px-4">NAME</th>
                   <th className="py-3 px-4">COMPANY</th>
                   <th className="py-3 px-4">EMAIL</th>
@@ -1279,6 +1385,17 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
                       <span onClick={() => handleQuickAction('view', master)}>
                         {master.id}
                       </span>
+                    </td>
+                    <td className="py-3.5 px-4 whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => handleCopyReferralCode(master.referralCode, master.name)}
+                        title="Copy Referral Code for downline signup"
+                        className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-blue-500/10 border border-blue-500/25 text-blue-300 font-mono text-[11px] hover:bg-blue-500/20 transition-colors cursor-pointer"
+                      >
+                        <span>{master.referralCode}</span>
+                        <Copy size={11} className="text-blue-400" />
+                      </button>
                     </td>
                     <td className="py-3.5 px-4 font-bold text-slate-100 whitespace-nowrap">
                       {master.name}
@@ -1344,13 +1461,22 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
                         >
                           <BarChart2 size={13} />
                         </button>
+                        {canResetPassword && (
+                          <button
+                            onClick={() => handleQuickAction('reset-password', master)}
+                            title="Reset Password"
+                            className="hover:text-amber-300 transition-colors p-1 rounded hover:bg-slate-800/50 cursor-pointer"
+                          >
+                            <Key size={13} />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
                 ))}
                 {filteredMasters.length === 0 && (
                   <tr>
-                    <td colSpan={11} className="py-8 text-center text-slate-500">
+                    <td colSpan={12} className="py-8 text-center text-slate-500">
                       No masters found matching filter criteria.
                     </td>
                   </tr>
@@ -1369,6 +1495,7 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
               <thead>
                 <tr className="border-b border-[#121d33] text-[10px] font-bold text-slate-400 uppercase tracking-wider bg-[#060c18]">
                   <th className="py-3 px-4">BROKER ID</th>
+                  <th className="py-3 px-4">REFERRAL CODE</th>
                   <th className="py-3 px-4">NAME</th>
                   <th className="py-3 px-4">MASTER</th>
                   <th className="py-3 px-4">EMAIL</th>
@@ -1390,6 +1517,17 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
                       <span onClick={() => handleQuickAction('view', broker)}>
                         {broker.id}
                       </span>
+                    </td>
+                    <td className="py-3.5 px-4 whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => handleCopyReferralCode(broker.referralCode, broker.name)}
+                        title="Copy Referral Code for downline signup"
+                        className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-blue-500/10 border border-blue-500/25 text-blue-300 font-mono text-[11px] hover:bg-blue-500/20 transition-colors cursor-pointer"
+                      >
+                        <span>{broker.referralCode}</span>
+                        <Copy size={11} className="text-blue-400" />
+                      </button>
                     </td>
                     <td className="py-3.5 px-4 font-bold text-slate-100 whitespace-nowrap">
                       {broker.name}
@@ -1452,13 +1590,22 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
                         >
                           <BarChart2 size={13} />
                         </button>
+                        {canResetPassword && (
+                          <button
+                            onClick={() => handleQuickAction('reset-password', broker)}
+                            title="Reset Password"
+                            className="hover:text-amber-300 transition-colors p-1 rounded hover:bg-slate-800/50 cursor-pointer"
+                          >
+                            <Key size={13} />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
                 ))}
                 {filteredBrokers.length === 0 && (
                   <tr>
-                    <td colSpan={10} className="py-8 text-center text-slate-500">
+                    <td colSpan={11} className="py-8 text-center text-slate-500">
                       No brokers found matching filter criteria.
                     </td>
                   </tr>
@@ -1477,6 +1624,7 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
               <thead>
                 <tr className="border-b border-[#121d33] text-[10px] font-bold text-slate-400 uppercase tracking-wider bg-[#060c18]">
                   <th className="py-3 px-4">ID</th>
+                  <th className="py-3 px-4">REFERRAL CODE</th>
                   <th className="py-3 px-4">NAME</th>
                   <th className="py-3 px-4">PARENT BROKER</th>
                   <th className="py-3 px-4">EMAIL</th>
@@ -1498,6 +1646,17 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
                       <span onClick={() => handleQuickAction('view', sub)}>
                         {sub.id}
                       </span>
+                    </td>
+                    <td className="py-3.5 px-4 whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => handleCopyReferralCode(sub.referralCode, sub.name)}
+                        title="Copy Referral Code for downline signup"
+                        className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-blue-500/10 border border-blue-500/25 text-blue-300 font-mono text-[11px] hover:bg-blue-500/20 transition-colors cursor-pointer"
+                      >
+                        <span>{sub.referralCode}</span>
+                        <Copy size={11} className="text-blue-400" />
+                      </button>
                     </td>
                     <td className="py-3.5 px-4 font-bold text-slate-100 whitespace-nowrap">
                       {sub.name}
@@ -1539,13 +1698,22 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
                         >
                           <Pencil size={13} />
                         </button>
+                        {canResetPassword && (
+                          <button
+                            onClick={() => handleQuickAction('reset-password', sub)}
+                            title="Reset Password"
+                            className="hover:text-amber-300 transition-colors p-1 rounded hover:bg-slate-800/50 cursor-pointer"
+                          >
+                            <Key size={13} />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
                 ))}
                 {filteredSubBrokers.length === 0 && (
                   <tr>
-                    <td colSpan={10} className="py-8 text-center text-slate-500">
+                    <td colSpan={11} className="py-8 text-center text-slate-500">
                       No sub-brokers found matching filter criteria.
                     </td>
                   </tr>
@@ -1659,6 +1827,15 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
                         >
                           <UserPlus size={13} />
                         </button>
+                        {canResetPassword && (
+                          <button
+                            onClick={() => handleQuickAction('reset-password', client)}
+                            title="Reset Password"
+                            className="hover:text-amber-300 transition-colors p-1 rounded hover:bg-slate-800/50 cursor-pointer"
+                          >
+                            <Key size={13} />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -1811,6 +1988,27 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
                 </div>
               </div>
 
+              {selectedEntity.referralCode && (
+                <div className="p-3 rounded-xl bg-[#080e1c] border border-blue-500/25 flex items-center justify-between gap-3">
+                  <div>
+                    <span className="text-slate-400 text-[10px] uppercase font-bold tracking-wider block">
+                      Downline Referral Code (Client Signup)
+                    </span>
+                    <span className="text-blue-300 font-mono font-bold text-sm tracking-wide">
+                      {selectedEntity.referralCode}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleCopyReferralCode(selectedEntity.referralCode, selectedEntity.name)}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/30 text-blue-300 text-xs font-semibold transition-colors cursor-pointer"
+                  >
+                    <Copy size={12} />
+                    <span>Copy Code</span>
+                  </button>
+                </div>
+              )}
+
               <div className="grid grid-cols-2 gap-3">
                 {selectedEntity.company && (
                   <div className="p-2.5 rounded-lg bg-[#0d162a] border border-[#152342]">
@@ -1862,6 +2060,16 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
                 Created: {selectedEntity.created || selectedEntity.created_at || selectedEntity.joined || new Date().toISOString().split('T')[0]}
               </span>
               <div className="flex items-center gap-2">
+                {canResetPassword && (
+                  <button
+                    type="button"
+                    onClick={() => handleQuickAction('reset-password', selectedEntity)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 transition-colors cursor-pointer"
+                  >
+                    <Key size={12} />
+                    <span>Reset Password</span>
+                  </button>
+                )}
                 {canManageStatus && (
                   <button
                     type="button"
@@ -2586,6 +2794,89 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
                 Toggle Approved/Pending
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* RESET PASSWORD MODAL */}
+      {modalType === 'reset-password' && selectedEntity && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="bg-[#0b1426] border border-[#172647] rounded-2xl w-full max-w-md overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between p-4 border-b border-[#142340]">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-amber-500/10 border border-amber-500/25 flex items-center justify-center text-amber-400">
+                  <Key size={15} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-white text-sm">Reset Password</h3>
+                  <p className="text-[11px] text-slate-400">
+                    {selectedEntity.name} ({selectedEntity.id})
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setModalType(null)}
+                className="p-1 rounded text-slate-400 hover:text-white hover:bg-[#121f3b] transition-colors cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <form onSubmit={handleResetPasswordSubmit} className="p-5 space-y-3.5 text-xs">
+              <div className="p-3 rounded-xl bg-[#080e1c] border border-[#152342] text-[11px] text-slate-400">
+                The updated password hash will be synced across Admin Portal, Broker OS (User Panel), and Trading Platform via S2S.
+              </div>
+
+              <div>
+                <label className="block text-slate-400 text-[11px] mb-1 font-medium">New Password</label>
+                <input
+                  type="password"
+                  required
+                  minLength={6}
+                  placeholder="Enter new password (min 6 characters)"
+                  value={resetPasswordValue}
+                  onChange={e => setResetPasswordValue(e.target.value)}
+                  className="w-full px-3 py-2 bg-[#080e1c] border border-[#152342] rounded-lg text-slate-200 focus:outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-400 text-[11px] mb-1 font-medium">Confirm New Password</label>
+                <input
+                  type="password"
+                  required
+                  minLength={6}
+                  placeholder="Re-enter new password"
+                  value={resetPasswordConfirm}
+                  onChange={e => setResetPasswordConfirm(e.target.value)}
+                  className="w-full px-3 py-2 bg-[#080e1c] border border-[#152342] rounded-lg text-slate-200 focus:outline-none focus:border-blue-500"
+                />
+              </div>
+
+              {resetPasswordError && (
+                <div className="p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-400 text-[11px] flex items-center gap-2">
+                  <AlertTriangle size={13} />
+                  <span>{resetPasswordError}</span>
+                </div>
+              )}
+
+              <div className="pt-2 flex items-center justify-end gap-2 border-t border-[#142340]">
+                <button
+                  type="button"
+                  onClick={() => setModalType(null)}
+                  className="px-3.5 py-1.5 rounded-lg bg-[#14213d] hover:bg-[#1a2c52] text-slate-300 font-semibold cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={resetPasswordSubmitting}
+                  className="px-4 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-semibold cursor-pointer disabled:opacity-50"
+                >
+                  {resetPasswordSubmitting ? 'Resetting...' : 'Reset & Sync Password'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

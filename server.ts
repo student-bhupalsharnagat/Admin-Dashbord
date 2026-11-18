@@ -1053,6 +1053,252 @@ async function startServer() {
     }
   });
 
+  // Self-service password change (authenticated user verifies currentPassword)
+  app.post('/api/auth/change-password', authenticate, async (req, res) => {
+    try {
+      const user = req.user!;
+      const currentPassword = String(req.body?.currentPassword ?? req.body?.current_password ?? '');
+      const newPassword = String(req.body?.newPassword ?? req.body?.new_password ?? '');
+
+      if (!currentPassword || !newPassword) {
+        return res.status(400).json({ error: 'VALIDATION_ERROR', message: 'Current password and new password are required.' });
+      }
+      if (newPassword.trim().length < 6) {
+        return res.status(400).json({ error: 'VALIDATION_ERROR', message: 'New password must be at least 6 characters long.' });
+      }
+      if (currentPassword === newPassword) {
+        return res.status(400).json({ error: 'VALIDATION_ERROR', message: 'New password must be different from your current password.' });
+      }
+
+      const { rows } = await query<{
+        id: string;
+        email: string;
+        name: string;
+        phone: string | null;
+        role: string;
+        tenant_id: string | null;
+        hierarchy_id: string | null;
+        password_hash: string;
+      }>(
+        'SELECT id, email, name, phone, role, tenant_id, hierarchy_id, password_hash FROM users WHERE id = $1 OR LOWER(email) = LOWER($2) LIMIT 1',
+        [user.id, user.email]
+      );
+
+      if (rows.length === 0) {
+        return res.status(404).json({ error: 'NOT_FOUND', message: 'User account not found.' });
+      }
+
+      const dbUser = rows[0];
+      const valid = await verifyPassword(currentPassword, dbUser.password_hash);
+      if (!valid) {
+        return res.status(400).json({ error: 'INVALID_PASSWORD', message: 'Current password is incorrect.' });
+      }
+
+      const newHash = await hashPassword(newPassword.trim());
+      await query(
+        'UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+        [newHash, dbUser.id]
+      );
+
+      const roleUpper = (dbUser.role || '').toUpperCase();
+      const roleToType: Record<string, 'master' | 'broker' | 'sub_broker' | 'client'> = {
+        MASTER: 'master',
+        BROKER: 'broker',
+        SUB_BROKER: 'sub_broker',
+        CLIENT: 'client'
+      };
+      const syncType = roleToType[roleUpper];
+      if (syncType) {
+        await notifyHierarchyChange(syncType, 'updated', {
+          id: dbUser.hierarchy_id || dbUser.id,
+          name: dbUser.name,
+          email: dbUser.email,
+          phone: dbUser.phone,
+          role: roleUpper,
+          tenant_id: dbUser.tenant_id || 'TNT-001',
+          status: 'ACTIVE'
+        }, newHash);
+      }
+
+      await writeSecurityAuditLog({
+        tenantId: dbUser.tenant_id,
+        userName: user.name,
+        action: 'PASSWORD_CHANGED',
+        module: 'SECURITY',
+        details: `User ${dbUser.email} updated their own password.`,
+        ipAddress: req.ip || req.socket.remoteAddress
+      });
+
+      res.json({ success: true, message: 'Password updated successfully.' });
+    } catch (err: any) {
+      console.error('[Auth API] Change password error:', err);
+      res.status(500).json({ error: 'SERVER_ERROR', message: err.message || 'Failed to update password.' });
+    }
+  });
+
+  // RBAC-protected Admin / Downline Password Reset with S2S sync
+  app.post(
+    ['/api/admin/users/:id/reset-password', '/api/users/:id/reset-password'],
+    authenticate,
+    requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'ADMIN', 'TENANT_ADMIN', 'MASTER', 'BROKER']),
+    async (req, res) => {
+      try {
+        const actor = req.user!;
+        const targetId = String(req.params.id || '').trim();
+        const newPassword = String(req.body?.newPassword ?? req.body?.new_password ?? req.body?.password ?? '').trim();
+        const hintEntityType = req.body?.entityType ? String(req.body.entityType).toLowerCase() : undefined;
+        const hintEmail = req.body?.email ? String(req.body.email).trim().toLowerCase() : undefined;
+
+        if (!targetId) {
+          return res.status(400).json({ error: 'VALIDATION_ERROR', message: 'Target user/entity ID is required.' });
+        }
+        if (newPassword.length < 6) {
+          return res.status(400).json({ error: 'VALIDATION_ERROR', message: 'New password must be at least 6 characters long.' });
+        }
+
+        // Resolve target entity across hierarchy tables and users table
+        let entityType: 'master' | 'broker' | 'sub_broker' | 'client' | null = null;
+        let entityNode: any = null;
+        let userRow: any = null;
+
+        const uRes = await query(
+          'SELECT * FROM users WHERE id = $1 OR hierarchy_id = $1 OR ($2::text IS NOT NULL AND LOWER(email) = $2) LIMIT 1',
+          [targetId, hintEmail || null]
+        );
+        if (uRes.rows.length > 0) {
+          userRow = uRes.rows[0];
+        }
+
+        const lookupId = userRow?.hierarchy_id || targetId;
+        const checkOrder: Array<'master' | 'broker' | 'sub_broker' | 'client'> =
+          hintEntityType === 'master' || hintEntityType === 'masters'
+            ? ['master', 'broker', 'sub_broker', 'client']
+            : hintEntityType === 'broker' || hintEntityType === 'brokers'
+            ? ['broker', 'sub_broker', 'client', 'master']
+            : hintEntityType === 'sub_broker' || hintEntityType === 'sub-brokers' || hintEntityType === 'sub-broker'
+            ? ['sub_broker', 'broker', 'client', 'master']
+            : hintEntityType === 'client' || hintEntityType === 'clients'
+            ? ['client', 'sub_broker', 'broker', 'master']
+            : ['master', 'broker', 'sub_broker', 'client'];
+
+        for (const t of checkOrder) {
+          if (entityNode) break;
+          if (t === 'master') {
+            const mRes = await query('SELECT * FROM masters WHERE id = $1 LIMIT 1', [lookupId]);
+            if (mRes.rows.length > 0) { entityType = 'master'; entityNode = mRes.rows[0]; }
+          } else if (t === 'broker') {
+            const bRes = await query('SELECT * FROM brokers WHERE id = $1 LIMIT 1', [lookupId]);
+            if (bRes.rows.length > 0) { entityType = 'broker'; entityNode = bRes.rows[0]; }
+          } else if (t === 'sub_broker') {
+            const sbRes = await query('SELECT * FROM sub_brokers WHERE id = $1 LIMIT 1', [lookupId]);
+            if (sbRes.rows.length > 0) { entityType = 'sub_broker'; entityNode = sbRes.rows[0]; }
+          } else if (t === 'client') {
+            const cRes = await query('SELECT * FROM clients WHERE id = $1 OR client_code = $1 LIMIT 1', [lookupId]);
+            if (cRes.rows.length > 0) { entityType = 'client'; entityNode = cRes.rows[0]; }
+          }
+        }
+
+        if (!userRow && !entityNode) {
+          return res.status(404).json({ error: 'NOT_FOUND', message: `User or hierarchy entity '${targetId}' not found.` });
+        }
+
+        const targetRole = String(
+          entityType === 'master' ? 'MASTER'
+            : entityType === 'broker' ? 'BROKER'
+            : entityType === 'sub_broker' ? 'SUB_BROKER'
+            : entityType === 'client' ? 'CLIENT'
+            : (userRow?.role || 'CLIENT')
+        ).toUpperCase();
+
+        const actorRole = String(actor.role || '').toUpperCase();
+
+        // Enforce strict RBAC downline hierarchy authorization
+        if (actorRole !== 'SUPER_ADMIN' && actorRole !== 'PLATFORM_OWNER') {
+          if (targetRole === 'SUPER_ADMIN' || targetRole === 'PLATFORM_OWNER') {
+            return res.status(403).json({ error: 'FORBIDDEN', message: 'Cannot reset password for a higher-privilege administrator.' });
+          }
+          if (actorRole === 'TENANT_ADMIN' || actorRole === 'ADMIN') {
+            const targetTenant = entityNode?.tenant_id || userRow?.tenant_id;
+            if (actorRole === 'TENANT_ADMIN' && actor.tenant_id && targetTenant && actor.tenant_id !== targetTenant) {
+              return res.status(403).json({ error: 'FORBIDDEN', message: 'Cannot reset passwords across tenant boundaries.' });
+            }
+          } else if (actorRole === 'MASTER') {
+            if (!entityType || entityType === 'master') {
+              return res.status(403).json({ error: 'FORBIDDEN', message: 'Masters can only reset passwords for downline Brokers, Sub-Brokers, and Clients.' });
+            }
+            const allowed = await requireHierarchyAccess(entityType, entityNode.id, actor);
+            if (!allowed) {
+              return res.status(403).json({ error: 'FORBIDDEN', message: 'Target entity does not belong to your Master downline.' });
+            }
+          } else if (actorRole === 'BROKER') {
+            if (!entityType || entityType === 'master' || entityType === 'broker') {
+              return res.status(403).json({ error: 'FORBIDDEN', message: 'Brokers can only reset passwords for downline Sub-Brokers and Clients.' });
+            }
+            const allowed = await requireHierarchyAccess(entityType, entityNode.id, actor);
+            if (!allowed) {
+              return res.status(403).json({ error: 'FORBIDDEN', message: 'Target entity does not belong to your Broker downline.' });
+            }
+          } else {
+            return res.status(403).json({ error: 'FORBIDDEN', message: 'You are not authorized to reset passwords.' });
+          }
+        }
+
+        const newHash = await hashPassword(newPassword);
+
+        if (userRow) {
+          await query(
+            'UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+            [newHash, userRow.id]
+          );
+        } else if (entityNode && entityType) {
+          await provisionHierarchyUser({
+            entityId: entityNode.id,
+            tenantId: entityNode.tenant_id || 'TNT-001',
+            name: entityNode.name,
+            email: entityNode.email || hintEmail || `${entityType}_${entityNode.id}@tradematrix.io`,
+            role: targetRole as 'MASTER' | 'BROKER' | 'SUB_BROKER' | 'CLIENT',
+            password: newPassword,
+            phone: entityNode.phone
+          });
+        }
+
+        if (entityType && entityNode) {
+          await notifyHierarchyChange(entityType, 'updated', entityNode, newHash);
+        } else if (userRow && ['MASTER', 'BROKER', 'SUB_BROKER', 'CLIENT'].includes(targetRole)) {
+          const mappedType = targetRole === 'SUB_BROKER' ? 'sub_broker' : (targetRole.toLowerCase() as 'master' | 'broker' | 'client');
+          await notifyHierarchyChange(mappedType, 'updated', {
+            id: userRow.hierarchy_id || userRow.id,
+            name: userRow.name,
+            email: userRow.email,
+            phone: userRow.phone,
+            role: targetRole,
+            tenant_id: userRow.tenant_id || 'TNT-001',
+            status: userRow.status || 'ACTIVE'
+          }, newHash);
+        }
+
+        await writeSecurityAuditLog({
+          tenantId: entityNode?.tenant_id || userRow?.tenant_id || actor.tenant_id,
+          userName: actor.name,
+          action: 'ADMIN_PASSWORD_RESET',
+          module: 'SECURITY',
+          details: `${actor.role} (${actor.email}) reset password for ${targetRole} ${entityNode?.name || userRow?.name || targetId} (${targetId}) and synced via S2S.`,
+          ipAddress: req.ip || req.socket.remoteAddress
+        });
+
+        res.json({
+          success: true,
+          message: `Password reset for ${entityNode?.name || userRow?.name || targetId} and synced across platforms.`,
+          entityId: entityNode?.id || userRow?.hierarchy_id || targetId,
+          role: targetRole
+        });
+      } catch (err: any) {
+        console.error('[Admin Password Reset] Error:', err);
+        res.status(500).json({ error: 'SERVER_ERROR', message: err.message || 'Failed to reset password.' });
+      }
+    }
+  );
+
   // ----------------------------------------------------
   // SHARED 2-SECOND SLIDING WINDOW CACHE + IN-FLIGHT DEDUP
   // Prevents concurrent polling storms on /metrics, /funds, /risk from exhausting PostgreSQL
@@ -1449,15 +1695,37 @@ async function startServer() {
     tenantId: string | null;
     name: string;
     email: string;
-    role: 'MASTER' | 'BROKER' | 'SUB_BROKER';
+    role: 'MASTER' | 'BROKER' | 'SUB_BROKER' | 'CLIENT';
     password?: string;
     phone?: string;
-  }) {
+    isUpdate?: boolean;
+  }): Promise<string | null> {
     try {
-      const rawPassword = data.password && data.password.trim().length >= 6 ? data.password.trim() : 'Password@123';
-      const passHash = await hashPassword(rawPassword);
+      const hasExplicitPassword = typeof data.password === 'string' && data.password.trim().length >= 6;
       const userEmail = (data.email || `${data.role.toLowerCase()}_${data.entityId.toLowerCase()}@tradematrix.io`).toLowerCase().trim();
       const userId = `usr_${data.role.toLowerCase()}_${data.entityId.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+
+      if (data.isUpdate && !hasExplicitPassword) {
+        const existing = await query<{ id: string; password_hash: string | null }>(
+          'SELECT id, password_hash FROM users WHERE hierarchy_id = $1 OR LOWER(email) = LOWER($2) LIMIT 1',
+          [data.entityId, userEmail]
+        );
+        if (existing.rows.length > 0) {
+          await query(
+            `UPDATE users
+             SET name = COALESCE(NULLIF($1, ''), name),
+                 email = COALESCE(NULLIF($2, ''), email),
+                 phone = COALESCE(NULLIF($3, ''), phone),
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = $4`,
+            [data.name || '', userEmail, data.phone || '', existing.rows[0].id]
+          ).catch(() => {});
+          return existing.rows[0].password_hash || null;
+        }
+      }
+
+      const rawPassword = hasExplicitPassword ? data.password!.trim() : 'Password@123';
+      const passHash = await hashPassword(rawPassword);
       await query(`
         INSERT INTO users (
           id, tenant_id, name, email, role, status, password_hash, phone,
@@ -1483,28 +1751,97 @@ async function startServer() {
         data.role,
         data.entityId
       ]);
+      return passHash;
     } catch (err: any) {
       console.warn(`[provisionHierarchyUser] Notice provisioning login for ${data.role} ${data.entityId}:`, err?.message || err);
+      return null;
     }
   }
 
-  function notifyHierarchyChange(type: 'master' | 'broker' | 'sub_broker' | 'client', action: 'created' | 'updated' | 'status_updated', node: any) {
+  async function notifyHierarchyChange(
+    type: 'master' | 'broker' | 'sub_broker' | 'client',
+    action: 'created' | 'updated' | 'status_updated',
+    node: any,
+    passwordHash?: string | null
+  ) {
+    const roleMap: Record<string, string> = {
+      master: 'MASTER',
+      broker: 'BROKER',
+      sub_broker: 'SUB_BROKER',
+      client: 'CLIENT'
+    };
+
+    let resolvedHash = passwordHash || node?.passwordHash || node?.password_hash || null;
+    let masterId: string | null = node?.masterId ?? node?.master_id ?? (type === 'master' ? node?.id : null);
+    let brokerId: string | null = node?.brokerId ?? node?.broker_id ?? (type === 'broker' ? node?.id : null);
+    let subBrokerId: string | null = node?.subBrokerId ?? node?.sub_broker_id ?? (type === 'sub_broker' ? node?.id : null);
+
+    // Resolve full parent lineage and stored password hash from DB if missing
+    try {
+      if (!resolvedHash && (node?.id || node?.email)) {
+        const uRes = await query<{ password_hash: string | null }>(
+          'SELECT password_hash FROM users WHERE hierarchy_id = $1 OR ($2::text IS NOT NULL AND LOWER(email) = LOWER($2)) LIMIT 1',
+          [node?.id || '', node?.email || null]
+        );
+        resolvedHash = uRes.rows[0]?.password_hash || null;
+      }
+
+      if (type === 'sub_broker' && brokerId && !masterId) {
+        const bRes = await query<{ master_id: string | null }>('SELECT master_id FROM brokers WHERE id = $1 LIMIT 1', [brokerId]);
+        masterId = bRes.rows[0]?.master_id || null;
+      } else if (type === 'client' && subBrokerId && (!brokerId || !masterId)) {
+        const sbRes = await query<{ broker_id: string | null; master_id: string | null }>(
+          `SELECT sb.broker_id, b.master_id
+           FROM sub_brokers sb
+           LEFT JOIN brokers b ON sb.broker_id = b.id
+           WHERE sb.id = $1 LIMIT 1`,
+          [subBrokerId]
+        );
+        brokerId = brokerId || sbRes.rows[0]?.broker_id || null;
+        masterId = masterId || sbRes.rows[0]?.master_id || null;
+      }
+    } catch {
+      // Non-fatal lineage lookup fallback
+    }
+
+    const commissionShare = node?.commissionShare ?? node?.commission_share ?? node?.commission_earned ?? node?.commission ?? null;
+    const referralCode = node?.referralCode || node?.referral_code || node?.code || null;
+
+    const s2sNode = {
+      ...node,
+      id: node?.id,
+      name: node?.name,
+      email: node?.email,
+      phone: node?.phone || null,
+      passwordHash: resolvedHash,
+      role: (node?.role || roleMap[type] || 'CLIENT').toString().toUpperCase(),
+      tenantId: node?.tenantId || node?.tenant_id || 'TNT-001',
+      masterId,
+      brokerId,
+      subBrokerId,
+      commissionShare,
+      referralCode,
+      status: node?.status || node?.account || 'ACTIVE'
+    };
+
     tradingPlatformClient.syncHierarchyNode({
       type,
       action,
-      tenantId: node?.tenant_id,
-      node
+      tenantId: s2sNode.tenantId,
+      node: s2sNode
     }).catch(() => {});
 
+    // Strip passwordHash before broadcasting over SSE to browser admin clients
+    const { passwordHash: _omit1, password_hash: _omit2, ...safeNode } = s2sNode;
     adminEventBus.emit('event', {
       eventId: `evt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       eventType: 'hierarchy.updated',
-      tenantId: node?.tenant_id || 'TNT-001',
+      tenantId: safeNode.tenantId || 'TNT-001',
       timestamp: new Date().toISOString(),
       payload: {
         type,
         action,
-        node
+        node: safeNode
       }
     });
   }
@@ -1528,7 +1865,7 @@ async function startServer() {
         data.tenant_id = user.tenant_id;
       }
       const master = await activeTradingDataProvider.createMaster(data);
-      await provisionHierarchyUser({
+      const passwordHash = await provisionHierarchyUser({
         entityId: master.id,
         tenantId: master.tenant_id,
         name: master.name,
@@ -1537,7 +1874,7 @@ async function startServer() {
         password: req.body.password,
         phone: master.phone || req.body.phone
       });
-      notifyHierarchyChange('master', 'created', master);
+      await notifyHierarchyChange('master', 'created', master, passwordHash);
       await writeSecurityAuditLog({
         tenantId: master.tenant_id,
         userName: user.name,
@@ -1556,7 +1893,17 @@ async function startServer() {
     try {
       const updated = await activeTradingDataProvider.updateMaster(req.params.id, req.body);
       if (!updated) return res.status(404).json({ error: 'Master not found' });
-      notifyHierarchyChange('master', 'updated', updated);
+      const passwordHash = await provisionHierarchyUser({
+        entityId: updated.id,
+        tenantId: updated.tenant_id,
+        name: updated.name,
+        email: updated.email,
+        role: 'MASTER',
+        password: req.body.password,
+        phone: updated.phone,
+        isUpdate: true
+      });
+      await notifyHierarchyChange('master', 'updated', updated, passwordHash);
       res.json(updated);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1568,7 +1915,7 @@ async function startServer() {
       const { status } = req.body;
       const updated = await activeTradingDataProvider.updateMasterStatus(req.params.id, status);
       if (!updated) return res.status(404).json({ error: 'Master not found' });
-      notifyHierarchyChange('master', 'status_updated', updated);
+      await notifyHierarchyChange('master', 'status_updated', updated);
       res.json(updated);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1599,7 +1946,7 @@ async function startServer() {
         data.master_id = user.hierarchy_id;
       }
       const broker = await activeTradingDataProvider.createBroker(data);
-      await provisionHierarchyUser({
+      const passwordHash = await provisionHierarchyUser({
         entityId: broker.id,
         tenantId: broker.tenant_id,
         name: broker.name,
@@ -1608,7 +1955,7 @@ async function startServer() {
         password: req.body.password,
         phone: broker.phone || req.body.phone
       });
-      notifyHierarchyChange('broker', 'created', broker);
+      await notifyHierarchyChange('broker', 'created', broker, passwordHash);
       await writeSecurityAuditLog({
         tenantId: broker.tenant_id,
         userName: user.name,
@@ -1627,7 +1974,17 @@ async function startServer() {
     try {
       const updated = await activeTradingDataProvider.updateBroker(req.params.id, req.body);
       if (!updated) return res.status(404).json({ error: 'Broker not found' });
-      notifyHierarchyChange('broker', 'updated', updated);
+      const passwordHash = await provisionHierarchyUser({
+        entityId: updated.id,
+        tenantId: updated.tenant_id,
+        name: updated.name,
+        email: updated.email,
+        role: 'BROKER',
+        password: req.body.password,
+        phone: updated.phone,
+        isUpdate: true
+      });
+      await notifyHierarchyChange('broker', 'updated', updated, passwordHash);
       res.json(updated);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1639,7 +1996,7 @@ async function startServer() {
       const { status } = req.body;
       const updated = await activeTradingDataProvider.updateBrokerStatus(req.params.id, status);
       if (!updated) return res.status(404).json({ error: 'Broker not found' });
-      notifyHierarchyChange('broker', 'status_updated', updated);
+      await notifyHierarchyChange('broker', 'status_updated', updated);
       res.json(updated);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1669,7 +2026,7 @@ async function startServer() {
         data.broker_id = user.hierarchy_id;
       }
       const subBroker = await activeTradingDataProvider.createSubBroker(data);
-      await provisionHierarchyUser({
+      const passwordHash = await provisionHierarchyUser({
         entityId: subBroker.id,
         tenantId: subBroker.tenant_id,
         name: subBroker.name,
@@ -1678,7 +2035,7 @@ async function startServer() {
         password: req.body.password,
         phone: subBroker.phone || req.body.phone
       });
-      notifyHierarchyChange('sub_broker', 'created', subBroker);
+      await notifyHierarchyChange('sub_broker', 'created', subBroker, passwordHash);
       await writeSecurityAuditLog({
         tenantId: subBroker.tenant_id,
         userName: user.name,
@@ -1697,7 +2054,17 @@ async function startServer() {
     try {
       const updated = await activeTradingDataProvider.updateSubBroker(req.params.id, req.body);
       if (!updated) return res.status(404).json({ error: 'Sub-Broker not found' });
-      notifyHierarchyChange('sub_broker', 'updated', updated);
+      const passwordHash = await provisionHierarchyUser({
+        entityId: updated.id,
+        tenantId: updated.tenant_id,
+        name: updated.name,
+        email: updated.email,
+        role: 'SUB_BROKER',
+        password: req.body.password,
+        phone: updated.phone,
+        isUpdate: true
+      });
+      await notifyHierarchyChange('sub_broker', 'updated', updated, passwordHash);
       res.json(updated);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1709,7 +2076,7 @@ async function startServer() {
       const { status } = req.body;
       const updated = await activeTradingDataProvider.updateSubBrokerStatus(req.params.id, status);
       if (!updated) return res.status(404).json({ error: 'Sub-Broker not found' });
-      notifyHierarchyChange('sub_broker', 'status_updated', updated);
+      await notifyHierarchyChange('sub_broker', 'status_updated', updated);
       res.json(updated);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1745,7 +2112,16 @@ async function startServer() {
         }
       }
       const client = await activeTradingDataProvider.createClient(data);
-      notifyHierarchyChange('client', 'created', client);
+      const passwordHash = await provisionHierarchyUser({
+        entityId: client.id,
+        tenantId: client.tenant_id,
+        name: client.name,
+        email: client.email || req.body.email,
+        role: 'CLIENT',
+        password: req.body.password,
+        phone: client.phone || req.body.phone
+      });
+      await notifyHierarchyChange('client', 'created', client, passwordHash);
       await writeSecurityAuditLog({
         tenantId: client.tenant_id,
         userName: user.name,
@@ -1764,7 +2140,17 @@ async function startServer() {
     try {
       const updated = await activeTradingDataProvider.updateClient(req.params.id, req.body);
       if (!updated) return res.status(404).json({ error: 'Client not found' });
-      notifyHierarchyChange('client', 'updated', updated);
+      const passwordHash = await provisionHierarchyUser({
+        entityId: updated.id,
+        tenantId: updated.tenant_id,
+        name: updated.name,
+        email: updated.email,
+        role: 'CLIENT',
+        password: req.body.password,
+        phone: updated.phone,
+        isUpdate: true
+      });
+      await notifyHierarchyChange('client', 'updated', updated, passwordHash);
       res.json(updated);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1776,7 +2162,7 @@ async function startServer() {
       const { status } = req.body;
       const updated = await activeTradingDataProvider.updateClientStatus(req.params.id, status);
       if (!updated) return res.status(404).json({ error: 'Client not found' });
-      notifyHierarchyChange('client', 'status_updated', updated);
+      await notifyHierarchyChange('client', 'status_updated', updated);
       res.json(updated);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -3132,11 +3518,20 @@ async function startServer() {
     }
   });
 
-  // Save White-Label Draft
+  // Save White-Label Config (persist to PostgreSQL + broadcast S2S to Trading-Platform and User-Panel-Dashbord)
   app.put('/api/admin/white-label/:tenantId', authMiddleware, requireRoles(['SUPER_ADMIN', 'TENANT_ADMIN']), async (req, res) => {
     try {
       const user = (req as any).user;
       const updated = await activeTradingDataProvider.updateWhiteLabelConfig(req.params.tenantId, req.body, user?.name || 'Admin');
+      // Broadcast saved branding via S2S to both Trading Platform and User Panel (non-blocking)
+      tradingPlatformClient.syncWhiteLabel(
+        req.params.tenantId,
+        updated,
+        updated.version || 1,
+        { actor: user?.name || 'Admin' }
+      ).catch(syncErr => {
+        console.warn('[WhiteLabelSave] S2S broadcast notice:', syncErr?.message || syncErr);
+      });
       res.json(updated);
     } catch (err: any) {
       res.status(400).json({ error: err.message });

@@ -53,6 +53,7 @@ export const UserProfileModals: React.FC<UserProfileModalsProps> = ({
   const [showNew, setShowNew] = useState(false);
   const [passwordError, setPasswordError] = useState('');
   const [passwordSuccess, setPasswordSuccess] = useState(false);
+  const [passwordSubmitting, setPasswordSubmitting] = useState(false);
 
   // Settings State
   const [soundAlerts, setSoundAlerts] = useState(true);
@@ -101,15 +102,16 @@ export const UserProfileModals: React.FC<UserProfileModalsProps> = ({
   };
 
   // Handle Change Password Submit
-  const handlePasswordSubmit = (e: React.FormEvent) => {
+  const handlePasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setPasswordError('');
+    setPasswordSuccess(false);
     if (!currentPassword) {
       setPasswordError('Please enter your current password');
       return;
     }
-    if (newPassword.length < 8) {
-      setPasswordError('New password must be at least 8 characters');
+    if (newPassword.trim().length < 6) {
+      setPasswordError('New password must be at least 6 characters');
       return;
     }
     if (newPassword !== confirmPassword) {
@@ -117,14 +119,36 @@ export const UserProfileModals: React.FC<UserProfileModalsProps> = ({
       return;
     }
 
-    setPasswordSuccess(true);
-    setTimeout(() => {
-      setPasswordSuccess(false);
-      setCurrentPassword('');
-      setNewPassword('');
-      setConfirmPassword('');
-      onClose();
-    }, 1500);
+    setPasswordSubmitting(true);
+    try {
+      const res = await fetch('/api/auth/change-password', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          currentPassword,
+          newPassword: newPassword.trim()
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setPasswordError(data.message || data.error || 'Failed to update password');
+        return;
+      }
+
+      setPasswordSuccess(true);
+      setTimeout(() => {
+        setPasswordSuccess(false);
+        setCurrentPassword('');
+        setNewPassword('');
+        setConfirmPassword('');
+        onClose();
+      }, 1400);
+    } catch (err: any) {
+      setPasswordError(err?.message || 'Network error updating password');
+    } finally {
+      setPasswordSubmitting(false);
+    }
   };
 
   // Handle Save Settings
@@ -536,9 +560,10 @@ export const UserProfileModals: React.FC<UserProfileModalsProps> = ({
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-xl text-xs font-semibold text-white bg-blue-600 hover:bg-blue-500 active:scale-[0.98] transition-all shadow-md shadow-blue-600/30"
+                  disabled={passwordSubmitting}
+                  className="px-5 py-2 rounded-xl text-xs font-semibold text-white bg-blue-600 hover:bg-blue-500 active:scale-[0.98] transition-all shadow-md shadow-blue-600/30 disabled:opacity-50"
                 >
-                  Update Password
+                  {passwordSubmitting ? 'Updating...' : 'Update Password'}
                 </button>
               </div>
             </form>

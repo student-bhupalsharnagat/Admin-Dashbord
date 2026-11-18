@@ -266,22 +266,30 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
     }
   };
 
-  // 1. Save Draft Workflow
+  // 1. Save Draft & Broadcast Workflow
   const handleSaveDraft = async () => {
     if (!branding) return;
     setSavingDraft(true);
     try {
+      const payload = {
+        ...branding,
+        brandName: branding.brand_name,
+        logoUrl: branding.logo_url,
+        primaryColor: branding.primary_color,
+        supportEmail: branding.support_email,
+        domain: branding.custom_domain || primaryDomain
+      };
       const res = await fetch(`/api/admin/white-label/${selectedTenantId}`, {
         method: 'PUT',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(branding)
+        body: JSON.stringify(payload)
       });
 
       if (res.ok) {
         const updated = await res.json();
         setBranding(updated);
-        onNotify?.('Draft branding configuration saved successfully.', 'success');
+        onNotify?.('White-label configuration saved & broadcast to Trading Platform and User Panel.', 'success');
       } else {
         throw new Error('Failed to save draft');
       }
@@ -292,7 +300,7 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
     }
   };
 
-  // 2. Publish to Live Trading Platform Workflow
+  // 2. Publish to Live Trading Platform & User Panel Workflow
   const handlePublish = async () => {
     if (!branding) return;
     setPublishing(true);
@@ -302,7 +310,14 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
         method: 'PUT',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(branding)
+        body: JSON.stringify({
+          ...branding,
+          brandName: branding.brand_name,
+          logoUrl: branding.logo_url,
+          primaryColor: branding.primary_color,
+          supportEmail: branding.support_email,
+          domain: branding.custom_domain || primaryDomain
+        })
       });
 
       // Also persist platform config
@@ -326,7 +341,7 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
       if (pRes.ok) {
         const published = await pRes.json();
         setBranding(published);
-        onNotify?.(`Branding published live (v${published.version || 2})! Trading Platform now reflects these changes.`, 'success');
+        onNotify?.(`Branding published live (v${published.version || 2})! Synced to Trading Platform & User Panel.`, 'success');
         // Reload audit logs
         loadTenantData(selectedTenantId);
       } else {
@@ -942,15 +957,28 @@ export const WhiteLabelView: React.FC<WhiteLabelViewProps> = ({
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs text-slate-400 font-medium mb-1">Footer Copyright Text</label>
-                <input
-                  type="text"
-                  value={branding?.footer_text || ''}
-                  onChange={e => handleBrandingChange('footer_text', e.target.value)}
-                  placeholder="© 2024 AlphaPrime Capital. All rights reserved."
-                  className="w-full bg-[#080e1c] border border-[#142038] rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-blue-500"
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-slate-400 font-medium mb-1">Primary White-Label Domain</label>
+                  <input
+                    type="text"
+                    value={branding?.custom_domain || ''}
+                    onChange={e => handleBrandingChange('custom_domain', e.target.value)}
+                    placeholder="e.g. trade.alphaprime.com"
+                    className="w-full bg-[#080e1c] border border-[#142038] rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs text-slate-400 font-medium mb-1">Footer Copyright Text</label>
+                  <input
+                    type="text"
+                    value={branding?.footer_text || ''}
+                    onChange={e => handleBrandingChange('footer_text', e.target.value)}
+                    placeholder="© 2024 AlphaPrime Capital. All rights reserved."
+                    className="w-full bg-[#080e1c] border border-[#142038] rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-blue-500"
+                  />
+                </div>
               </div>
             </div>
           </div>

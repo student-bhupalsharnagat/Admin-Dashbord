@@ -28,7 +28,9 @@ import {
   Send,
   Radio,
   CheckCircle2,
-  DollarSign
+  DollarSign,
+  Key,
+  X
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -187,6 +189,11 @@ export const ClientDetailView: React.FC<ClientDetailViewProps> = ({
   ];
 
   const [showEditModal, setShowEditModal] = useState(false);
+  const [showResetPasswordModal, setShowResetPasswordModal] = useState(false);
+  const [newClientPassword, setNewClientPassword] = useState('');
+  const [confirmClientPassword, setConfirmClientPassword] = useState('');
+  const [resetPasswordLoading, setResetPasswordLoading] = useState(false);
+  const [resetPasswordError, setResetPasswordError] = useState('');
   const [clientData, setClientData] = useState(() => resolveClientInitialData(client));
 
   useEffect(() => {
@@ -587,6 +594,20 @@ export const ClientDetailView: React.FC<ClientDetailViewProps> = ({
             >
               <RefreshCw size={12} className={isSyncing ? 'animate-spin text-blue-400' : ''} />
               <span className="hidden sm:inline">Sync</span>
+            </button>
+
+            <button
+              onClick={() => {
+                setNewClientPassword('');
+                setConfirmClientPassword('');
+                setResetPasswordError('');
+                setShowResetPasswordModal(true);
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 rounded-lg text-xs font-semibold text-amber-300 transition-colors cursor-pointer"
+              title="Reset client password and sync via S2S"
+            >
+              <Key size={13} />
+              Reset Password
             </button>
 
             <button
@@ -1598,6 +1619,114 @@ export const ClientDetailView: React.FC<ClientDetailViewProps> = ({
                 Save Changes
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reset Client Password Modal */}
+      {showResetPasswordModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4">
+          <div className="bg-[#091122] border border-[#162238] rounded-xl max-w-md w-full overflow-hidden shadow-2xl">
+            <div className="p-4 border-b border-[#162238] flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Key size={15} className="text-amber-400" />
+                <h3 className="text-sm font-bold text-white">Reset Client Password</h3>
+              </div>
+              <button
+                onClick={() => setShowResetPasswordModal(false)}
+                className="text-slate-400 hover:text-white cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <form
+              onSubmit={async e => {
+                e.preventDefault();
+                setResetPasswordError('');
+                if (newClientPassword.trim().length < 6) {
+                  setResetPasswordError('New password must be at least 6 characters.');
+                  return;
+                }
+                if (newClientPassword !== confirmClientPassword) {
+                  setResetPasswordError('Passwords do not match.');
+                  return;
+                }
+                setResetPasswordLoading(true);
+                try {
+                  const res = await fetch(`/api/admin/users/${encodeURIComponent(clientData.id)}/reset-password`, {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      newPassword: newClientPassword.trim(),
+                      entityType: 'client',
+                      email: clientData.email
+                    })
+                  });
+                  const data = await res.json().catch(() => ({}));
+                  if (!res.ok) {
+                    setResetPasswordError(data.message || data.error || 'Failed to reset password.');
+                    return;
+                  }
+                  setShowResetPasswordModal(false);
+                  notify(data.message || `Password reset for ${clientData.name} and synced across platforms.`, 'success');
+                } catch (err: any) {
+                  setResetPasswordError(err?.message || 'Network error resetting password.');
+                } finally {
+                  setResetPasswordLoading(false);
+                }
+              }}
+              className="p-4 space-y-3 text-xs"
+            >
+              <p className="text-[11px] text-slate-400">
+                Set a new password for <span className="text-white font-semibold">{clientData.name}</span> ({clientData.id}). Updated credentials will sync via S2S.
+              </p>
+              <div>
+                <label className="block text-slate-400 mb-1">New Password</label>
+                <input
+                  type="password"
+                  required
+                  minLength={6}
+                  value={newClientPassword}
+                  onChange={e => setNewClientPassword(e.target.value)}
+                  placeholder="Minimum 6 characters"
+                  className="w-full px-3 py-2 bg-[#0c162b] border border-[#162238] rounded-lg text-slate-200"
+                />
+              </div>
+              <div>
+                <label className="block text-slate-400 mb-1">Confirm New Password</label>
+                <input
+                  type="password"
+                  required
+                  minLength={6}
+                  value={confirmClientPassword}
+                  onChange={e => setConfirmClientPassword(e.target.value)}
+                  placeholder="Re-enter new password"
+                  className="w-full px-3 py-2 bg-[#0c162b] border border-[#162238] rounded-lg text-slate-200"
+                />
+              </div>
+              {resetPasswordError && (
+                <div className="p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-400 text-[11px]">
+                  {resetPasswordError}
+                </div>
+              )}
+              <div className="pt-2 flex justify-end gap-2 border-t border-[#162238]">
+                <button
+                  type="button"
+                  onClick={() => setShowResetPasswordModal(false)}
+                  className="px-3 py-1.5 rounded-lg text-slate-300 hover:text-white cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={resetPasswordLoading}
+                  className="px-4 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-semibold cursor-pointer disabled:opacity-50"
+                >
+                  {resetPasswordLoading ? 'Resetting...' : 'Reset & Sync Password'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

@@ -89,6 +89,8 @@ export interface Master {
   tenant_name: string;
   name: string;
   code: string;
+  referralCode?: string;
+  referral_code?: string;
   email: string;
   phone: string;
   brokers_count: number;
@@ -111,6 +113,8 @@ export interface Broker {
   tenant_name: string;
   name: string;
   code: string;
+  referralCode?: string;
+  referral_code?: string;
   email: string;
   phone?: string;
   sub_brokers_count: number;
@@ -133,6 +137,8 @@ export interface SubBroker {
   tenant_name: string;
   name: string;
   code: string;
+  referralCode?: string;
+  referral_code?: string;
   email: string;
   phone?: string;
   clients_count: number;

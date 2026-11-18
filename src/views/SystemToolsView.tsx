@@ -48,8 +48,16 @@ export const SystemToolsView: React.FC<SystemToolsViewProps> = ({
 }) => {
   const { theme, setTheme } = useTheme();
 
-  // Settings Sub-tab: 'emergency' | 'master-limits' | 'platform' | 'architecture'
-  const [settingsTab, setSettingsTab] = useState<'emergency' | 'master-limits' | 'platform' | 'architecture'>('emergency');
+  // Settings Sub-tab: 'emergency' | 'master-limits' | 'platform' | 'architecture' | 'password'
+  const [settingsTab, setSettingsTab] = useState<'emergency' | 'master-limits' | 'platform' | 'architecture' | 'password'>('emergency');
+
+  // Self-service Change Password state (top-level hooks)
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  const [changingPassword, setChangingPassword] = useState(false);
+  const [changePasswordError, setChangePasswordError] = useState('');
+  const [changePasswordSuccess, setChangePasswordSuccess] = useState(false);
 
   // Audit Logs Sub-tab: 'audit-trail' | 'sessions' | 'suspicious-alerts' | 'api-activity'
   const [auditTab, setAuditTab] = useState<'audit-trail' | 'sessions' | 'suspicious-alerts' | 'api-activity'>('audit-trail');
@@ -378,6 +386,50 @@ export const SystemToolsView: React.FC<SystemToolsViewProps> = ({
     }
   };
 
+  const handleChangeOwnPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setChangePasswordError('');
+    setChangePasswordSuccess(false);
+    if (!currentPassword) {
+      setChangePasswordError('Please enter your current password.');
+      return;
+    }
+    if (newPassword.trim().length < 6) {
+      setChangePasswordError('New password must be at least 6 characters.');
+      return;
+    }
+    if (newPassword !== confirmNewPassword) {
+      setChangePasswordError('New passwords do not match.');
+      return;
+    }
+    setChangingPassword(true);
+    try {
+      const res = await fetch('/api/auth/change-password', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          currentPassword,
+          newPassword: newPassword.trim()
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setChangePasswordError(data.message || data.error || 'Failed to update password.');
+        return;
+      }
+      setChangePasswordSuccess(true);
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmNewPassword('');
+      onNotify?.('Password updated successfully!', 'success');
+    } catch (err: any) {
+      setChangePasswordError(err?.message || 'Network error updating password.');
+    } finally {
+      setChangingPassword(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       {/* Top Banner */}
@@ -452,6 +504,16 @@ export const SystemToolsView: React.FC<SystemToolsViewProps> = ({
               }`}
             >
               <Database size={13} /> Architecture
+            </button>
+            <button
+              onClick={() => setSettingsTab('password')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer flex items-center gap-1.5 ${
+                settingsTab === 'password'
+                  ? 'bg-purple-500/20 border border-purple-500/40 text-purple-300'
+                  : 'bg-[#111c34] text-slate-400 hover:text-white'
+              }`}
+            >
+              <Key size={13} /> Change Password
             </button>
           </div>
         )}
@@ -1275,6 +1337,87 @@ export const SystemToolsView: React.FC<SystemToolsViewProps> = ({
                   </button>
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* Sub-tab 5: Change Password Card */}
+          {settingsTab === 'password' && (
+            <div className="max-w-xl bg-[#0d1527] border border-[#17233f] rounded-xl p-6 space-y-5">
+              <div className="flex items-center gap-3 pb-3 border-b border-[#17233f]">
+                <div className="w-9 h-9 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
+                  <Key size={18} />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">Change Password</h3>
+                  <p className="text-xs text-slate-400">
+                    Verify your current password to update your credentials across synced platforms.
+                  </p>
+                </div>
+              </div>
+
+              <form onSubmit={handleChangeOwnPassword} className="space-y-4 text-xs">
+                <div>
+                  <label className="block text-slate-300 font-medium mb-1.5">Current Password</label>
+                  <input
+                    type="password"
+                    required
+                    value={currentPassword}
+                    onChange={e => setCurrentPassword(e.target.value)}
+                    placeholder="Enter your current password"
+                    className="w-full bg-[#081022] border border-[#1b2c4e] rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 font-medium mb-1.5">New Password</label>
+                  <input
+                    type="password"
+                    required
+                    minLength={6}
+                    value={newPassword}
+                    onChange={e => setNewPassword(e.target.value)}
+                    placeholder="Minimum 6 characters"
+                    className="w-full bg-[#081022] border border-[#1b2c4e] rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 font-medium mb-1.5">Confirm New Password</label>
+                  <input
+                    type="password"
+                    required
+                    minLength={6}
+                    value={confirmNewPassword}
+                    onChange={e => setConfirmNewPassword(e.target.value)}
+                    placeholder="Re-enter your new password"
+                    className="w-full bg-[#081022] border border-[#1b2c4e] rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                {changePasswordError && (
+                  <div className="p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-400 flex items-center gap-2">
+                    <AlertTriangle size={14} />
+                    <span>{changePasswordError}</span>
+                  </div>
+                )}
+
+                {changePasswordSuccess && (
+                  <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 flex items-center gap-2">
+                    <CheckCircle2 size={14} />
+                    <span>Password updated successfully!</span>
+                  </div>
+                )}
+
+                <div className="pt-2 flex justify-end">
+                  <button
+                    type="submit"
+                    disabled={changingPassword}
+                    className="px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs transition-colors cursor-pointer disabled:opacity-50"
+                  >
+                    {changingPassword ? 'Updating...' : 'Update Password'}
+                  </button>
+                </div>
+              </form>
             </div>
           )}
         </div>

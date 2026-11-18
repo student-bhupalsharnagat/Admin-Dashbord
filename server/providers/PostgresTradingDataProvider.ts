@@ -1,5 +1,22 @@
 import pg from 'pg';
 import dns from 'dns';
+import crypto from 'crypto';
+
+const REFERRAL_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+export function generateReferralCode(prefix: 'MST' | 'BRK' | 'SUB', seed?: string): string {
+  if (seed) {
+    const clean = seed.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+    const tail = (clean.slice(-4) || '0001').padStart(4, '0');
+    return `${prefix}-${tail}`;
+  }
+  const bytes = crypto.randomBytes(4);
+  let suffix = '';
+  for (let i = 0; i < 4; i++) {
+    suffix += REFERRAL_ALPHABET[bytes[i] % REFERRAL_ALPHABET.length];
+  }
+  return `${prefix}-${suffix}`;
+}
 import {
   ITradingDataProvider,
   EntityStatus
@@ -1146,23 +1163,28 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       ORDER BY m.created_at ASC
     `, params).catch(() => ({ rows: [] }));
 
-    const list: Master[] = res.rows.map(r => ({
-      id: r.id,
-      tenant_id: r.tenant_id,
-      tenant_name: r.tenant_name || 'Central Master',
-      name: r.name,
-      company: r.company || (r as any).companyName || r.name,
-      code: r.code,
-      email: r.email,
-      phone: r.phone || '',
-      status: r.status as 'ACTIVE' | 'SUSPENDED',
-      brokers_count: r.brokers_count || 0,
-      clients_count: r.clients_count || 0,
-      turnover: r.turnover || '₹0',
-      commission_earned: r.commission || '₹0',
-      region: 'North India',
-      created_at: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : new Date().toISOString().split('T')[0]
-    }));
+    const list: Master[] = res.rows.map(r => {
+      const refCode = r.referral_code || generateReferralCode('MST', r.id);
+      return {
+        id: r.id,
+        tenant_id: r.tenant_id,
+        tenant_name: r.tenant_name || 'Central Master',
+        name: r.name,
+        company: r.company || (r as any).companyName || r.name,
+        code: r.code,
+        referralCode: refCode,
+        referral_code: refCode,
+        email: r.email,
+        phone: r.phone || '',
+        status: r.status as 'ACTIVE' | 'SUSPENDED',
+        brokers_count: r.brokers_count || 0,
+        clients_count: r.clients_count || 0,
+        turnover: r.turnover || '₹0',
+        commission_earned: r.commission || '₹0',
+        region: 'North India',
+        created_at: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : new Date().toISOString().split('T')[0]
+      };
+    });
 
     const existingIds = new Set(list.map(m => m.id));
     for (const cm of this.createdMastersMap.values()) {
@@ -1178,22 +1200,24 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     const tenantId = data.tenant_id || 'TNT-001';
     const company = (data as any).company || (data as any).companyName || data.name || 'Master Corp';
     const todayStr = new Date().toISOString().split('T')[0];
+    const referralCode = (data as any).referralCode || (data as any).referral_code || generateReferralCode('MST');
 
     let r: any = null;
     try {
       const res = await this.executeQuery(`
         INSERT INTO masters (
-          id, tenant_id, name, company, code, email, phone, status,
+          id, tenant_id, name, company, code, referral_code, email, phone, status,
           brokers_count, clients_count, turnover, commission, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP)
-        ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, company = EXCLUDED.company, updated_at = CURRENT_TIMESTAMP
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP)
+        ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, company = EXCLUDED.company, referral_code = COALESCE(masters.referral_code, EXCLUDED.referral_code), updated_at = CURRENT_TIMESTAMP
         RETURNING *
       `, [
         id,
         tenantId,
         data.name || 'New Master',
         company,
-        data.code || `MST-${id.slice(-3)}`,
+        data.code || referralCode,
+        referralCode,
         data.email || 'master@tradematrix.io',
         data.phone || '+91 98000 00000',
         data.status || 'ACTIVE',
@@ -1207,13 +1231,16 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       console.warn('[PostgresTradingDataProvider] Master DB insert warning, caching in memory:', err);
     }
 
+    const finalReferralCode = r?.referral_code || referralCode;
     const masterResult: Master = {
       id: r?.id || id,
       tenant_id: r?.tenant_id || tenantId,
       tenant_name: r?.tenant_name || (data as any).tenant_name || 'VERTEX Trading',
       name: r?.name || data.name || 'New Master',
       company: r?.company || company,
-      code: r?.code || data.code || `MST-${id.slice(-3)}`,
+      code: r?.code || data.code || finalReferralCode,
+      referralCode: finalReferralCode,
+      referral_code: finalReferralCode,
       email: r?.email || data.email || 'master@tradematrix.io',
       phone: r?.phone || data.phone || '+91 98000 00000',
       status: (r?.status || data.status || 'ACTIVE') as 'ACTIVE' | 'SUSPENDED',
@@ -1286,27 +1313,33 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     sql += ' ORDER BY b.created_at ASC';
     const res = await this.executeQuery(sql, params).catch(() => ({ rows: [] }));
 
-    const list: Broker[] = res.rows.map(r => ({
-      id: r.id,
-      master_id: r.master_id,
-      masterId: r.master_id,
-      master_name: r.parent_master_name || r.master_name || 'Master Admin',
-      masterName: r.parent_master_name || r.master_name || 'Master Admin',
-      parentMaster: r.parent_master_name || r.master_name || 'Master Admin',
-      master: r.parent_master_name || r.master_name || 'Master Admin',
-      tenant_id: r.tenant_id,
-      tenant_name: r.tenant_name || 'Alpha Prime Capital',
-      name: r.name,
-      company: r.company || r.name,
-      code: r.code,
-      email: r.email,
-      status: r.status as 'ACTIVE' | 'SUSPENDED',
-      sub_brokers_count: r.sub_brokers_count || 0,
-      clients_count: r.clients_count || 0,
-      turnover: r.turnover || '₹0',
-      commission_earned: r.commission || '₹0',
-      created_at: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : new Date().toISOString().split('T')[0]
-    }));
+    const list: Broker[] = res.rows.map(r => {
+      const refCode = r.referral_code || generateReferralCode('BRK', r.id);
+      return {
+        id: r.id,
+        master_id: r.master_id,
+        masterId: r.master_id,
+        master_name: r.parent_master_name || r.master_name || 'Master Admin',
+        masterName: r.parent_master_name || r.master_name || 'Master Admin',
+        parentMaster: r.parent_master_name || r.master_name || 'Master Admin',
+        master: r.parent_master_name || r.master_name || 'Master Admin',
+        tenant_id: r.tenant_id,
+        tenant_name: r.tenant_name || 'Alpha Prime Capital',
+        name: r.name,
+        company: r.company || r.name,
+        code: r.code,
+        referralCode: refCode,
+        referral_code: refCode,
+        email: r.email,
+        phone: r.phone || '',
+        status: r.status as 'ACTIVE' | 'SUSPENDED',
+        sub_brokers_count: r.sub_brokers_count || 0,
+        clients_count: r.clients_count || 0,
+        turnover: r.turnover || '₹0',
+        commission_earned: r.commission || '₹0',
+        created_at: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : new Date().toISOString().split('T')[0]
+      };
+    });
 
     const existingIds = new Set(list.map(b => b.id));
     for (const cb of this.createdBrokersMap.values()) {
@@ -1356,15 +1389,16 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     masterName = masterName || 'Master Admin';
     const company = (data as any).company || (data as any).companyName || data.name || 'Brokerage Services';
     const todayStr = new Date().toISOString().split('T')[0];
+    const referralCode = (data as any).referralCode || (data as any).referral_code || generateReferralCode('BRK');
 
     let r: any = null;
     try {
       const res = await this.executeQuery(`
         INSERT INTO brokers (
-          id, tenant_id, master_id, master_name, name, company, code, email, phone, status,
+          id, tenant_id, master_id, master_name, name, company, code, referral_code, email, phone, status,
           sub_brokers_count, clients_count, turnover, commission, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, CURRENT_TIMESTAMP)
-        ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, master_id = EXCLUDED.master_id, master_name = EXCLUDED.master_name, updated_at = CURRENT_TIMESTAMP
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, CURRENT_TIMESTAMP)
+        ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, master_id = EXCLUDED.master_id, master_name = EXCLUDED.master_name, referral_code = COALESCE(brokers.referral_code, EXCLUDED.referral_code), updated_at = CURRENT_TIMESTAMP
         RETURNING *
       `, [
         id,
@@ -1373,7 +1407,8 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         masterName,
         data.name || 'New Broker',
         company,
-        data.code || `BRK-${id.slice(-3)}`,
+        data.code || referralCode,
+        referralCode,
         data.email || 'broker@tradematrix.io',
         data.phone || '+91 98111 00000',
         data.status || 'ACTIVE',
@@ -1392,6 +1427,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       console.warn('[PostgresTradingDataProvider] Broker DB insert warning, caching in memory:', dbErr);
     }
 
+    const finalReferralCode = r?.referral_code || referralCode;
     const brokerResult: Broker = {
       id: r?.id || id,
       master_id: r?.master_id || masterId,
@@ -1404,7 +1440,9 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       tenant_name: r?.tenant_name || (data as any).tenant_name || 'VERTEX Trading',
       name: r?.name || data.name || 'New Broker',
       company: r?.company || company,
-      code: r?.code || data.code || `BRK-${id.slice(-3)}`,
+      code: r?.code || data.code || finalReferralCode,
+      referralCode: finalReferralCode,
+      referral_code: finalReferralCode,
       email: r?.email || data.email || 'broker@tradematrix.io',
       phone: r?.phone || data.phone || '+91 98111 00000',
       status: (r?.status || data.status || 'ACTIVE') as 'ACTIVE' | 'SUSPENDED',
@@ -1473,24 +1511,30 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     sql += ' ORDER BY sb.created_at ASC';
     const res = await this.executeQuery(sql, params).catch(() => ({ rows: [] }));
 
-    const list: SubBroker[] = res.rows.map(r => ({
-      id: r.id,
-      broker_id: r.broker_id,
-      brokerId: r.broker_id,
-      broker_name: r.parent_broker_name || r.broker_name || 'Broker Admin',
-      brokerName: r.parent_broker_name || r.broker_name || 'Broker Admin',
-      parentBroker: r.parent_broker_name || r.broker_name || 'Broker Admin',
-      tenant_id: r.tenant_id,
-      tenant_name: r.tenant_name || 'Alpha Prime Capital',
-      name: r.name,
-      code: r.code,
-      email: r.email,
-      status: r.status as 'ACTIVE' | 'SUSPENDED',
-      clients_count: r.clients_count || 0,
-      turnover: r.turnover || '₹0',
-      commission_earned: r.commission || '₹0',
-      created_at: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : new Date().toISOString().split('T')[0]
-    }));
+    const list: SubBroker[] = res.rows.map(r => {
+      const refCode = r.referral_code || generateReferralCode('SUB', r.id);
+      return {
+        id: r.id,
+        broker_id: r.broker_id,
+        brokerId: r.broker_id,
+        broker_name: r.parent_broker_name || r.broker_name || 'Broker Admin',
+        brokerName: r.parent_broker_name || r.broker_name || 'Broker Admin',
+        parentBroker: r.parent_broker_name || r.broker_name || 'Broker Admin',
+        tenant_id: r.tenant_id,
+        tenant_name: r.tenant_name || 'Alpha Prime Capital',
+        name: r.name,
+        code: r.code,
+        referralCode: refCode,
+        referral_code: refCode,
+        email: r.email,
+        phone: r.phone || '',
+        status: r.status as 'ACTIVE' | 'SUSPENDED',
+        clients_count: r.clients_count || 0,
+        turnover: r.turnover || '₹0',
+        commission_earned: r.commission || '₹0',
+        created_at: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : new Date().toISOString().split('T')[0]
+      };
+    });
 
     const existingIds = new Set(list.map(sb => sb.id));
     for (const csb of this.createdSubBrokersMap.values()) {
@@ -1539,15 +1583,16 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     tenantId = tenantId || 'TNT-001';
     brokerName = brokerName || 'Broker Admin';
     const todayStr = new Date().toISOString().split('T')[0];
+    const referralCode = (data as any).referralCode || (data as any).referral_code || generateReferralCode('SUB');
 
     let r: any = null;
     try {
       const res = await this.executeQuery(`
         INSERT INTO sub_brokers (
-          id, tenant_id, broker_id, broker_name, name, code, email, phone, status,
+          id, tenant_id, broker_id, broker_name, name, code, referral_code, email, phone, status,
           clients_count, turnover, commission, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP)
-        ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, broker_id = EXCLUDED.broker_id, broker_name = EXCLUDED.broker_name, updated_at = CURRENT_TIMESTAMP
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP)
+        ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, broker_id = EXCLUDED.broker_id, broker_name = EXCLUDED.broker_name, referral_code = COALESCE(sub_brokers.referral_code, EXCLUDED.referral_code), updated_at = CURRENT_TIMESTAMP
         RETURNING *
       `, [
         id,
@@ -1555,7 +1600,8 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         brokerId,
         brokerName,
         data.name || 'New Sub-Broker',
-        data.code || `SBRK-${id.slice(-3)}`,
+        data.code || referralCode,
+        referralCode,
         data.email || 'subbroker@tradematrix.io',
         data.phone || '+91 98222 00000',
         data.status || 'ACTIVE',
@@ -1573,6 +1619,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       console.warn('[PostgresTradingDataProvider] Sub-Broker DB insert warning, caching in memory:', dbErr);
     }
 
+    const finalReferralCode = r?.referral_code || referralCode;
     const subBrokerResult: SubBroker = {
       id: r?.id || id,
       broker_id: r?.broker_id || brokerId,
@@ -1583,7 +1630,9 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       tenant_id: r?.tenant_id || tenantId,
       tenant_name: r?.tenant_name || (data as any).tenant_name || 'VERTEX Trading',
       name: r?.name || data.name || 'New Sub-Broker',
-      code: r?.code || data.code || `SBRK-${id.slice(-3)}`,
+      code: r?.code || data.code || finalReferralCode,
+      referralCode: finalReferralCode,
+      referral_code: finalReferralCode,
       email: r?.email || data.email || 'subbroker@tradematrix.io',
       phone: r?.phone || data.phone || '+91 98222 00000',
       status: (r?.status || data.status || 'ACTIVE') as 'ACTIVE' | 'SUSPENDED',
@@ -5226,9 +5275,18 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       }
     }
 
+    const normalizedData: Partial<WhiteLabelConfig> = {
+      ...data,
+      ...(rawBrandName !== undefined ? { brand_name: rawBrandName } : {}),
+      ...((data as any).logoUrl !== undefined && data.logo_url === undefined ? { logo_url: (data as any).logoUrl } : {}),
+      ...((data as any).primaryColor !== undefined && data.primary_color === undefined ? { primary_color: (data as any).primaryColor } : {}),
+      ...((data as any).supportEmail !== undefined && data.support_email === undefined ? { support_email: (data as any).supportEmail } : {}),
+      ...((data as any).domain !== undefined && data.custom_domain === undefined ? { custom_domain: (data as any).domain } : {})
+    };
+
     const existing = await this.getWhiteLabelConfig(tenantId);
     const existingVersion = existing?.version || 1;
-    const updatedDraft = { ...(existing || {}), ...data, version: existingVersion };
+    const updatedDraft = { ...(existing || {}), ...normalizedData, version: existingVersion };
 
     await this.executeQuery(`
       INSERT INTO tenant_branding (
@@ -5252,18 +5310,25 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     `, [
       `BRD-${tenantId}`,
       tenantId,
-      data.company_name || data.tenant_name || 'Brand Corp',
-      data.brand_name || data.short_name || 'Brand Portal',
-      data.tagline || 'Leading Multi-Asset Trading',
-      data.logo_url || (data as any).logoUrl || null,
-      data.favicon_url || (data as any).faviconUrl || null,
-      data.primary_color || '#3b82f6',
-      data.accent_color || '#10b981',
-      data.support_email || 'support@tenant.com',
-      data.support_phone || '+91 90000 00000',
-      data.footer_text || 'All rights reserved',
+      normalizedData.company_name || normalizedData.tenant_name || existing?.company_name || 'Brand Corp',
+      normalizedData.brand_name || normalizedData.short_name || existing?.brand_name || 'Brand Portal',
+      normalizedData.tagline || existing?.tagline || 'Leading Multi-Asset Trading',
+      normalizedData.logo_url || existing?.logo_url || null,
+      normalizedData.favicon_url || (data as any).faviconUrl || existing?.favicon_url || null,
+      normalizedData.primary_color || existing?.primary_color || '#3b82f6',
+      normalizedData.accent_color || existing?.accent_color || '#10b981',
+      normalizedData.support_email || existing?.support_email || 'support@tenant.com',
+      normalizedData.support_phone || existing?.support_phone || '+91 90000 00000',
+      normalizedData.footer_text || existing?.footer_text || 'All rights reserved',
       JSON.stringify(updatedDraft)
     ]);
+
+    if (normalizedData.custom_domain) {
+      await this.executeQuery(
+        'UPDATE tenants SET custom_domain = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+        [normalizedData.custom_domain, tenantId]
+      ).catch(() => {});
+    }
 
     return (await this.getWhiteLabelConfig(tenantId))!;
   }

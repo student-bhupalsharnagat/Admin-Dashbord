@@ -562,20 +562,20 @@ export class EventHandler {
     if (!code || !tenantId) return null;
     const cleanCode = String(code).trim();
 
-    // 1. Direct match on sub_brokers.code or id
+    // 1. Direct match on sub_brokers.referral_code, code, or id
     const sbRes = await query<{ id: string; name: string }>(
-      'SELECT id, name FROM sub_brokers WHERE (LOWER(code) = LOWER($1) OR LOWER(id) = LOWER($1)) AND tenant_id = $2 LIMIT 1',
+      'SELECT id, name FROM sub_brokers WHERE (LOWER(COALESCE(referral_code, \'\')) = LOWER($1) OR LOWER(code) = LOWER($1) OR LOWER(id) = LOWER($1)) AND tenant_id = $2 LIMIT 1',
       [cleanCode, tenantId]
     );
     if (sbRes.rows.length > 0) {
       return sbRes.rows[0];
     }
 
-    // 2. Match on brokers.code (assign to first sub_broker under this broker)
+    // 2. Match on brokers.referral_code, code, or id (assign to first sub_broker under this broker)
     const bRes = await query<{ id: string; name: string }>(
       `SELECT sb.id, sb.name FROM sub_brokers sb
        JOIN brokers b ON sb.broker_id = b.id
-       WHERE (LOWER(b.code) = LOWER($1) OR LOWER(b.id) = LOWER($1)) AND b.tenant_id = $2
+       WHERE (LOWER(COALESCE(b.referral_code, '')) = LOWER($1) OR LOWER(b.code) = LOWER($1) OR LOWER(b.id) = LOWER($1)) AND b.tenant_id = $2
        LIMIT 1`,
       [cleanCode, tenantId]
     );
@@ -583,12 +583,12 @@ export class EventHandler {
       return bRes.rows[0];
     }
 
-    // 3. Match on masters.code
+    // 3. Match on masters.referral_code, code, or id
     const mRes = await query<{ id: string; name: string }>(
       `SELECT sb.id, sb.name FROM sub_brokers sb
        JOIN brokers b ON sb.broker_id = b.id
        JOIN masters m ON b.master_id = m.id
-       WHERE (LOWER(m.code) = LOWER($1) OR LOWER(m.id) = LOWER($1)) AND m.tenant_id = $2
+       WHERE (LOWER(COALESCE(m.referral_code, '')) = LOWER($1) OR LOWER(m.code) = LOWER($1) OR LOWER(m.id) = LOWER($1)) AND m.tenant_id = $2
        LIMIT 1`,
       [cleanCode, tenantId]
     );

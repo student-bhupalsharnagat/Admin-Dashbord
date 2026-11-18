@@ -47,6 +47,7 @@ export interface ClientMetrics {
 
 export class TradingPlatformClient {
   private baseUrl: string;
+  private userPanelBaseUrl: string;
   private secret: string;
   private defaultTimeoutMs: number;
 
@@ -94,9 +95,11 @@ export class TradingPlatformClient {
   constructor(
     baseUrl: string = appConfig.tradingPlatformBaseUrl || 'https://trading-platform-2t6r.onrender.com',
     secret: string = appConfig.internalCommunicationSecret || 'nextrade-internal-hmac-secret-2026',
-    defaultTimeoutMs: number = Math.max(appConfig.tradingPlatformTimeoutMs || 10000, 10000)
+    defaultTimeoutMs: number = Math.max(appConfig.tradingPlatformTimeoutMs || 10000, 10000),
+    userPanelBaseUrl: string = appConfig.userPanelBaseUrl || process.env.USER_PANEL_URL || 'https://user-panel-dashbord-ofrt.onrender.com'
   ) {
     this.baseUrl = baseUrl.replace(/\/$/, '');
+    this.userPanelBaseUrl = userPanelBaseUrl.replace(/\/$/, '');
     this.secret = secret;
     this.defaultTimeoutMs = defaultTimeoutMs;
   }
@@ -107,6 +110,86 @@ export class TradingPlatformClient {
 
   public setBaseUrl(url: string): void {
     this.baseUrl = url.replace(/\/$/, '');
+  }
+
+  public getUserPanelBaseUrl(): string {
+    return this.userPanelBaseUrl;
+  }
+
+  public setUserPanelBaseUrl(url: string): void {
+    this.userPanelBaseUrl = url.replace(/\/$/, '');
+  }
+
+  /**
+   * Dispatch an HMAC-SHA256 signed S2S POST request to an explicit target service base URL
+   * (e.g., User-Panel-Dashbord / Broker OS) without tripping the Trading Platform circuit breaker.
+   */
+  public async sendSignedToTarget<T = any>(
+    targetBaseUrl: string,
+    path: string,
+    body: any,
+    tenantId: string,
+    options?: { idempotencyKey?: string; correlationId?: string; timeoutMs?: number }
+  ): Promise<S2SResponse<T>> {
+    const cleanBase = (targetBaseUrl || '').replace(/\/$/, '');
+    const correlationId = options?.correlationId || `s2s_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+    if (!cleanBase) {
+      return { success: false, statusCode: 0, data: null as any, correlationId, latencyMs: 0, error: 'Target URL not configured' };
+    }
+
+    const startTime = Date.now();
+    const timestamp = Date.now().toString();
+    const nonce = crypto.randomUUID();
+    const pathWithoutQuery = path.split('?')[0];
+    const bodyString = body ? JSON.stringify(body) : '';
+    const signature = this.generateSignature(timestamp, 'POST', pathWithoutQuery, bodyString);
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'X-Internal-Timestamp': timestamp,
+      'X-Internal-Nonce': nonce,
+      'X-Internal-Signature': signature,
+      'X-Signature-SHA256': signature,
+      'X-HMAC-Signature': signature,
+      'X-Timestamp': timestamp,
+      'X-Correlation-ID': correlationId,
+      'X-Request-ID': correlationId,
+      'X-Tenant-ID': tenantId || 'vertex-default',
+      ...(options?.idempotencyKey ? { 'X-Idempotency-Key': options.idempotencyKey } : {})
+    };
+
+    const controller = new AbortController();
+    const timeoutHandle = setTimeout(() => controller.abort(), options?.timeoutMs || this.defaultTimeoutMs);
+    try {
+      const res = await fetch(`${cleanBase}${path}`, {
+        method: 'POST',
+        headers,
+        body: bodyString,
+        signal: controller.signal
+      });
+      clearTimeout(timeoutHandle);
+      const latencyMs = Date.now() - startTime;
+      const data = (await res.json().catch(() => ({}))) as T;
+      return {
+        success: res.ok,
+        statusCode: res.status,
+        data,
+        correlationId,
+        latencyMs,
+        error: res.ok ? undefined : ((data as any)?.error || (data as any)?.message || `Remote HTTP ${res.status}`)
+      };
+    } catch (err: any) {
+      clearTimeout(timeoutHandle);
+      return {
+        success: false,
+        statusCode: 503,
+        data: null as any,
+        correlationId,
+        latencyMs: Date.now() - startTime,
+        error: err?.message || 'Target service unreachable'
+      };
+    }
   }
 
   /**
@@ -833,25 +916,61 @@ export class TradingPlatformClient {
       textColor: config.text_color || config.textColor,
       supportEmail: config.support_email || config.supportEmail,
       supportPhone: config.support_phone || config.supportPhone,
+      domain: config.domain || config.custom_domain || config.customDomain || '',
+      customDomain: config.custom_domain || config.domain || config.customDomain || '',
       footerText: config.footer_text || config.footerText
     };
+
+    const whiteLabelBody = {
+      tenantId: outboundTenantId,
+      adminTenantId: tenantId,
+      version,
+      brandName: brandingPayload.brandName,
+      logoUrl: brandingPayload.logoUrl,
+      primaryColor: brandingPayload.primaryColor,
+      supportEmail: brandingPayload.supportEmail,
+      domain: brandingPayload.domain,
+      branding: brandingPayload,
+      publishedBy: options?.actor || 'CentralAdmin',
+      publishedAt: new Date().toISOString()
+    };
+
+    // Broadcast white-label config to User-Panel-Dashbord in parallel (non-blocking)
+    const userPanelPromise = this.userPanelBaseUrl
+      ? this.sendSignedToTarget(
+          this.userPanelBaseUrl,
+          '/api/internal/v1/tenant/branding',
+          whiteLabelBody,
+          outboundTenantId,
+          { idempotencyKey: `wl_up_${tenantId}_v${version}`, correlationId: options?.correlationId }
+        ).then(async upRes => {
+          if (!upRes.success && upRes.statusCode === 404) {
+            return this.sendSignedToTarget(
+              this.userPanelBaseUrl,
+              '/api/internal/v1/white-label/sync',
+              whiteLabelBody,
+              outboundTenantId,
+              { idempotencyKey: `wl_up_fb_${tenantId}_v${version}`, correlationId: options?.correlationId }
+            );
+          }
+          return upRes;
+        }).catch(err => {
+          console.warn('[TradingPlatformClient] User Panel white-label broadcast notice:', err?.message || err);
+          return { success: false, statusCode: 503, data: null, correlationId: options?.correlationId || '', latencyMs: 0, error: err?.message };
+        })
+      : Promise.resolve(null);
 
     // 1. Primary wire path on Trading Platform: POST /api/internal/v1/tenant/branding
     const res = await this.request({
       method: 'POST',
       path: '/api/internal/v1/tenant/branding',
       tenantId: outboundTenantId,
-      body: {
-        tenantId: outboundTenantId,
-        adminTenantId: tenantId,
-        version,
-        branding: brandingPayload,
-        publishedBy: options?.actor || 'CentralAdmin',
-        publishedAt: new Date().toISOString()
-      },
+      body: whiteLabelBody,
       idempotencyKey: `wl_${tenantId}_v${version}`,
       correlationId: options?.correlationId
     });
+
+    await userPanelPromise;
 
     if (res.success) {
       return res;
@@ -1313,7 +1432,8 @@ export class TradingPlatformClient {
 
   /**
    * Cross-Platform S2S Synchronization of 4-tier Hierarchy Nodes (Master, Broker, Sub-Broker, Client)
-   * Dispatches payload to Trading Platform /api/internal/v1/hierarchy/sync
+   * Dispatches HMAC-signed payload to BOTH Trading Platform (/api/internal/v1/hierarchy/sync)
+   * AND User-Panel-Dashbord (USER_PANEL_URL/api/internal/v1/hierarchy/sync)
    */
   public async syncHierarchyNode(data: {
     type: 'master' | 'broker' | 'sub_broker' | 'client';
@@ -1321,24 +1441,95 @@ export class TradingPlatformClient {
     tenantId?: string;
     node: any;
   }): Promise<S2SResponse> {
-    const outboundTenantId = await this.resolveOutboundTenantId(data.tenantId || data.node?.tenant_id);
-    return this.request({
-      method: 'POST',
-      path: '/api/internal/v1/hierarchy/sync',
-      body: {
-        event: 'HIERARCHY_NODE_SYNC',
-        type: data.type,
-        action: data.action,
-        tenantId: outboundTenantId,
-        node: data.node,
-        timestamp: new Date().toISOString()
-      },
+    const outboundTenantId = await this.resolveOutboundTenantId(data.tenantId || data.node?.tenantId || data.node?.tenant_id);
+    const n = data.node || {};
+    const roleMap: Record<string, string> = {
+      master: 'MASTER',
+      broker: 'BROKER',
+      sub_broker: 'SUB_BROKER',
+      client: 'CLIENT'
+    };
+    const normalizedRole = (n.role || roleMap[data.type] || 'CLIENT').toString().toUpperCase();
+    const referralCode = n.referralCode || n.referral_code || n.code || null;
+    const masterId = n.masterId ?? n.master_id ?? (data.type === 'master' ? n.id : null);
+    const brokerId = n.brokerId ?? n.broker_id ?? (data.type === 'broker' ? n.id : null);
+    const subBrokerId = n.subBrokerId ?? n.sub_broker_id ?? (data.type === 'sub_broker' ? n.id : null);
+    const commissionShare = n.commissionShare ?? n.commission_share ?? n.commission_earned ?? n.commission ?? null;
+
+    const normalizedNode = {
+      ...n,
+      id: n.id,
+      name: n.name,
+      email: n.email,
+      phone: n.phone || null,
+      passwordHash: n.passwordHash || n.password_hash || null,
+      role: normalizedRole,
       tenantId: outboundTenantId,
-      idempotencyKey: `hrc_${data.type}_${data.node?.id || Date.now()}_${Date.now()}`
-    }).catch(err => {
-      console.warn(`[TradingPlatformClient] Hierarchy sync notice for ${data.type} ${data.node?.id}:`, err?.message || err);
-      return { success: false, error: err?.message, status: 500, cached: false, durationMs: 0 } as any;
-    });
+      adminTenantId: data.tenantId || n.tenant_id || 'TNT-001',
+      masterId,
+      brokerId,
+      subBrokerId,
+      commissionShare,
+      referralCode,
+      code: n.code || referralCode,
+      status: n.status || n.account || 'ACTIVE'
+    };
+
+    const syncBody = {
+      event: 'HIERARCHY_NODE_SYNC',
+      type: data.type,
+      action: data.action,
+      id: normalizedNode.id,
+      name: normalizedNode.name,
+      email: normalizedNode.email,
+      phone: normalizedNode.phone,
+      passwordHash: normalizedNode.passwordHash,
+      role: normalizedNode.role,
+      tenantId: outboundTenantId,
+      masterId: normalizedNode.masterId,
+      brokerId: normalizedNode.brokerId,
+      subBrokerId: normalizedNode.subBrokerId,
+      commissionShare: normalizedNode.commissionShare,
+      referralCode: normalizedNode.referralCode,
+      status: normalizedNode.status,
+      node: normalizedNode,
+      timestamp: new Date().toISOString()
+    };
+
+    const idempotencyKey = `hrc_${data.type}_${normalizedNode.id || Date.now()}_${Date.now()}`;
+
+    const [tpResult, upResult] = await Promise.all([
+      this.request({
+        method: 'POST',
+        path: '/api/internal/v1/hierarchy/sync',
+        body: syncBody,
+        tenantId: outboundTenantId,
+        idempotencyKey
+      }).catch(err => {
+        console.warn(`[TradingPlatformClient] Trading Platform hierarchy sync notice for ${data.type} ${normalizedNode.id}:`, err?.message || err);
+        return { success: false, statusCode: 503, data: null, correlationId: '', latencyMs: 0, error: err?.message } as S2SResponse;
+      }),
+      this.userPanelBaseUrl
+        ? this.sendSignedToTarget(
+            this.userPanelBaseUrl,
+            '/api/internal/v1/hierarchy/sync',
+            syncBody,
+            outboundTenantId,
+            { idempotencyKey: `${idempotencyKey}_up` }
+          ).catch(err => {
+            console.warn(`[TradingPlatformClient] User Panel hierarchy sync notice for ${data.type} ${normalizedNode.id}:`, err?.message || err);
+            return { success: false, statusCode: 503, data: null, correlationId: '', latencyMs: 0, error: err?.message } as S2SResponse;
+          })
+        : Promise.resolve(null)
+    ]);
+
+    return {
+      ...tpResult,
+      data: {
+        ...(tpResult.data && typeof tpResult.data === 'object' ? tpResult.data : { tradingPlatform: tpResult.data }),
+        userPanelSync: upResult ? { success: upResult.success, statusCode: upResult.statusCode, error: upResult.error } : undefined
+      }
+    };
   }
 
   /**
