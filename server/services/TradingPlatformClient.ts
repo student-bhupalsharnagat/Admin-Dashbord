@@ -1175,6 +1175,15 @@ export class TradingPlatformClient {
     });
   }
 
+  public async getLiveKyc(tenantId?: string): Promise<S2SResponse> {
+    const outboundTenantId = await this.resolveOutboundTenantId(tenantId);
+    return this.request({
+      method: 'GET',
+      path: '/api/internal/v1/trading/kyc',
+      tenantId: outboundTenantId
+    });
+  }
+
   public async getLiveSummary(tenantId?: string): Promise<S2SResponse> {
     const outboundTenantId = await this.resolveOutboundTenantId(tenantId);
     return this.request({

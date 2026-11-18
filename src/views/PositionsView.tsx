@@ -67,11 +67,9 @@ export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify, currentU
               const qtyNum = parseCleanNumber(p.rawQty ?? p.qty ?? p.quantity ?? 1) || 1;
               let rawCurrent = parseCleanNumber(p.rawCurrentPrice ?? p.currentPrice ?? p.last_price ?? p.ltp ?? 0);
               const isForex = ['USD/INR', 'EUR/INR', 'GBP/INR', 'JPY/INR'].includes(String(p.symbol).toUpperCase());
-              const livePrice = liveLtpLookup(p.symbol);
-              if (livePrice > 0) {
-                rawCurrent = livePrice;
-              } else if (rawCurrent <= 0 || (!isForex && rawCurrent < 25)) {
-                if (livePrice > 0) rawCurrent = livePrice;
+              if (rawCurrent <= 0 || (!isForex && rawCurrent < 25)) {
+                const fallbackPrice = liveLtpLookup(p.symbol);
+                if (fallbackPrice > 0) rawCurrent = fallbackPrice;
               }
 
               let rawAvg = parseCleanNumber(p.rawAvgPrice ?? p.avgPrice ?? p.averagePrice ?? p.entryPrice ?? p.buyPrice ?? p.buy_price ?? 0);

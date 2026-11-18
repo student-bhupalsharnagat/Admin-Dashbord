@@ -51,7 +51,7 @@ import { getPool, query, withTransaction } from '../db/connection.ts';
 import { DEFAULT_ROLE_PERMISSIONS } from '../../src/utils/rbac.ts';
 import { tenantConfigCache } from './TenantConfigCache.ts';
 import { tradingPlatformClient } from '../services/TradingPlatformClient.ts';
-import { parseCleanNumber, liveLtpLookup } from '../utils/cleanNumber.ts';
+import { parseCleanNumber, liveLtpLookup, updateLivePrice } from '../utils/cleanNumber.ts';
 import { normalizeTenantFilter } from '../auth/hierarchyFilter.ts';
 
 export class PostgresTradingDataProvider implements ITradingDataProvider {
@@ -535,9 +535,9 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     const totalClientsNum = parseInt(clientsRes.rows[0]?.count || '0', 10);
     const activeClientsNum = parseInt(activeClientsRes.rows[0]?.count || '0', 10);
 
-    // Fetch merged live+DB records in parallel so KPI cards always match the individual views 100%
+    // Fetch merged live+DB records in parallel without loading 7,000+ client rows into memory
     const [
-      authoritativeClientsList,
+      liveClientsSummary,
       allDeposits,
       allWithdrawals,
       allKyc,
@@ -545,7 +545,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       allOrders,
       allTrades
     ] = await Promise.all([
-      this.getClients(scope).catch(() => []),
+      tradingPlatformClient.getLiveClients(scope, { page: 1, limit: 1 }).catch(() => ({ success: false, data: null } as any)),
       this.getFundDeposits(scope).catch(() => []),
       this.getFundWithdrawals(scope).catch(() => []),
       this.getKYCRecords(scope).catch(() => []),
@@ -608,10 +608,9 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     const pendingKycNum = allKyc.filter(k => String(k.kyc_status || '').toUpperCase() === 'PENDING').length;
     const openTicketsNum = parseInt(ticketsRes.rows[0]?.count || '0', 10);
 
-    const authoritativeClientsCount = authoritativeClientsList.length > 0 ? authoritativeClientsList.length : totalClientsNum;
-    const authoritativeActiveClientsCount = authoritativeClientsList.length > 0
-      ? authoritativeClientsList.filter(c => String(c.status || '').toUpperCase() === 'ACTIVE').length
-      : activeClientsNum;
+    const s2sClientTotal = Number(liveClientsSummary?.data?.total || 0);
+    const authoritativeClientsCount = Math.max(totalClientsNum, s2sClientTotal, dbCriticalFailed ? 4 : 0);
+    const authoritativeActiveClientsCount = Math.max(activeClientsNum, s2sClientTotal > totalClientsNum ? s2sClientTotal : 0, dbCriticalFailed ? 4 : 0);
 
     const formatCurrency = (amount: number): string => {
       if (amount === 0) return '₹0';
@@ -2550,16 +2549,17 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     }
     sql += ' ORDER BY created_at DESC';
 
-    const [res, projRes, clientsRes] = await Promise.all([
-      this.safeQuery(sql, params),
+    const [res, projRes, clientsRes, liveKycRes] = await Promise.all([
+      this.safeQuery(`${sql} LIMIT 250`, params),
       this.safeQuery(
-        scope ? 'SELECT * FROM kyc WHERE tenant_id = $1 ORDER BY created_at DESC' : 'SELECT * FROM kyc ORDER BY created_at DESC',
+        scope ? 'SELECT * FROM kyc WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 250' : 'SELECT * FROM kyc ORDER BY created_at DESC LIMIT 250',
         scope ? [scope] : []
       ),
       this.safeQuery(
-        scope ? 'SELECT id, client_code, name, email, tenant_id, kyc_status, created_at FROM clients WHERE tenant_id = $1 ORDER BY created_at DESC' : 'SELECT id, client_code, name, email, tenant_id, kyc_status, created_at FROM clients ORDER BY created_at DESC',
+        scope ? 'SELECT id, client_code, name, email, tenant_id, kyc_status, created_at FROM clients WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 250' : 'SELECT id, client_code, name, email, tenant_id, kyc_status, created_at FROM clients ORDER BY created_at DESC LIMIT 250',
         scope ? [scope] : []
-      )
+      ),
+      tradingPlatformClient.getLiveKyc(scope).catch(() => ({ success: false, data: null } as any))
     ]);
 
     const normalizeKycStatus = (raw?: string): KYCStatus => {
@@ -2571,6 +2571,42 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
 
     const records: KYCRecord[] = [];
     const seenKeys = new Set<string>();
+
+    // 0. Merge live authoritative S2S KYC records from Trading Platform first
+    const remoteKycList = liveKycRes?.success
+      ? (Array.isArray(liveKycRes.data?.kyc)
+          ? liveKycRes.data.kyc
+          : (Array.isArray(liveKycRes.data?.records)
+              ? liveKycRes.data.records
+              : (Array.isArray(liveKycRes.data?.items)
+                  ? liveKycRes.data.items
+                  : (Array.isArray(liveKycRes.data) ? liveKycRes.data : []))))
+      : [];
+    for (const rk of remoteKycList) {
+      const idKey = String(rk.id || rk.kyc_id || '').toLowerCase();
+      const cIdKey = String(rk.client_id || rk.clientId || rk.user_id || rk.userId || '').toLowerCase();
+      const cCodeKey = String(rk.client_code || rk.clientCode || '').toLowerCase();
+      if ((idKey && seenKeys.has(idKey)) || (cIdKey && seenKeys.has(cIdKey))) continue;
+      if (idKey) seenKeys.add(idKey);
+      if (cIdKey) seenKeys.add(cIdKey);
+      if (cCodeKey) seenKeys.add(cCodeKey);
+
+      const mappedStatus = normalizeKycStatus(rk.kyc_status || rk.kycStatus || rk.status);
+      records.push({
+        id: rk.id || rk.kyc_id || `KYC-${rk.client_code || rk.clientId || rk.userId}`,
+        client_id: rk.client_id || rk.clientId || rk.user_id || rk.userId || rk.id,
+        client_name: rk.client_name || rk.clientName || rk.fullName || rk.clientCode || 'Trading Client',
+        tenant_id: rk.tenant_id || rk.tenantId || 'TNT-001',
+        tenant_name: 'Alpha Prime Capital',
+        kyc_status: mappedStatus,
+        document_type: rk.document_type || rk.documentType || 'PAN_AADHAAR',
+        document_status: (mappedStatus === 'APPROVED' ? 'VERIFIED' : (mappedStatus === 'REJECTED' ? 'REJECTED' : 'PENDING')) as any,
+        assigned_reviewer: rk.reviewed_by || 'Compliance Officer',
+        submitted_date: rk.submitted_date || rk.submittedAt || rk.created_at || new Date().toISOString(),
+        id_number: rk.id_number || rk.idNumber || rk.pan_number || rk.aadhaar_number || undefined,
+        notes: rk.notes || 'Live Trading Platform KYC'
+      });
+    }
 
     for (const r of res.rows) {
       const mappedStatus = normalizeKycStatus(r.kyc_status);
@@ -2811,12 +2847,9 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       });
     }
 
-    // Merge live S2S Trading Platform deposits (from /trading/funds and /trading/snapshot)
+    // Merge live S2S Trading Platform deposits (from /trading/funds)
     try {
-      const [liveFundsRes, snapRes] = await Promise.all([
-        tradingPlatformClient.getLiveFunds(scope).catch(() => ({ success: false, data: null } as any)),
-        tradingPlatformClient.getLiveSnapshot(scope).catch(() => ({ success: false, data: null } as any))
-      ]);
+      const liveFundsRes = await tradingPlatformClient.getLiveFunds(scope).catch(() => ({ success: false, data: null } as any));
 
       const extractFundItems = (data: any): any[] => {
         if (!data) return [];
@@ -2831,10 +2864,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         return items;
       };
 
-      const remoteList = [
-        ...(liveFundsRes?.success ? extractFundItems(liveFundsRes.data) : []),
-        ...(snapRes?.success ? extractFundItems(snapRes.data) : [])
-      ];
+      const remoteList = liveFundsRes?.success ? extractFundItems(liveFundsRes.data) : [];
 
       for (const rf of remoteList) {
         const type = (rf.type || rf.transaction_type || '').toUpperCase();
@@ -2843,8 +2873,16 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         if (!type.includes('DEPOSIT') && amt <= 0) continue;
 
         const id = rf.id || rf.transactionId || rf.requestId || `DEP-${Date.now()}`;
+        const remoteClient = rf.clientName || rf.client_name || rf.userName || rf.name || '';
+        const remoteStatus = normalizeFundStatus(rf.status || 'PENDING');
         const existing = dbDeposits.find(d => d.id === id || d.txnId === id);
         if (existing) {
+          if (remoteClient && remoteClient !== 'Trading Client' && (!existing.client || existing.client === 'Trading Client' || existing.client === 'Client')) {
+            existing.client = remoteClient;
+          }
+          if (remoteStatus === 'COMPLETED' || remoteStatus === 'FAILED') {
+            existing.status = remoteStatus;
+          }
           if (!existing.utr_number && (rf.utr_number || rf.utr)) {
             existing.utr_number = rf.utr_number || rf.utr;
           }
@@ -2856,11 +2894,11 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
           dbDeposits.push({
             id,
             txnId: id,
-            client: rf.clientName || rf.client_name || rf.userName || rf.name || 'Trading Client',
+            client: remoteClient || 'Trading Client',
             amount: `₹${amt.toLocaleString('en-IN')}`,
             method: rf.payment_method || rf.method || rf.gateway || 'UPI/IMPS',
             reference: rf.utr_number || rf.utr || rf.reference || rf.refNo || id,
-            status: normalizeFundStatus(rf.status || 'PENDING'),
+            status: remoteStatus,
             date: rf.createdAt || rf.created_at ? new Date(rf.createdAt || rf.created_at).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
             rawAmount: amt,
             utr_number: rf.utr_number || rf.utr || null,
@@ -3086,10 +3124,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
 
     // Merge live S2S Trading Platform withdrawals
     try {
-      const [liveFundsRes, snapRes] = await Promise.all([
-        tradingPlatformClient.getLiveFunds(scope).catch(() => ({ success: false, data: null } as any)),
-        tradingPlatformClient.getLiveSnapshot(scope).catch(() => ({ success: false, data: null } as any))
-      ]);
+      const liveFundsRes = await tradingPlatformClient.getLiveFunds(scope).catch(() => ({ success: false, data: null } as any));
 
       const extractWdrItems = (data: any): any[] => {
         if (!data) return [];
@@ -3103,29 +3138,37 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         return items;
       };
 
-      const remoteList = [
-        ...(liveFundsRes?.success ? extractWdrItems(liveFundsRes.data) : []),
-        ...(snapRes?.success ? extractWdrItems(snapRes.data) : [])
-      ];
+      const remoteList = liveFundsRes?.success ? extractWdrItems(liveFundsRes.data) : [];
 
       for (const rf of remoteList) {
         const type = (rf.type || rf.transaction_type || '').toUpperCase();
         if (!type.includes('WITHDRAW')) continue;
         const id = rf.id || rf.transactionId || rf.requestId || `WDR-${Date.now()}`;
-        if (!seenIds.has(id)) {
+        const remoteClient = rf.clientName || rf.client_name || rf.userName || rf.name || '';
+        const remoteStatus = normalizeFundStatus(rf.status || 'PENDING');
+        const existing = dbWithdrawals.find(w => (w as any).id === id || w.txnId === id);
+        if (existing) {
+          if (remoteClient && remoteClient !== 'Trading Client' && (!existing.client || existing.client === 'Trading Client' || existing.client === 'Client')) {
+            existing.client = remoteClient;
+            (existing as any).client_name = remoteClient;
+          }
+          if (remoteStatus === 'COMPLETED' || remoteStatus === 'FAILED') {
+            existing.status = remoteStatus;
+          }
+        } else if (!seenIds.has(id)) {
           seenIds.add(id);
           const amt = parseCleanNumber(rf.amount);
           dbWithdrawals.push({
             id,
             txnId: id,
-            client: rf.clientName || rf.client_name || rf.userName || rf.name || 'Trading Client',
-            client_name: rf.clientName || rf.client_name || rf.userName || rf.name || 'Trading Client',
+            client: remoteClient || 'Trading Client',
+            client_name: remoteClient || 'Trading Client',
             client_code: rf.clientCode || rf.client_code || 'CLT001',
             client_id: rf.clientId || rf.client_id || 'CLT-001',
             amount: `₹${amt.toLocaleString('en-IN')}`,
             method: rf.method || rf.bank || 'Bank Wire',
             reference: rf.reference || rf.refNo || id,
-            status: normalizeFundStatus(rf.status || 'PENDING'),
+            status: remoteStatus,
             date: rf.createdAt || rf.created_at ? new Date(rf.createdAt || rf.created_at).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
             rawAmount: amt
           } as any);
@@ -3250,58 +3293,22 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
 
   async getLedgerEntries(tenantId?: string, type?: string): Promise<LedgerRowItem[]> {
     const scope = this.isDefaultOrGlobalTenant(tenantId) ? undefined : this.normalizeScope(tenantId);
-    let sql = `
-      SELECT le.*, COALESCE(NULLIF(c.name, ''), NULLIF(fd.client_name, ''), le.client_name) AS resolved_account
-      FROM ledger_entries le
-      LEFT JOIN clients c ON (c.id = le.client_id OR c.client_code = le.client_code)
-      LEFT JOIN fund_deposits fd ON (fd.id = le.reference_id OR fd.transaction_ref = le.reference_id)
-      WHERE 1=1
-    `;
+    let sql = `SELECT * FROM ledger_entries WHERE 1=1`;
     const params: any[] = [];
     if (scope) {
       params.push(scope);
-      sql += ` AND le.tenant_id = $${params.length}`;
+      sql += ` AND tenant_id = $${params.length}`;
     }
     if (type && type !== 'All Types' && type !== 'ALL') {
       params.push(`%${type.toUpperCase()}%`);
-      sql += ` AND UPPER(le.entry_type) LIKE $${params.length}`;
+      sql += ` AND UPPER(entry_type) LIKE $${params.length}`;
     }
-    sql += ' ORDER BY le.created_at DESC';
+    sql += ' ORDER BY created_at DESC LIMIT 250';
 
-    let res = await this.safeQuery(sql, params);
-    if (res.rows.length === 0) {
-      // Fallback to simple base-table select in case a join column is missing
-      const baseSql = scope
-        ? 'SELECT * FROM ledger_entries WHERE tenant_id = $1 ORDER BY created_at DESC'
-        : 'SELECT * FROM ledger_entries ORDER BY created_at DESC';
-      res = await this.safeQuery(baseSql, scope ? [scope] : []);
-    }
-
-    const rawDbLedger = res.rows.map(r => {
-      const cr = parseFloat(r.credit || '0');
-      const db = parseFloat(r.debit || '0');
-      let mappedType: 'DEPOSIT' | 'WITHDRAWAL' | 'COMMISSION' | 'P&L' = 'DEPOSIT';
-      const raw = (r.entry_type || '').toUpperCase();
-      if (raw.includes('WITHDRAW')) mappedType = 'WITHDRAWAL';
-      else if (raw.includes('COMMISSION')) mappedType = 'COMMISSION';
-      else if (raw.includes('TRADE') || raw.includes('P&L')) mappedType = 'P&L';
-
-      const resolvedName = (r.resolved_account && r.resolved_account !== 'Trading Client')
-        ? r.resolved_account
-        : (r.client_name || 'Trading Client');
-
-      return {
-        date: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
-        txnId: r.reference_id || r.id,
-        account: resolvedName,
-        type: mappedType,
-        credit: cr > 0 ? `+₹${cr.toLocaleString('en-IN')}` : '—',
-        debit: db > 0 ? `-₹${db.toLocaleString('en-IN')}` : '—',
-        balance: `₹${parseFloat(r.balance_after || '0').toLocaleString('en-IN')}`,
-        reference: r.description || r.reference_id || r.id,
-        status: 'COMPLETED' as const
-      };
-    });
+    const [res, liveLedgerRes] = await Promise.all([
+      this.safeQuery(sql, params),
+      tradingPlatformClient.getLiveLedger(scope).catch(() => ({ success: false, data: null } as any))
+    ]);
 
     const seenIds = new Set<string>();
     const seenComposite = new Set<string>();
@@ -3317,102 +3324,136 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       }
     };
 
-    for (const item of rawDbLedger) {
-      pushLedgerItem(item);
-    }
-
-    // Merge live S2S ledger entries
+    // 1. Live S2S ledger entries FIRST (authoritative credit/debit amounts & category from Trading Platform)
     try {
-      const liveLedgerRes = await tradingPlatformClient.getLiveLedger(scope);
-      const remoteList = Array.isArray(liveLedgerRes.data?.ledger)
-        ? liveLedgerRes.data.ledger
-        : (Array.isArray(liveLedgerRes.data?.items) ? liveLedgerRes.data.items : (Array.isArray(liveLedgerRes.data) ? liveLedgerRes.data : []));
+      const remoteList = liveLedgerRes?.success
+        ? (Array.isArray(liveLedgerRes.data?.ledger)
+            ? liveLedgerRes.data.ledger
+            : (Array.isArray(liveLedgerRes.data?.items)
+                ? liveLedgerRes.data.items
+                : (Array.isArray(liveLedgerRes.data) ? liveLedgerRes.data : [])))
+        : [];
 
-      if (liveLedgerRes.success && remoteList && remoteList.length > 0) {
-        for (const rl of remoteList) {
-          const id = rl.id || rl.reference_id || rl.txnId || `LED-${Date.now()}`;
-          const cr = parseCleanNumber(rl.credit);
-          const db = parseCleanNumber(rl.debit);
-          let mappedType: 'DEPOSIT' | 'WITHDRAWAL' | 'COMMISSION' | 'P&L' = 'DEPOSIT';
-          const rawType = (rl.type || rl.entry_type || '').toUpperCase();
-          if (rawType.includes('WITHDRAW')) mappedType = 'WITHDRAWAL';
-          else if (rawType.includes('COMMISSION')) mappedType = 'COMMISSION';
-          else if (rawType.includes('TRADE') || rawType.includes('P&L')) mappedType = 'P&L';
-
-          const ref = rl.description || rl.reference || id;
-          const account = rl.account || rl.client_name || rl.clientName || 'Trading Client';
-          pushLedgerItem({
-            date: rl.created_at ? new Date(rl.created_at).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
-            txnId: id,
-            account,
-            type: mappedType,
-            credit: cr > 0 ? `+₹${cr.toLocaleString('en-IN')}` : '—',
-            debit: db > 0 ? `-₹${db.toLocaleString('en-IN')}` : '—',
-            balance: `₹${parseCleanNumber(rl.balance || rl.balance_after || 100000).toLocaleString('en-IN')}`,
-            reference: ref,
-            status: 'COMPLETED' as const
-          });
+      for (const rl of remoteList) {
+        const id = rl.id || rl.transaction_id || rl.reference_id || rl.txnId || `LED-${Date.now()}`;
+        const rawAmt = Math.abs(parseCleanNumber(rl.amount));
+        const rawDir = String(rl.type || rl.entry_type || '').toUpperCase();
+        const rawCategory = String(rl.category || rl.entry_type || rl.type || '').toUpperCase();
+        let cr = parseCleanNumber(rl.credit);
+        let db = parseCleanNumber(rl.debit);
+        if (cr === 0 && db === 0 && rawAmt > 0) {
+          if (rawDir === 'DEBIT' || rawCategory.includes('WITHDRAW') || rawCategory.includes('FEE') || rawCategory.includes('LOSS')) {
+            db = rawAmt;
+          } else {
+            cr = rawAmt;
+          }
         }
-      }
-    } catch {}
+        let mappedType: 'DEPOSIT' | 'WITHDRAWAL' | 'COMMISSION' | 'P&L' = 'DEPOSIT';
+        if (rawCategory.includes('WITHDRAW')) mappedType = 'WITHDRAWAL';
+        else if (rawCategory.includes('COMMISSION') || rawCategory.includes('FEE')) mappedType = 'COMMISSION';
+        else if (rawCategory.includes('TRADE') || rawCategory.includes('P&L') || rawCategory.includes('PNL') || rawCategory.includes('MARGIN')) mappedType = 'P&L';
 
-    // Synthesize ledger entries from completed deposits, withdrawals, and executed trades so ledger is never empty
-    try {
-      const [deposits, withdrawals, trades] = await Promise.all([
-        this.getFundDeposits(scope).catch(() => []),
-        this.getFundWithdrawals(scope).catch(() => []),
-        this.getAllTrades(scope).catch(() => [])
-      ]);
-
-      for (const dep of deposits) {
-        if (String(dep.status || '').toUpperCase() === 'COMPLETED' && dep.rawAmount > 0) {
-          pushLedgerItem({
-            date: dep.date,
-            txnId: dep.txnId || dep.id || `DEP-${dep.reference}`,
-            account: dep.client || 'Trading Client',
-            type: 'DEPOSIT',
-            credit: `+₹${dep.rawAmount.toLocaleString('en-IN')}`,
-            debit: '—',
-            balance: `₹${dep.rawAmount.toLocaleString('en-IN')}`,
-            reference: dep.reference || `Deposit via ${dep.method}`,
-            status: 'COMPLETED'
-          });
-        }
-      }
-
-      for (const wdr of withdrawals) {
-        if (String(wdr.status || '').toUpperCase() === 'COMPLETED' && wdr.rawAmount > 0) {
-          pushLedgerItem({
-            date: wdr.date,
-            txnId: wdr.txnId || (wdr as any).id || `WDR-${wdr.reference}`,
-            account: wdr.client || 'Trading Client',
-            type: 'WITHDRAWAL',
-            credit: '—',
-            debit: `-₹${wdr.rawAmount.toLocaleString('en-IN')}`,
-            balance: `₹0`,
-            reference: wdr.reference || `Withdrawal via ${wdr.method}`,
-            status: 'COMPLETED'
-          });
-        }
-      }
-
-      for (const tr of trades.slice(0, 50)) {
-        const val = parseCleanNumber(tr.total_value || (parseCleanNumber(tr.price) * parseCleanNumber(tr.quantity)));
-        if (val <= 0) continue;
-        const isSell = String(tr.side || '').toUpperCase() === 'SELL';
+        const ref = rl.reference || rl.description || rl.transaction_id || id;
+        const account = rl.client_name || rl.clientName || rl.account || 'Trading Client';
         pushLedgerItem({
-          date: tr.timestamp ? String(tr.timestamp).slice(0, 10) : new Date().toISOString().split('T')[0],
-          txnId: tr.trade_id || tr.id,
-          account: tr.client_name || 'Trading Client',
-          type: 'P&L',
-          credit: isSell ? `+₹${val.toLocaleString('en-IN')}` : '—',
-          debit: !isSell ? `-₹${val.toLocaleString('en-IN')}` : '—',
-          balance: `₹${val.toLocaleString('en-IN')}`,
-          reference: `${tr.side} ${tr.quantity} ${tr.symbol} @ ₹${tr.price}`,
-          status: 'COMPLETED'
+          date: rl.created_at ? new Date(rl.created_at).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+          txnId: id,
+          account,
+          type: mappedType,
+          credit: cr > 0 ? `+₹${cr.toLocaleString('en-IN')}` : '—',
+          debit: db > 0 ? `-₹${db.toLocaleString('en-IN')}` : '—',
+          balance: `₹${parseCleanNumber(rl.balance_after ?? rl.balance ?? 0).toLocaleString('en-IN')}`,
+          reference: ref,
+          status: 'COMPLETED' as const
         });
       }
     } catch {}
+
+    // 2. Merge local PostgreSQL ledger rows (skipping stale 0/0 rows already superseded by S2S)
+    for (const r of res.rows) {
+      const cr = parseFloat(r.credit || '0');
+      const db = parseFloat(r.debit || '0');
+      if (cr === 0 && db === 0 && (seenIds.has(r.id) || (r.reference_id && seenIds.has(r.reference_id)))) {
+        continue;
+      }
+      let mappedType: 'DEPOSIT' | 'WITHDRAWAL' | 'COMMISSION' | 'P&L' = 'DEPOSIT';
+      const raw = (r.entry_type || '').toUpperCase();
+      if (raw.includes('WITHDRAW')) mappedType = 'WITHDRAWAL';
+      else if (raw.includes('COMMISSION')) mappedType = 'COMMISSION';
+      else if (raw.includes('TRADE') || raw.includes('P&L')) mappedType = 'P&L';
+
+      pushLedgerItem({
+        date: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+        txnId: r.reference_id || r.id,
+        account: r.client_name || 'Trading Client',
+        type: mappedType,
+        credit: cr > 0 ? `+₹${cr.toLocaleString('en-IN')}` : '—',
+        debit: db > 0 ? `-₹${db.toLocaleString('en-IN')}` : '—',
+        balance: `₹${parseFloat(r.balance_after || '0').toLocaleString('en-IN')}`,
+        reference: r.description || r.reference_id || r.id,
+        status: 'COMPLETED' as const
+      });
+    }
+
+    // 3. Only synthesize ledger entries from deposits/withdrawals/trades if ledger is sparse (< 10 rows)
+    if (dbLedger.length < 10) {
+      try {
+        const [deposits, withdrawals, trades] = await Promise.all([
+          this.getFundDeposits(scope).catch(() => []),
+          this.getFundWithdrawals(scope).catch(() => []),
+          this.getAllTrades(scope).catch(() => [])
+        ]);
+
+        for (const dep of deposits) {
+          if (String(dep.status || '').toUpperCase() === 'COMPLETED' && dep.rawAmount > 0) {
+            pushLedgerItem({
+              date: dep.date,
+              txnId: dep.txnId || dep.id || `DEP-${dep.reference}`,
+              account: dep.client || 'Trading Client',
+              type: 'DEPOSIT',
+              credit: `+₹${dep.rawAmount.toLocaleString('en-IN')}`,
+              debit: '—',
+              balance: `₹${dep.rawAmount.toLocaleString('en-IN')}`,
+              reference: dep.reference || `Deposit via ${dep.method}`,
+              status: 'COMPLETED'
+            });
+          }
+        }
+
+        for (const wdr of withdrawals) {
+          if (String(wdr.status || '').toUpperCase() === 'COMPLETED' && wdr.rawAmount > 0) {
+            pushLedgerItem({
+              date: wdr.date,
+              txnId: wdr.txnId || (wdr as any).id || `WDR-${wdr.reference}`,
+              account: wdr.client || 'Trading Client',
+              type: 'WITHDRAWAL',
+              credit: '—',
+              debit: `-₹${wdr.rawAmount.toLocaleString('en-IN')}`,
+              balance: `₹0`,
+              reference: wdr.reference || `Withdrawal via ${wdr.method}`,
+              status: 'COMPLETED'
+            });
+          }
+        }
+
+        for (const tr of trades.slice(0, 30)) {
+          const val = parseCleanNumber(tr.total_value || (parseCleanNumber(tr.price) * parseCleanNumber(tr.quantity)));
+          if (val <= 0) continue;
+          const isSell = String(tr.side || '').toUpperCase() === 'SELL';
+          pushLedgerItem({
+            date: tr.timestamp ? String(tr.timestamp).slice(0, 10) : new Date().toISOString().split('T')[0],
+            txnId: tr.trade_id || tr.id,
+            account: tr.client_name || 'Trading Client',
+            type: 'P&L',
+            credit: isSell ? `+₹${val.toLocaleString('en-IN')}` : '—',
+            debit: !isSell ? `-₹${val.toLocaleString('en-IN')}` : '—',
+            balance: `₹${val.toLocaleString('en-IN')}`,
+            reference: `${tr.side} ${tr.quantity} ${tr.symbol} @ ₹${tr.price}`,
+            status: 'COMPLETED'
+          });
+        }
+      } catch {}
+    }
 
     const resolvedLedger = this.resolveWithFailover(`ledger:${scope || 'ALL'}`, dbLedger, res.failed, () => this.getSeededFallbackLedger());
 
@@ -3455,9 +3496,12 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       params.push(scope);
       sql += ` AND tenant_id = $${params.length}`;
     }
-    sql += ' ORDER BY created_at DESC';
+    sql += ' ORDER BY created_at DESC LIMIT 250';
 
-    const res = await this.safeQuery(sql, params);
+    const [res, liveRes] = await Promise.all([
+      this.safeQuery(sql, params),
+      tradingPlatformClient.getLiveOrders(tenantId).catch(() => ({ success: false, data: null } as any))
+    ]);
 
     const dbOrders: Order[] = res.rows.map(r => ({
       id: r.id,
@@ -3473,20 +3517,13 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       created_at: r.created_at ? new Date(r.created_at).toISOString().replace('T', ' ').slice(0, 19) : '2026-03-29 10:00:00'
     }));
 
-    // Attempt to retrieve and merge any additional live open/pending orders from Trading Platform S2S (orders + snapshot)
+    // Merge live authoritative orders from Trading Platform S2S (enriching stale DB rows as well)
     try {
-      const [liveRes, snapRes] = await Promise.all([
-        tradingPlatformClient.getLiveOrders(tenantId).catch(() => ({ success: false, data: null } as any)),
-        tradingPlatformClient.getLiveSnapshot(tenantId).catch(() => ({ success: false, data: null } as any))
-      ]);
       const extractOrders = (d: any): any[] =>
         Array.isArray(d) ? d : (Array.isArray(d?.orders) ? d.orders : (Array.isArray(d?.items) ? d.items : (Array.isArray(d?.data) ? d.data : [])));
-      const ordersList = [
-        ...(liveRes?.success ? extractOrders(liveRes.data) : []),
-        ...(snapRes?.success ? extractOrders(snapRes.data) : [])
-      ];
+      const ordersList = liveRes?.success ? extractOrders(liveRes.data) : [];
       if (ordersList.length > 0) {
-        const seenIds = new Set(dbOrders.map(o => o.order_id || o.id));
+        const orderById = new Map(dbOrders.map(o => [o.order_id || o.id, o]));
         for (const r of ordersList) {
           if (tenantId && !defaultTenants.has(tenantId)) {
             const ordTenant = r.tenant_id || r.tenantId || tenantId;
@@ -3495,21 +3532,35 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
             }
           }
           const ordId = r.id || r.order_id || r.orderId;
-          if (ordId && !seenIds.has(ordId)) {
-            seenIds.add(ordId);
-            dbOrders.push({
+          if (!ordId) continue;
+          const mappedType = ((r.order_type || r.type || '').toUpperCase() === 'MARKET'
+            ? 'MARKET'
+            : ((r.order_type || r.type || '').toUpperCase() === 'STOP_LOSS' ? 'STOP_LOSS' : 'LIMIT')) as any;
+          const mappedStatus = r.normalized_status || r.status;
+          const mappedClient = r.client_name || r.clientName || r.userName || '';
+          const mappedPrice = parseCleanNumber(r.average_fill_price || r.price || r.avg_price || r.avgPrice || 0);
+          const existing = orderById.get(ordId);
+          if (existing) {
+            if (mappedClient) existing.client_name = mappedClient;
+            if (mappedStatus) existing.status = mappedStatus;
+            existing.type = mappedType;
+            if (mappedPrice > 0) existing.price = mappedPrice;
+          } else {
+            const createdOrder: Order = {
               id: ordId,
               order_id: ordId,
-              client_name: r.client_name || r.clientName || r.userName || 'Client',
+              client_name: mappedClient || 'Client',
               tenant_name: r.tenant_name || 'Alpha Prime Capital',
               symbol: r.symbol,
-              type: (r.order_type === 'MARKET' || r.type === 'MARKET') ? 'MARKET' : (r.type === 'STOP_LOSS' ? 'STOP_LOSS' : 'LIMIT'),
+              type: mappedType,
               side: r.side,
               quantity: parseCleanNumber(r.quantity || r.qty || 1),
-              price: parseCleanNumber(r.price || r.avg_price || r.avgPrice || 0),
-              status: r.status,
+              price: mappedPrice,
+              status: mappedStatus,
               created_at: r.created_at || r.createdAt ? new Date(r.created_at || r.createdAt).toISOString().replace('T', ' ').slice(0, 19) : new Date().toISOString().replace('T', ' ').slice(0, 19)
-            });
+            };
+            orderById.set(ordId, createdOrder);
+            dbOrders.unshift(createdOrder);
           }
         }
       }
@@ -3529,9 +3580,12 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       params.push(scope);
       sql += ` AND tenant_id = $${params.length}`;
     }
-    sql += ' ORDER BY created_at DESC';
+    sql += ' ORDER BY created_at DESC LIMIT 250';
 
-    const res = await this.safeQuery(sql, params);
+    const [res, liveRes] = await Promise.all([
+      this.safeQuery(sql, params),
+      tradingPlatformClient.getLiveTrades(tenantId).catch(() => ({ success: false, data: null } as any))
+    ]);
 
     const dbTrades: Trade[] = res.rows.map(r => {
       const q = parseCleanNumber(r.quantity);
@@ -3556,18 +3610,11 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       };
     });
 
-    // Attempt live execution stream from Trading Platform S2S (trades + snapshot) and merge
+    // Merge live execution stream from Trading Platform S2S
     try {
-      const [liveRes, snapRes] = await Promise.all([
-        tradingPlatformClient.getLiveTrades(tenantId).catch(() => ({ success: false, data: null } as any)),
-        tradingPlatformClient.getLiveSnapshot(tenantId).catch(() => ({ success: false, data: null } as any))
-      ]);
       const extractTrades = (d: any): any[] =>
         Array.isArray(d) ? d : (Array.isArray(d?.trades) ? d.trades : (Array.isArray(d?.items) ? d.items : (Array.isArray(d?.data) ? d.data : [])));
-      const tradesList = [
-        ...(liveRes?.success ? extractTrades(liveRes.data) : []),
-        ...(snapRes?.success ? extractTrades(snapRes.data) : [])
-      ];
+      const tradesList = liveRes?.success ? extractTrades(liveRes.data) : [];
       if (tradesList.length > 0) {
         const seenIds = new Set(dbTrades.map(t => t.trade_id || t.id));
         for (const r of tradesList) {
@@ -3619,17 +3666,109 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       params.push(scope);
       sql += ` AND tenant_id = $${params.length}`;
     }
-    sql += ' ORDER BY created_at DESC';
+    sql += ' ORDER BY created_at DESC LIMIT 250';
 
-    const res = await this.safeQuery(sql, params);
+    const [res, liveRes, snapRes] = await Promise.all([
+      this.safeQuery(sql, params),
+      tradingPlatformClient.getLivePositions(tenantId).catch(() => ({ success: false, data: null } as any)),
+      tradingPlatformClient.getLiveSnapshot(tenantId).catch(() => ({ success: false, data: null } as any))
+    ]);
+
+    // Refresh live price directory from Trading Platform snapshot quotes so MTM is real-time
+    const snapQuotes = snapRes?.success ? (snapRes.data?.prices || snapRes.data?.quotes) : null;
+    if (snapQuotes && typeof snapQuotes === 'object') {
+      for (const [sym, q] of Object.entries(snapQuotes)) {
+        const ltp = parseCleanNumber(typeof q === 'object' ? (q as any).ltp ?? (q as any).price : q);
+        if (sym && ltp > 0) updateLivePrice(sym, ltp);
+      }
+    }
+
     const dbPositions: any[] = [];
+    const seenIds = new Set<string>();
 
+    // 1. Authoritative live open positions from Trading Platform S2S FIRST (real-time LTP & MTM)
+    try {
+      const extractPositions = (d: any): any[] =>
+        Array.isArray(d) ? d : (Array.isArray(d?.positions) ? d.positions : (Array.isArray(d?.openPositions) ? d.openPositions : (Array.isArray(d?.data) ? d.data : [])));
+      let positionsList: any[] = [
+        ...(liveRes?.success ? extractPositions(liveRes.data) : []),
+        ...(snapRes?.success ? extractPositions(snapRes.data) : [])
+      ];
+
+      if (tenantId && positionsList.length > 0 && !defaultTenants.has(tenantId)) {
+        positionsList = positionsList.filter((p: any) => (p.tenant_id || p.tenantId || tenantId) === tenantId);
+      }
+
+      for (const r of positionsList) {
+        const qtyNum = Math.abs(parseCleanNumber(r.quantity || r.qty || 0));
+        if (qtyNum === 0 || String(r.status || '').toUpperCase() === 'CLOSED') continue;
+
+        const posId = r.id || r.position_id || r.positionId || `POS-${r.symbol}-${r.side || 'BUY'}`;
+        if (seenIds.has(posId)) continue;
+        seenIds.add(posId);
+
+        // Prefer live S2S LTP/currentPrice first; update shared price directory
+        let curPriceNum = parseCleanNumber(r.ltp || r.currentPrice || r.current_price || r.markPrice || 0);
+        if (curPriceNum > 0 && r.symbol) {
+          updateLivePrice(r.symbol, curPriceNum);
+        } else {
+          curPriceNum = liveLtpLookup(r.symbol);
+        }
+
+        let buyPriceNum = parseCleanNumber(r.avgPrice || r.average_price || r.averagePrice || r.buy_price || r.buyPrice || r.entryPrice || 0);
+        let pnlNum = parseCleanNumber(r.unrealizedPnL ?? r.unrealized_pnl ?? r.unrealizedPnl ?? r.mtmPnl ?? r.pnl ?? 0);
+
+        if (buyPriceNum <= 0) {
+          buyPriceNum = curPriceNum > 0 ? curPriceNum : 0;
+        }
+
+        const isLong = String(r.side || 'BUY').toUpperCase() !== 'SELL' && String(r.side || 'BUY').toUpperCase() !== 'SHORT';
+        if (curPriceNum > 0 && buyPriceNum > 0 && qtyNum > 0) {
+          pnlNum = Math.round((isLong ? (curPriceNum - buyPriceNum) * qtyNum : (buyPriceNum - curPriceNum) * qtyNum) * 100) / 100;
+        }
+
+        let marginVal = parseCleanNumber(r.usedMargin ?? r.margin_used ?? r.used_margin ?? r.margin ?? r.marginUsed ?? 0);
+        if (marginVal <= 0 && buyPriceNum > 0 && qtyNum > 0) {
+          marginVal = Math.round(buyPriceNum * qtyNum * 0.2 * 100) / 100;
+        }
+
+        const realizedPnl = parseCleanNumber(r.realized_pnl ?? r.realizedPnl ?? 0);
+
+        dbPositions.push({
+          id: posId,
+          clientId: r.client_id || r.clientId || r.userId || r.user_id || '',
+          client: r.client_name || r.clientName || r.client || r.userId || 'Live Trader',
+          symbol: r.symbol,
+          side: r.side || 'BUY',
+          qty: qtyNum.toLocaleString('en-IN'),
+          rawQty: qtyNum,
+          avgPrice: buyPriceNum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+          rawAvgPrice: buyPriceNum,
+          currentPrice: curPriceNum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+          rawCurrentPrice: curPriceNum,
+          unrealizedPL: `${pnlNum >= 0 ? '+' : ''}₹${pnlNum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+          rawUnrealizedPL: pnlNum,
+          realizedPL: `${realizedPnl >= 0 ? '+' : ''}₹${realizedPnl.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+          rawRealizedPL: realizedPnl,
+          margin: `₹${marginVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+          rawMargin: marginVal,
+          unrealizedPLPositive: pnlNum >= 0,
+          realizedPLPositive: realizedPnl >= 0,
+          status: r.status || 'OPEN'
+        });
+      }
+    } catch {
+      // Degraded / graceful fallback to local DB records
+    }
+
+    // 2. Merge remaining open PostgreSQL positions not already present from S2S
     for (const r of res.rows) {
-      const qtyNum = parseCleanNumber(r.quantity || r.qty || 0);
-      // Filter closed positions or qty = 0 from open positions table
-      if (qtyNum === 0 || r.status === 'CLOSED') {
+      if (seenIds.has(r.id)) continue;
+      const qtyNum = Math.abs(parseCleanNumber(r.quantity || r.qty || 0));
+      if (qtyNum === 0 || String(r.status || '').toUpperCase() === 'CLOSED') {
         continue;
       }
+      seenIds.add(r.id);
 
       const livePrice = liveLtpLookup(r.symbol);
       let curPriceNum = livePrice > 0 ? livePrice : parseCleanNumber(r.current_price || r.currentPrice || r.ltp || 0);
@@ -3641,7 +3780,6 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       let buyPriceNum = parseCleanNumber(r.buy_price || r.avg_price || r.buyPrice || r.avgPrice || r.averagePrice || r.entryPrice || 0);
       let pnlNum = parseCleanNumber(r.pnl || r.unrealized_pnl || r.unrealizedPnl || 0);
 
-      // Auto-heal buy price if 0
       if (buyPriceNum <= 0) {
         if (curPriceNum > 0 && pnlNum !== 0 && qtyNum !== 0) {
           buyPriceNum = curPriceNum - (pnlNum / qtyNum);
@@ -3650,7 +3788,6 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         }
       }
 
-      // Re-calculate unrealized PnL dynamically based on latest tick price
       const isLong = String(r.side || 'BUY').toUpperCase() !== 'SELL' && String(r.side || 'BUY').toUpperCase() !== 'SHORT';
       if (curPriceNum > 0 && buyPriceNum > 0 && qtyNum > 0) {
         pnlNum = isLong ? (curPriceNum - buyPriceNum) * qtyNum : (buyPriceNum - curPriceNum) * qtyNum;
@@ -3663,14 +3800,6 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       }
 
       const realizedPnl = parseCleanNumber(r.realized_pnl ?? r.realizedPnl ?? 0);
-
-      // Opportunistic DB heal if row had corrupted or 0 values
-      if ((parseCleanNumber(r.buy_price) <= 0 && buyPriceNum > 0) || (parseCleanNumber(r.current_price) < 25 && curPriceNum >= 25 && !isForex)) {
-        this.executeQuery(
-          `UPDATE positions SET buy_price = $1, current_price = $2, pnl = $3, margin = $4, updated_at = CURRENT_TIMESTAMP WHERE id = $5`,
-          [buyPriceNum, curPriceNum, pnlNum, marginVal, r.id]
-        ).catch(() => {});
-      }
 
       dbPositions.push({
         id: r.id,
@@ -3696,96 +3825,7 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       });
     }
 
-    // Query live positions from Trading Platform (positions + snapshot), apply tenant filtering and deduplicate
-    try {
-      const [liveRes, snapRes] = await Promise.all([
-        tradingPlatformClient.getLivePositions(tenantId).catch(() => ({ success: false, data: null } as any)),
-        tradingPlatformClient.getLiveSnapshot(tenantId).catch(() => ({ success: false, data: null } as any))
-      ]);
-      const extractPositions = (d: any): any[] =>
-        Array.isArray(d) ? d : (Array.isArray(d?.positions) ? d.positions : (Array.isArray(d?.openPositions) ? d.openPositions : (Array.isArray(d?.data) ? d.data : [])));
-      let positionsList: any[] = [
-        ...(liveRes?.success ? extractPositions(liveRes.data) : []),
-        ...(snapRes?.success ? extractPositions(snapRes.data) : [])
-      ];
-
-      if (tenantId && positionsList.length > 0) {
-        const defaultTenants = new Set(['vertex-default', 'default', 'TNT-001', 'ALL', 'ALL_TENANTS', 'all', 'All Tenants', '']);
-        if (!defaultTenants.has(tenantId)) {
-          positionsList = positionsList.filter((p: any) => (p.tenant_id || p.tenantId || tenantId) === tenantId);
-        }
-      }
-
-      if (positionsList.length > 0) {
-        const seenIds = new Set(dbPositions.map(p => p.id));
-        for (const r of positionsList) {
-          const qtyNum = parseCleanNumber(r.quantity || r.qty || 0);
-          if (qtyNum === 0 || r.status === 'CLOSED') continue;
-
-          const posId = r.id || r.positionId || `POS-${r.symbol}-${r.side || 'BUY'}`;
-          if (!seenIds.has(posId)) {
-            seenIds.add(posId);
-
-            const livePrice = liveLtpLookup(r.symbol);
-            let curPriceNum = livePrice > 0 ? livePrice : parseCleanNumber(r.current_price || r.currentPrice || r.ltp || r.markPrice || 0);
-            const isForex = ['USD/INR', 'EUR/INR', 'GBP/INR', 'JPY/INR'].includes(String(r.symbol).toUpperCase());
-            if (curPriceNum <= 0 || (!isForex && curPriceNum < 25)) {
-              if (livePrice > 0) curPriceNum = livePrice;
-            }
-
-            let buyPriceNum = parseCleanNumber(r.buy_price || r.avg_price || r.buyPrice || r.avgPrice || r.averagePrice || r.entryPrice || 0);
-            let pnlNum = parseCleanNumber(r.pnl || r.unrealized_pnl || r.unrealizedPnl || 0);
-
-            if (buyPriceNum <= 0) {
-              if (curPriceNum > 0 && pnlNum !== 0 && qtyNum !== 0) {
-                buyPriceNum = curPriceNum - (pnlNum / qtyNum);
-              } else if (curPriceNum > 0) {
-                buyPriceNum = curPriceNum;
-              }
-            }
-
-            const isLong = String(r.side || 'BUY').toUpperCase() !== 'SELL' && String(r.side || 'BUY').toUpperCase() !== 'SHORT';
-            if (curPriceNum > 0 && buyPriceNum > 0 && qtyNum > 0) {
-              pnlNum = isLong ? (curPriceNum - buyPriceNum) * qtyNum : (buyPriceNum - curPriceNum) * qtyNum;
-              pnlNum = Math.round(pnlNum * 100) / 100;
-            }
-
-            let marginVal = parseCleanNumber(r.margin ?? r.margin_used ?? r.used_margin ?? r.marginUsed ?? 0);
-            if (marginVal <= 0 && buyPriceNum > 0 && qtyNum > 0) {
-              marginVal = Math.round(buyPriceNum * qtyNum * 0.2 * 100) / 100;
-            }
-
-            const realizedPnl = parseCleanNumber(r.realized_pnl ?? r.realizedPnl ?? 0);
-
-            dbPositions.push({
-              id: posId,
-              clientId: r.client_id || r.clientId || r.userId || r.user_id || '',
-              client: r.client_name || r.clientName || r.client || r.userId || 'Live Trader',
-              symbol: r.symbol,
-              side: r.side || 'BUY',
-              qty: qtyNum.toLocaleString('en-IN'),
-              rawQty: qtyNum,
-              avgPrice: buyPriceNum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
-              rawAvgPrice: buyPriceNum,
-              currentPrice: curPriceNum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
-              rawCurrentPrice: curPriceNum,
-              unrealizedPL: `${pnlNum >= 0 ? '+' : ''}₹${pnlNum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-              rawUnrealizedPL: pnlNum,
-              realizedPL: `${realizedPnl >= 0 ? '+' : ''}₹${realizedPnl.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-              rawRealizedPL: realizedPnl,
-              margin: `₹${marginVal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-              rawMargin: marginVal,
-              unrealizedPLPositive: pnlNum >= 0,
-              realizedPLPositive: realizedPnl >= 0,
-              status: r.status || 'OPEN'
-            });
-          }
-        }
-      }
-    } catch {
-      // Degraded / graceful fallback to local DB records
-    }
-    return this.resolveWithFailover(`positions:${scope || 'ALL'}`, dbPositions, res.failed, () => this.getSeededFallbackPositions());
+    return this.resolveWithFailover(`positions:${scope || 'ALL'}`, dbPositions, res.failed && !liveRes?.success, () => this.getSeededFallbackPositions());
   }
 
   async squareOffPosition(id: string, actor: string = 'Risk Manager'): Promise<any> {
@@ -4182,14 +4222,26 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       });
     };
 
-    // Dynamically compute live risk events from open positions, margin usage, rejected/blocked orders, and S2S risk summary
+    // Dynamically compute live risk events from open positions, high-margin clients, rejected/blocked orders, and S2S risk summary
     try {
-      const [positions, orders, clients, s2sRisk] = await Promise.all([
+      const [positions, orders, highMarginClientsRes, s2sRisk] = await Promise.all([
         this.getPositions(scope).catch(() => []),
         this.getOrders(scope).catch(() => []),
-        this.getClients(scope).catch(() => []),
+        this.safeQuery(
+          scope
+            ? `SELECT id, client_code, name, balance, equity, margin_used FROM clients WHERE tenant_id = $1 AND balance > 0 AND equity > 0 AND equity < balance * 0.4 LIMIT 50`
+            : `SELECT id, client_code, name, balance, equity, margin_used FROM clients WHERE balance > 0 AND equity > 0 AND equity < balance * 0.4 LIMIT 50`,
+          scope ? [scope] : []
+        ),
         tradingPlatformClient.getLiveRiskSummary(scope).catch(() => ({ success: false, data: null } as any))
       ]);
+      const clients = highMarginClientsRes.rows.map((r: any) => ({
+        id: r.id,
+        client_code: r.client_code,
+        name: r.name,
+        balance: r.balance,
+        available_margin: r.equity
+      }));
 
       // 1. S2S risk summary alerts if returned
       const remoteAlerts = Array.isArray(s2sRisk?.data?.alerts)

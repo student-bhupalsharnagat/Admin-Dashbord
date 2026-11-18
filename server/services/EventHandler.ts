@@ -1733,6 +1733,8 @@ export class EventHandler {
    * Pulls from Trading Platform GET /clients, /ledger, /funds, /trading/orders, /trades, /positions
    * and upserts into projection tables.
    */
+  private isBackfilling = false;
+
   public async backfillFromTradingPlatform(targetTenantId?: string): Promise<{
     clients: number;
     ledger: number;
@@ -1742,6 +1744,11 @@ export class EventHandler {
     positions: number;
   }> {
     const counts = { clients: 0, ledger: 0, funds: 0, orders: 0, trades: 0, positions: 0 };
+    if (this.isBackfilling) {
+      return counts;
+    }
+    this.isBackfilling = true;
+    try {
     
     // Resolve active tenants to backfill: query vertex-default primarily since it returns all authoritative records
     let tenantIds: string[] = [];
@@ -1784,21 +1791,17 @@ export class EventHandler {
         const res = await tradingPlatformClient.request<any>({ method: 'GET', path: '/api/internal/v1/trading/ledger', tenantId: tenantId });
         const items = res.success ? (res.data?.ledger || res.data?.items || (Array.isArray(res.data) ? res.data : [])) : [];
         for (const item of items) {
-          const rawRef = item.referenceId || item.reference_id || item.id || '';
-          const rawType = (item.entryType || item.type || 'ADJUSTMENT').toUpperCase();
-          const debitVal = Number(item.debit || 0);
-          const creditVal = Number(item.credit || 0);
-
-          // Prevent duplicate ledger entry creation
-          if (rawRef) {
-            const exists = await query(`
-              SELECT id FROM ledger_entries 
-              WHERE (reference_id = $1 AND entry_type = $2)
-                 OR (id = $3)
-              LIMIT 1
-            `, [rawRef, rawType, String(item.id || item.entryId || '')]).catch(() => ({ rows: [] }));
-            if (exists.rows && exists.rows.length > 0) {
-              continue;
+          const rawRef = item.transaction_id || item.referenceId || item.reference_id || item.id || '';
+          const rawDir = String(item.type || item.entryType || '').toUpperCase();
+          const rawType = String(item.category || item.entryType || item.type || 'ADJUSTMENT').toUpperCase();
+          const rawAmt = Math.abs(Number(item.amount || 0));
+          let debitVal = Number(item.debit || 0);
+          let creditVal = Number(item.credit || 0);
+          if (debitVal === 0 && creditVal === 0 && rawAmt > 0) {
+            if (rawDir === 'DEBIT' || rawType.includes('WITHDRAW') || rawType.includes('FEE') || rawType.includes('LOSS')) {
+              debitVal = rawAmt;
+            } else {
+              creditVal = rawAmt;
             }
           }
 
@@ -1808,7 +1811,12 @@ export class EventHandler {
               id, tenant_id, client_id, client_code, client_name, entry_type,
               debit, credit, balance_after, reference_id, description, is_finalized, created_at
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, true, CURRENT_TIMESTAMP)
-            ON CONFLICT (id) DO NOTHING
+            ON CONFLICT (id) DO UPDATE SET
+              entry_type = CASE WHEN ledger_entries.debit = 0 AND ledger_entries.credit = 0 THEN EXCLUDED.entry_type ELSE ledger_entries.entry_type END,
+              debit = CASE WHEN ledger_entries.debit = 0 AND ledger_entries.credit = 0 THEN EXCLUDED.debit ELSE ledger_entries.debit END,
+              credit = CASE WHEN ledger_entries.debit = 0 AND ledger_entries.credit = 0 THEN EXCLUDED.credit ELSE ledger_entries.credit END,
+              client_name = CASE WHEN ledger_entries.client_name IN ('Client', 'Trading Client', '') THEN EXCLUDED.client_name ELSE ledger_entries.client_name END,
+              description = CASE WHEN ledger_entries.description = 'Backfilled ledger entry' THEN EXCLUDED.description ELSE ledger_entries.description END
           `, [
             entryId,
             tenantId,
@@ -1820,7 +1828,7 @@ export class EventHandler {
             creditVal,
             Number(item.balanceAfter || item.balance_after || 0),
             rawRef || null,
-            item.description || 'Backfilled ledger entry'
+            item.reference || item.description || 'Backfilled ledger entry'
           ]);
           counts.ledger++;
         }
@@ -1961,6 +1969,9 @@ export class EventHandler {
     }
 
     return counts;
+    } finally {
+      this.isBackfilling = false;
+    }
   }
 
   private async handleExecutionFailure(event: TradingPlatformEvent): Promise<void> {

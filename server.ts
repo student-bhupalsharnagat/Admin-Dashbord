@@ -562,14 +562,17 @@ async function startServer() {
     }
   });
 
-  // Background Auto-Sync Worker with Trading Platform (every 15s)
+  // Background Auto-Sync Worker with Trading Platform (every 60s; live reads already merge S2S on-demand)
+  setTimeout(() => {
+    eventHandler.backfillFromTradingPlatform().catch(() => {});
+  }, 5000);
   setInterval(async () => {
     try {
       await eventHandler.backfillFromTradingPlatform();
     } catch {
       // safe background poll failure ignore
     }
-  }, 15000);
+  }, 60000);
 
   // ----------------------------------------------------
   // CENTRAL AUTHENTICATION & JWT APIS (Phase 4 Production)
@@ -1913,8 +1916,17 @@ async function startServer() {
     try {
       const tenantScope = resolveStrictTenantScope(req);
       const status = req.query.status as string;
-      const kyc = await activeTradingDataProvider.getKYCRecords(tenantScope, status);
-      const scoped = await filterClientScopedItems(kyc, req.user);
+      const cacheKey = `kyc:${tenantScope || 'ALL_TENANTS'}:${status || 'ALL'}:${getUserCacheScope(req)}`;
+      const forceRefresh = req.query.refresh === 'true' || req.query.nocache === '1';
+      const scoped = await getCachedEndpointPayload(
+        cacheKey,
+        2000,
+        async () => {
+          const kyc = await activeTradingDataProvider.getKYCRecords(tenantScope, status);
+          return filterClientScopedItems(kyc, req.user);
+        },
+        forceRefresh
+      );
       res.json(scoped);
     } catch (err: any) {
       console.warn('[API /api/kyc] Non-fatal fallback:', err?.message);
@@ -1965,6 +1977,8 @@ async function startServer() {
 
       // 2. Persist in database & provider
       const updated = await activeTradingDataProvider.updateKYCStatus(kycId, status as any, notes);
+      clearDashboardCache('kyc:');
+      clearDashboardCache('metrics:');
       await writeSecurityAuditLog({
         tenantId: user.tenant_id,
         userName: user.name,
@@ -2294,8 +2308,17 @@ async function startServer() {
     try {
       const tenantScope = resolveStrictTenantScope(req);
       const type = req.query.type as string;
-      const ledger = await activeTradingDataProvider.getLedgerEntries(tenantScope, type);
-      const scoped = await filterClientScopedItems(ledger, req.user);
+      const cacheKey = `ledger:${tenantScope || 'ALL_TENANTS'}:${type || 'ALL'}:${getUserCacheScope(req)}`;
+      const forceRefresh = req.query.refresh === 'true' || req.query.nocache === '1';
+      const scoped = await getCachedEndpointPayload(
+        cacheKey,
+        2000,
+        async () => {
+          const ledger = await activeTradingDataProvider.getLedgerEntries(tenantScope, type);
+          return filterClientScopedItems(ledger, req.user);
+        },
+        forceRefresh
+      );
       res.json(scoped);
     } catch (err: any) {
       console.warn('[API /api/ledger] Non-fatal fallback:', err?.message);
@@ -2308,6 +2331,7 @@ async function startServer() {
       const tenantScope = resolveStrictTenantScope(req);
       const data = { ...req.body, tenant_id: tenantScope || req.body.tenant_id };
       const entry = await activeTradingDataProvider.createLedgerEntry(data);
+      clearDashboardCache('ledger:');
       res.status(201).json(entry);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -2320,8 +2344,17 @@ async function startServer() {
   app.get(['/api/admin/positions', '/api/positions'], authenticate, requirePermission('positions.view'), async (req, res) => {
     try {
       const tenantScope = resolveStrictTenantScope(req);
-      const positions = await activeTradingDataProvider.getPositions(tenantScope);
-      const scoped = await filterClientScopedItems(positions, req.user);
+      const cacheKey = `positions:${tenantScope || 'ALL_TENANTS'}:${getUserCacheScope(req)}`;
+      const forceRefresh = req.query.refresh === 'true' || req.query.nocache === '1';
+      const scoped = await getCachedEndpointPayload(
+        cacheKey,
+        2000,
+        async () => {
+          const positions = await activeTradingDataProvider.getPositions(tenantScope);
+          return filterClientScopedItems(positions, req.user);
+        },
+        forceRefresh
+      );
       res.json(scoped);
     } catch (err: any) {
       console.warn('[API /api/positions] Non-fatal fallback:', err?.message);
@@ -2382,7 +2415,14 @@ async function startServer() {
   app.get(['/api/admin/commercial/commission-plans', '/api/commission-plans'], authenticate, requirePermission('commission.view'), async (req, res) => {
     try {
       const tenantScope = resolveStrictTenantScope(req);
-      const plans = await activeTradingDataProvider.getCommissionPlans(tenantScope);
+      const cacheKey = `commission:plans:${tenantScope || 'ALL_TENANTS'}`;
+      const forceRefresh = req.query.refresh === 'true' || req.query.nocache === '1';
+      const plans = await getCachedEndpointPayload(
+        cacheKey,
+        2000,
+        () => activeTradingDataProvider.getCommissionPlans(tenantScope),
+        forceRefresh
+      );
       res.json(plans);
     } catch (err: any) {
       console.warn('[API /api/commission-plans] Non-fatal fallback:', err?.message);
@@ -2394,7 +2434,14 @@ async function startServer() {
     try {
       const tenantScope = resolveStrictTenantScope(req);
       const planId = req.query.planId as string;
-      const rules = await activeTradingDataProvider.getCommissionRules(tenantScope, planId);
+      const cacheKey = `commission:rules:${tenantScope || 'ALL_TENANTS'}:${planId || 'ALL'}`;
+      const forceRefresh = req.query.refresh === 'true' || req.query.nocache === '1';
+      const rules = await getCachedEndpointPayload(
+        cacheKey,
+        2000,
+        () => activeTradingDataProvider.getCommissionRules(tenantScope, planId),
+        forceRefresh
+      );
       res.json(rules);
     } catch (err: any) {
       console.warn('[API /api/commission-rules] Non-fatal fallback:', err?.message);
@@ -2459,10 +2506,19 @@ async function startServer() {
   app.get(['/api/admin/commercial/commission-transactions', '/api/admin/commission/transactions', '/api/admin/commissions', '/api/commissions', '/api/commission-transactions'], authenticate, requirePermission('commission.view'), async (req, res) => {
     try {
       const tenantScope = resolveStrictTenantScope(req);
-      const transactions = activeTradingDataProvider.getCommissionTransactions
-        ? await activeTradingDataProvider.getCommissionTransactions(tenantScope)
-        : [];
-      const scoped = await filterClientScopedItems(transactions, req.user);
+      const cacheKey = `commission:txns:${tenantScope || 'ALL_TENANTS'}:${getUserCacheScope(req)}`;
+      const forceRefresh = req.query.refresh === 'true' || req.query.nocache === '1';
+      const scoped = await getCachedEndpointPayload(
+        cacheKey,
+        2000,
+        async () => {
+          const transactions = activeTradingDataProvider.getCommissionTransactions
+            ? await activeTradingDataProvider.getCommissionTransactions(tenantScope)
+            : [];
+          return filterClientScopedItems(transactions, req.user);
+        },
+        forceRefresh
+      );
       res.json(scoped);
     } catch (err: any) {
       console.warn('[API /api/commissions] Non-fatal fallback:', err?.message);
@@ -2684,8 +2740,17 @@ async function startServer() {
   app.get(['/api/admin/trades', '/api/admin/trading/trades', '/api/trades'], authenticate, requirePermission('trades.view'), async (req, res) => {
     try {
       const tenantScope = resolveStrictTenantScope(req);
-      const trades = await activeTradingDataProvider.getAllTrades(tenantScope);
-      const scoped = await filterClientScopedItems(trades, req.user);
+      const cacheKey = `trades:${tenantScope || 'ALL_TENANTS'}:${getUserCacheScope(req)}`;
+      const forceRefresh = req.query.refresh === 'true' || req.query.nocache === '1';
+      const scoped = await getCachedEndpointPayload(
+        cacheKey,
+        2000,
+        async () => {
+          const trades = await activeTradingDataProvider.getAllTrades(tenantScope);
+          return filterClientScopedItems(trades, req.user);
+        },
+        forceRefresh
+      );
       res.json(scoped);
     } catch (err: any) {
       console.warn('[API /api/trades] Non-fatal fallback:', err?.message);
@@ -2696,8 +2761,17 @@ async function startServer() {
   app.get(['/api/admin/orders', '/api/orders'], authenticate, requirePermission('orders.view'), async (req, res) => {
     try {
       const tenantScope = resolveStrictTenantScope(req);
-      const orders = await activeTradingDataProvider.getOrders(tenantScope);
-      const scoped = await filterClientScopedItems(orders, req.user);
+      const cacheKey = `orders:${tenantScope || 'ALL_TENANTS'}:${getUserCacheScope(req)}`;
+      const forceRefresh = req.query.refresh === 'true' || req.query.nocache === '1';
+      const scoped = await getCachedEndpointPayload(
+        cacheKey,
+        2000,
+        async () => {
+          const orders = await activeTradingDataProvider.getOrders(tenantScope);
+          return filterClientScopedItems(orders, req.user);
+        },
+        forceRefresh
+      );
       res.json(scoped);
     } catch (err: any) {
       console.warn('[API /api/orders] Non-fatal fallback:', err?.message);
@@ -2712,8 +2786,11 @@ async function startServer() {
       const reason = req.body?.reason || 'Order cancelled by Admin';
       if (typeof (activeTradingDataProvider as any).cancelOrder === 'function') {
         const result = await (activeTradingDataProvider as any).cancelOrder(id, reason, user?.name || 'Admin');
+        clearDashboardCache('orders:');
+        clearDashboardCache('metrics:');
         return res.json({ success: true, message: `Order ${id} cancelled.`, ...result });
       }
+      clearDashboardCache('orders:');
       res.json({ success: true, id, status: 'CANCELLED' });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -4647,8 +4724,9 @@ async function startServer() {
     }
   });
 
-  // Real-Time Tick-to-Position MTM Recalculation Engine (every 1s)
+  // Real-Time Tick-to-Position MTM Recalculation Engine (every 3s, only when admin WS clients are connected)
   const tickInterval = setInterval(async () => {
+    if (adminWsClients.size === 0) return;
     try {
       let updatedTicks: Record<string, number> = {};
       let remoteSuccess = false;
@@ -4720,7 +4798,7 @@ async function startServer() {
     } catch {
       // Background tick iteration safety
     }
-  }, 1000);
+  }, 3000);
   tickInterval.unref?.();
 
   server.listen(PORT, '0.0.0.0', () => {
