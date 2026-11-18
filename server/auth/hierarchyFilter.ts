@@ -52,16 +52,25 @@ export function isGlobalHierarchyRole(role?: string | null): boolean {
  * Resolves downline entity identifiers for the authenticated user based on the 4-tier hierarchy:
  * SUPER_ADMIN -> MASTER -> BROKER -> SUB_BROKER -> CLIENT
  */
-export async function getHierarchyFilter(user?: AuthenticatedUser | null): Promise<HierarchyFilterResult> {
+export async function getHierarchyFilter(
+  user?: AuthenticatedUser | null,
+  tenantIdParam?: string | null
+): Promise<HierarchyFilterResult> {
   const roleUpper = (user?.role || '').toString().trim().toUpperCase();
-  const normalizedTenant = normalizeTenantFilter(user?.tenant_id) ?? null;
+  const explicitTenant = normalizeTenantFilter(tenantIdParam);
+  const normalizedTenant = explicitTenant ?? normalizeTenantFilter(user?.tenant_id) ?? null;
 
-  // No session or global/super-admin role -> completely unrestricted view
-  if (!user || !roleUpper || isGlobalHierarchyRole(roleUpper)) {
+  // SUPER_ADMIN / global roles or missing session: explicitly ignore tenantId constraints and return unrestricted access
+  if (
+    !user ||
+    !roleUpper ||
+    isGlobalHierarchyRole(roleUpper) ||
+    (arguments.length >= 2 && explicitTenant === undefined && !['MASTER', 'BROKER', 'SUB_BROKER', 'CLIENT'].includes(roleUpper))
+  ) {
     return {
       role: roleUpper || 'SUPER_ADMIN',
       isGlobal: true,
-      tenantId: normalizedTenant,
+      tenantId: null,
       masterId: null,
       brokerId: null,
       subBrokerId: null,

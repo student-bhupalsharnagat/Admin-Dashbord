@@ -94,7 +94,7 @@ export class TradingPlatformClient {
   constructor(
     baseUrl: string = appConfig.tradingPlatformBaseUrl || 'https://trading-platform-2t6r.onrender.com',
     secret: string = appConfig.internalCommunicationSecret || 'nextrade-internal-hmac-secret-2026',
-    defaultTimeoutMs: number = Math.max(appConfig.tradingPlatformTimeoutMs || 10000, 8000)
+    defaultTimeoutMs: number = Math.max(appConfig.tradingPlatformTimeoutMs || 10000, 10000)
   ) {
     this.baseUrl = baseUrl.replace(/\/$/, '');
     this.secret = secret;
