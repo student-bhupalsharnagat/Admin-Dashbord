@@ -259,11 +259,12 @@ export default function App() {
   };
 
   // Fetch Dashboard & System Data
-  const loadDashboardData = useCallback(async () => {
+  const loadDashboardData = useCallback(async (silent?: boolean | unknown) => {
+    const isSilent = silent === true;
     try {
       const url = selectedTenantScope
-        ? `/api/admin/dashboard?tenantId=${selectedTenantScope}`
-        : '/api/admin/dashboard';
+        ? `/api/admin/metrics?tenantId=${selectedTenantScope}`
+        : '/api/admin/metrics';
       const res = await apiFetch(url);
       if (res.ok) {
         const data: any = await res.json();
@@ -283,7 +284,7 @@ export default function App() {
         if (data.recentTrades && Array.isArray(data.recentTrades)) setRecentTrades(data.recentTrades);
         if (data.pendingKYC && Array.isArray(data.pendingKYC)) setPendingKYC(data.pendingKYC);
         if (data.activeUsersCount !== undefined) setActiveUsersCount(Number(data.activeUsersCount));
-      } else {
+      } else if (!isSilent) {
         if (res.status === 401 || res.status === 403) {
           setDashboardError(null);
         } else {
@@ -293,9 +294,11 @@ export default function App() {
       }
     } catch (err: any) {
       if (err.name === 'AbortError') return;
-      console.warn('Dashboard API fetch error:', err);
-      setDashboardError(err.message || 'Dashboard live telemetry unavailable');
-      setDashboardData(prev => ({ ...prev, kpis: null }));
+      if (!isSilent) {
+        console.warn('Dashboard API fetch error:', err);
+        setDashboardError(err.message || 'Dashboard live telemetry unavailable');
+        setDashboardData(prev => ({ ...prev, kpis: null }));
+      }
     }
   }, [selectedTenantScope]);
 
@@ -397,9 +400,13 @@ export default function App() {
               break;
             }
 
+            case 'broker.added':
             case 'hierarchy.updated': {
-              loadHierarchyData();
-              loadDashboardData();
+              loadHierarchyData(true);
+              loadDashboardData(true);
+              if (event.eventType === 'broker.added' && event.payload?.name) {
+                showToast(`New ${event.payload.role || 'Broker'} added: ${event.payload.name}`, 'success');
+              }
               break;
             }
 
@@ -456,9 +463,14 @@ export default function App() {
             case 'deposit.created':
             case 'deposit.approved':
             case 'deposit.rejected':
-              loadDashboardData();
-              loadHierarchyData();
-              showToast(`Deposit Event (${event.payload?.status || 'UPDATED'}): ₹${event.payload?.amount || 0}`, 'info');
+            case 'fund.transaction_updated':
+              loadDashboardData(true);
+              loadHierarchyData(true);
+              showToast(`Fund Transaction (${event.payload?.status || 'UPDATED'}): ₹${event.payload?.amount || 0}`, 'info');
+              break;
+
+            case 'ledger.updated':
+              loadDashboardData(true);
               break;
 
             case 'withdrawal.created':
@@ -487,8 +499,9 @@ export default function App() {
               break;
 
             case 'risk.margin_breach':
-              showToast(`Critical Risk Alert: Margin breach on position for ${event.payload?.clientName || 'Client'}`, 'warning');
-              loadDashboardData();
+            case 'risk.alert_triggered':
+              showToast(`Critical Risk Alert: ${event.payload?.reason || `Margin breach on position for ${event.payload?.clientName || event.payload?.userId || 'Client'}`}`, 'warning');
+              loadDashboardData(true);
               break;
 
             case 'execution.failure':
@@ -544,7 +557,7 @@ export default function App() {
             const msg = JSON.parse(e.data);
             if (!msg) return;
 
-            const evtType = msg.eventType || msg.type;
+            const evtType = msg.eventType || msg.event || msg.type;
             const payload = msg.payload || msg.data;
 
             if (evtType === 'market.ticks' || evtType === 'market.tick') {
@@ -633,6 +646,26 @@ export default function App() {
                 window.dispatchEvent(new CustomEvent('admin:live-event', { detail: { eventType: 'positions.live_mtm', payload: deltas } }));
               }
             } else {
+              if (
+                evtType === 'client.registered' ||
+                evtType === 'client.activated' ||
+                evtType === 'broker.added' ||
+                evtType === 'hierarchy.updated' ||
+                evtType === 'fund.transaction_updated' ||
+                (typeof evtType === 'string' && (evtType.startsWith('deposit.') || evtType.startsWith('withdrawal.') || evtType.startsWith('fund.') || evtType.startsWith('manual_deposit.')))
+              ) {
+                loadDashboardData(true);
+                loadHierarchyData(true);
+              } else if (
+                evtType === 'trade.executed' ||
+                evtType === 'ledger.updated' ||
+                evtType === 'risk.alert_triggered' ||
+                evtType === 'risk.margin_breach' ||
+                evtType === 'wallet.updated' ||
+                evtType === 'position.updated'
+              ) {
+                loadDashboardData(true);
+              }
               window.dispatchEvent(new CustomEvent('admin:live-event', { detail: { eventType: evtType, payload } }));
             }
           } catch {}
@@ -647,9 +680,9 @@ export default function App() {
 
     connectWebSocket();
 
-    // 2.5s Background fallback position sync with silent state merging
+    // 2.5s Background silent metrics & hierarchy sync
     const fallbackSync = setInterval(() => {
-      loadDashboardData();
+      loadDashboardData(true);
       loadHierarchyData(true);
     }, 2500);
 

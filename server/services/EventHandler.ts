@@ -23,6 +23,7 @@ export type TradingPlatformEventType =
   | 'client.wallet_updated'
   | 'client.created'
   | 'client.registered'
+  | 'broker.added'
   | 'client.account_created'
   | 'client.account_updated'
   | 'client.updated'
@@ -34,6 +35,8 @@ export type TradingPlatformEventType =
   | 'fund.updated'
   | 'fund.approved'
   | 'fund.rejected'
+  | 'fund.transaction_updated'
+  | 'ledger.updated'
   | 'deposit.created'
   | 'deposit.updated'
   | 'deposit.approved'
@@ -58,6 +61,7 @@ export type TradingPlatformEventType =
   | 'notification.created'
   | 'support.updated'
   | 'risk.margin_breach'
+  | 'risk.alert_triggered'
   | 'execution.failure'
   | 'emergency.control_activated'
   | 'reconciliation.mismatch';
@@ -304,7 +308,13 @@ export class EventHandler {
         case 'fund.updated':
         case 'fund.approved':
         case 'fund.rejected':
+        case 'fund.transaction_updated':
           await this.handleFundGenericEvent(eventData);
+          break;
+
+        case 'broker.added':
+        case 'ledger.updated':
+          // Broadcast via adminEventBus below so Admin panels immediately refresh hierarchy/KPI/ledger caches
           break;
 
         case 'tenant.config.updated':
@@ -326,6 +336,7 @@ export class EventHandler {
           await this.handleSupportUpdated(eventData);
           break;
         case 'risk.margin_breach':
+        case 'risk.alert_triggered':
           await this.handleMarginBreach(eventData);
           break;
         case 'execution.failure':
