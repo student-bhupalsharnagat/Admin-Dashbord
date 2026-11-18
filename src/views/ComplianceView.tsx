@@ -24,6 +24,7 @@ import {
   DollarSign
 } from 'lucide-react';
 import { KYCRecord } from '../types';
+import { apiFetch } from '../utils/api';
 
 interface ComplianceViewProps {
   section: 'kyc' | 'funds' | 'ledger';
@@ -110,6 +111,7 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
   initialFundsTab,
   initialFundsStatus,
   fundsNavigationNonce,
+  kycRecords,
   onReviewKYC,
   onNotify,
   currentUser
@@ -174,33 +176,43 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
   // ----------------------------------------------------------------------
   // DATA FETCHING HOOKS (PostgreSQL-backed)
   // ----------------------------------------------------------------------
+  const mapRawKyc = (data: any[]): KycItem[] =>
+    data.map((d: any) => ({
+      kycId: d.id,
+      clientId: d.client_id,
+      client: d.client_name || 'Trading Client',
+      status: (d.kyc_status === 'VERIFIED' ? 'APPROVED' : (d.kyc_status || 'PENDING')) as any,
+      submitted: d.submitted_date ? String(d.submitted_date).slice(0, 10) : new Date().toISOString().slice(0, 10),
+      reviewer: d.assigned_reviewer || 'Admin Officer',
+      reviewDate: d.reviewed_at ? String(d.reviewed_at).slice(0, 10) : '—',
+      documentType: d.document_type || 'ID Document',
+      email: `${(d.client_name || 'client').toLowerCase().replace(/\s+/g, '.')}@example.com`,
+      idNumber: d.id_number || 'IND-XXXXX1234',
+      notes: d.notes || 'Submitted for compliance verification'
+    }));
+
   const fetchKycData = async () => {
     try {
       const url = kycStatusFilter && kycStatusFilter !== 'All Status'
-        ? `/api/admin/kyc?status=${kycStatusFilter}`
+        ? `/api/admin/kyc?status=${encodeURIComponent(kycStatusFilter)}`
         : '/api/admin/kyc';
-      const res = await fetch(url, { credentials: 'include' });
+      const res = await apiFetch(url, { credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
-        const mapped: KycItem[] = data.map((d: any) => ({
-          kycId: d.id,
-          clientId: d.client_id,
-          client: d.client_name,
-          status: d.kyc_status,
-          submitted: d.submitted_date ? d.submitted_date.slice(0, 10) : '2026-03-29',
-          reviewer: d.assigned_reviewer || 'Admin Officer',
-          reviewDate: d.reviewed_at ? d.reviewed_at.slice(0, 10) : '—',
-          documentType: d.document_type || 'ID Document',
-          email: `${d.client_name?.toLowerCase().replace(/\s+/g, '.')}@example.com`,
-          idNumber: d.id_number || 'IND-XXXXX1234',
-          notes: d.notes || 'Submitted for compliance verification'
-        }));
-        setKycList(mapped);
+        if (Array.isArray(data)) {
+          setKycList(mapRawKyc(data));
+        }
       }
     } catch (e) {
       console.error('Error fetching KYC:', e);
     }
   };
+
+  useEffect(() => {
+    if (Array.isArray(kycRecords) && kycRecords.length > 0 && kycList.length === 0) {
+      setKycList(mapRawKyc(kycRecords));
+    }
+  }, [kycRecords]);
 
   const isIfscCode = (ref?: string) => Boolean(ref && /^[A-Z]{4}0[A-Z0-9]{6}$/.test(ref.trim()));
   const cleanTxnRef = (ref?: string, fallbackId?: string) => {
@@ -213,24 +225,28 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
   const fetchFundsData = async () => {
     try {
       const [depRes, wdrRes] = await Promise.all([
-        fetch('/api/admin/compliance/deposits', { credentials: 'include' }),
-        fetch('/api/admin/compliance/withdrawals', { credentials: 'include' })
+        apiFetch('/api/admin/compliance/deposits', { credentials: 'include' }),
+        apiFetch('/api/admin/compliance/withdrawals', { credentials: 'include' })
       ]);
       if (depRes.ok) {
         const depData = await depRes.json();
-        const mappedDep = (Array.isArray(depData) ? depData : []).map(d => ({
-          ...d,
-          reference: cleanTxnRef(d.utr_number || d.reference, d.transaction_ref || d.txnId || d.id)
-        }));
-        setDepositsList(mappedDep);
+        if (Array.isArray(depData)) {
+          const mappedDep = depData.map(d => ({
+            ...d,
+            reference: cleanTxnRef(d.utr_number || d.reference, d.transaction_ref || d.txnId || d.id)
+          }));
+          setDepositsList(mappedDep);
+        }
       }
       if (wdrRes.ok) {
         const wdrData = await wdrRes.json();
-        const mappedWdr = (Array.isArray(wdrData) ? wdrData : []).map(w => ({
-          ...w,
-          reference: cleanTxnRef(w.reference, w.transaction_ref || w.txnId || w.id)
-        }));
-        setWithdrawalsList(mappedWdr);
+        if (Array.isArray(wdrData)) {
+          const mappedWdr = wdrData.map(w => ({
+            ...w,
+            reference: cleanTxnRef(w.reference, w.transaction_ref || w.txnId || w.id)
+          }));
+          setWithdrawalsList(mappedWdr);
+        }
       }
     } catch (e) {
       console.error('Error fetching funds:', e);
@@ -272,14 +288,15 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
 
   const fetchLedgerData = async () => {
     try {
-      const typeParam = ledgerTypeFilter && ledgerTypeFilter !== 'All Types' ? `?type=${ledgerTypeFilter}` : '';
-      const res = await fetch(`/api/admin/compliance/ledger${typeParam}`, { credentials: 'include' });
+      const typeParam = ledgerTypeFilter && ledgerTypeFilter !== 'All Types' ? `?type=${encodeURIComponent(ledgerTypeFilter)}` : '';
+      const res = await apiFetch(`/api/admin/compliance/ledger${typeParam}`, { credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
+        if (!Array.isArray(data)) return;
         const seenIds = new Set<string>();
         const seenKeys = new Set<string>();
         const deduped: any[] = [];
-        for (const item of (Array.isArray(data) ? data : [])) {
+        for (const item of data) {
           const account = resolveAccountName(item);
           const txnId = item.txnId || item.id || item.reference_id || item.referenceId || '';
           const rawRef = item.reference || item.reference_id || item.referenceId;
@@ -308,28 +325,29 @@ export const ComplianceView: React.FC<ComplianceViewProps> = ({
 
   useEffect(() => {
     fetchKycData();
-  }, [kycStatusFilter]);
+  }, [kycStatusFilter, currentUser?.role]);
 
   useEffect(() => {
     fetchFundsData();
-  }, [fundsTab, fundsStatusFilter]);
+  }, [fundsTab, fundsStatusFilter, currentUser?.role]);
 
-  // 2.5s silent polling loop for live Funds & Ledger recalculation
+  // 4.5s silent polling loop for live KYC, Funds & Ledger recalculation (safe 4000ms-5000ms interval)
   useEffect(() => {
-    if (section !== 'funds' && section !== 'ledger') return;
     const pollInterval = setInterval(() => {
       if (section === 'funds') {
         fetchFundsData();
       } else if (section === 'ledger') {
         fetchLedgerData();
+      } else if (section === 'kyc') {
+        fetchKycData();
       }
-    }, 2500);
+    }, 4500);
     return () => clearInterval(pollInterval);
-  }, [section, ledgerTypeFilter]);
+  }, [section, ledgerTypeFilter, kycStatusFilter]);
 
   useEffect(() => {
     fetchLedgerData();
-  }, [ledgerTypeFilter]);
+  }, [ledgerTypeFilter, currentUser?.role]);
 
   // Listen to shared window admin:live-event to avoid socket starvation
   useEffect(() => {

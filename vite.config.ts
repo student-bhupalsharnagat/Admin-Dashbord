@@ -11,6 +11,10 @@ export default defineConfig(() => {
         '@': path.resolve(__dirname, '.'),
       },
     },
+    build: {
+      sourcemap: false,
+      reportCompressedSize: false,
+    },
     server: {
       // Render पर डोमेन ब्लॉक होने की एरर को ठीक करने के लिए
       allowedHosts: true as true,

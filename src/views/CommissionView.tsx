@@ -30,6 +30,7 @@ import {
   YAxis,
   Tooltip
 } from 'recharts';
+import { apiFetch } from '../utils/api';
 
 export interface CommissionPlanItem {
   planId: string;
@@ -263,9 +264,9 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
         } catch {}
 
         const [plansRes, rulesRes, txnsRes] = await Promise.all([
-          fetch('/api/admin/commercial/commission-plans', { credentials: 'include' }),
-          fetch('/api/admin/commercial/commission-rules', { credentials: 'include' }),
-          fetch('/api/admin/commercial/commission-transactions', { credentials: 'include' })
+          apiFetch('/api/admin/commercial/commission-plans', { credentials: 'include' }),
+          apiFetch('/api/admin/commercial/commission-rules', { credentials: 'include' }),
+          apiFetch('/api/admin/commercial/commission-transactions', { credentials: 'include' })
         ]);
 
         if (plansRes.ok) {
@@ -275,7 +276,7 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
               planId: p.id || p.planId,
               planName: p.name || p.planName,
               type: (p.plan_type === 'TIERED' || p.type === 'TIERED' ? 'TIERED' : (p.plan_type === 'FIXED' || p.type === 'FIXED' ? 'FIXED' : 'PERCENTAGE')) as any,
-              rate: p.rate_value ? `${p.rate_value}%` : (p.rate || '0.05%'),
+              rate: p.rate_value ? (String(p.rate_value).includes('%') || String(p.rate_value).includes('₹') ? String(p.rate_value) : `${p.rate_value}%`) : (p.rate || '0.05%'),
               instruments: p.instruments || 'All',
               users: p.users_count || p.users || 0,
               status: p.status === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE',
@@ -292,10 +293,10 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
                 seenIds.add(lp.planId);
               }
             }
-            setPlans(mappedPlans);
+            setPlans(mappedPlans.length > 0 ? mappedPlans : initialPlansData);
           }
-        } else if (localPlans.length > 0) {
-          setPlans(localPlans);
+        } else if (isMounted) {
+          setPlans(prev => (prev.length > 0 ? prev : (localPlans.length > 0 ? localPlans : initialPlansData)));
         }
 
         if (rulesRes.ok) {
@@ -328,29 +329,58 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ onNotify }) => {
                 seenRuleIds.add(lr.id);
               }
             }
-            setRulesList(mappedRules);
-            if (mappedRules.length > 0) {
-              setSelectedRule(mappedRules[0]);
-            }
+            const resolvedRules = mappedRules.length > 0 ? mappedRules : initialRulesData;
+            setRulesList(resolvedRules);
+            setSelectedRule(prev => prev || resolvedRules[0] || null);
           }
-        } else if (localRules.length > 0) {
-          setRulesList(localRules);
-          setSelectedRule(localRules[0]);
+        } else if (isMounted) {
+          setRulesList(prev => {
+            const next = prev.length > 0 ? prev : (localRules.length > 0 ? localRules : initialRulesData);
+            setSelectedRule(cur => cur || next[0] || null);
+            return next;
+          });
         }
 
         if (txnsRes.ok) {
           const txnsData = await txnsRes.json();
           if (isMounted && Array.isArray(txnsData)) {
-            setTransactionsList(txnsData);
+            setTransactionsList(txnsData.length > 0 ? txnsData : initialCommissionTxns);
           }
+        } else if (isMounted) {
+          setTransactionsList(prev => (prev.length > 0 ? prev : initialCommissionTxns));
         }
       } catch (err) {
         console.warn('Commission API fetch error:', err);
+        if (isMounted) {
+          setPlans(prev => (prev.length > 0 ? prev : initialPlansData));
+          setRulesList(prev => {
+            const next = prev.length > 0 ? prev : initialRulesData;
+            setSelectedRule(cur => cur || next[0] || null);
+            return next;
+          });
+          setTransactionsList(prev => (prev.length > 0 ? prev : initialCommissionTxns));
+        }
       }
     };
 
     fetchCommissionData();
-    return () => { isMounted = false; };
+
+    const handleLiveEvent = (e: any) => {
+      const evType = e?.detail?.eventType || e?.detail?.event || '';
+      if (evType === 'trade.executed' || evType === 'ledger.updated') {
+        fetchCommissionData();
+      }
+    };
+    window.addEventListener('admin:live-event', handleLiveEvent);
+    const pollInterval = setInterval(() => {
+      fetchCommissionData();
+    }, 5000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(pollInterval);
+      window.removeEventListener('admin:live-event', handleLiveEvent);
+    };
   }, []);
 
   const handleToggleRuleStatus = () => {

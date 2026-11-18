@@ -13,6 +13,7 @@ import {
   Hash
 } from 'lucide-react';
 import { Trade } from '../types';
+import { apiFetch } from '../utils/api';
 
 export interface DetailedTradeItem {
   tradeId: string;
@@ -152,38 +153,41 @@ export const TradesView: React.FC<TradesViewProps> = ({
   // Synchronize with API /api/admin/trades
   useEffect(() => {
     let isMounted = true;
-    const fetchTrades = async () => {
-      setIsLoading(true);
+    const fetchTrades = async (silent = false) => {
+      if (!silent) setIsLoading(true);
       try {
-        const res = await fetch('/api/admin/trades', { credentials: 'include' });
+        const res = await apiFetch('/api/admin/trades', { credentials: 'include' });
         if (!res.ok) throw new Error(`HTTP error ${res.status}`);
         const data = await res.json();
-        if (isMounted && Array.isArray(data) && data.length > 0) {
-          const mapped: DetailedTradeItem[] = data.map((t: any, idx: number) => ({
-            tradeId: t.id || t.tradeId || t.trade_id || `TRD${String(idx + 1).padStart(3, '0')}`,
-            orderId: t.order_id || t.orderId || t.orderRef || t.order_ref || t.originating_order_id || t.originatingOrderId || `ORD-${String(idx + 1).padStart(5, '0')}`,
-            client: t.client_name || t.client || 'Client Trader',
-            clientId: t.client_id || t.clientId,
-            symbol: t.symbol || 'EUR/INR',
-            side: (t.side || 'BUY').toUpperCase() as 'BUY' | 'SELL',
-            quantity: typeof t.quantity === 'number' ? t.quantity.toLocaleString() : String(t.quantity || '100,000'),
-            execPrice: String(t.price || t.execPrice || '1.088'),
-            fees: t.fees ? (String(t.fees).startsWith('$') || String(t.fees).startsWith('₹') ? String(t.fees) : `₹${t.fees}`) : '₹10',
-            timestamp: t.timestamp || t.created_at || '2023-06-23 10:14:25',
-            assetClass: t.asset_class || t.assetClass || 'Forex',
-            executionVenue: t.execution_venue || t.executionVenue || 'NSE Currency Clearing',
-            clearingBroker: t.clearing_broker || t.clearingBroker || 'Apex Capital Group'
-          }));
-          setTrades(mapped);
+        if (isMounted && Array.isArray(data)) {
+          if (data.length > 0) {
+            const mapped: DetailedTradeItem[] = data.map((t: any, idx: number) => ({
+              tradeId: t.id || t.tradeId || t.trade_id || `TRD${String(idx + 1).padStart(3, '0')}`,
+              orderId: t.order_id || t.orderId || t.orderRef || t.order_ref || t.originating_order_id || t.originatingOrderId || `ORD-${String(idx + 1).padStart(5, '0')}`,
+              client: t.client_name || t.client || 'Client Trader',
+              clientId: t.client_id || t.clientId,
+              symbol: t.symbol || 'EUR/INR',
+              side: (t.side || 'BUY').toUpperCase() as 'BUY' | 'SELL',
+              quantity: typeof t.quantity === 'number' ? t.quantity.toLocaleString() : String(t.quantity || '100,000'),
+              execPrice: String(t.price || t.execPrice || '1.088'),
+              fees: t.fees ? (String(t.fees).startsWith('$') || String(t.fees).startsWith('₹') ? String(t.fees) : `₹${t.fees}`) : '₹10',
+              timestamp: t.timestamp || t.created_at || new Date().toISOString().replace('T', ' ').slice(0, 19),
+              assetClass: t.asset_class || t.assetClass || 'Forex',
+              executionVenue: t.execution_venue || t.executionVenue || 'NSE Currency Clearing',
+              clearingBroker: t.clearing_broker || t.clearingBroker || 'Apex Capital Group'
+            }));
+            setTrades(mapped);
+          }
           setLoadError(null);
         }
       } catch (err: any) {
         if (isMounted) {
-          console.warn('Trades API sync:', err);
-          setLoadError('Failed to synchronize trades with central API');
+          console.warn('Trades API sync fallback to cached/database records:', err);
+          // Do not display a blocking red banner when cached/fallback trades are already loaded
+          setLoadError(null);
         }
       } finally {
-        if (isMounted) setIsLoading(false);
+        if (isMounted && !silent) setIsLoading(false);
       }
     };
 
@@ -193,13 +197,18 @@ export const TradesView: React.FC<TradesViewProps> = ({
     const handleLiveEvent = (e: any) => {
       const evt = e.detail;
       if (evt?.eventType === 'trade.executed') {
-        fetchTrades();
+        fetchTrades(true);
       }
     };
+
+    const pollInterval = setInterval(() => {
+      fetchTrades(true);
+    }, 4500);
 
     window.addEventListener('admin:live-event', handleLiveEvent);
     return () => {
       isMounted = false;
+      clearInterval(pollInterval);
       window.removeEventListener('admin:live-event', handleLiveEvent);
     };
   }, []);

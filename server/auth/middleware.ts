@@ -4,6 +4,7 @@ import { AuthenticatedUser, Permission } from './types.ts';
 import { validateSessionAndUser, writeSecurityAuditLog } from './authService.ts';
 import { checkHasPermission } from './rbac.ts';
 import { query } from '../db/connection.ts';
+import { normalizeTenantFilter } from './hierarchyFilter.ts';
 
 declare global {
   namespace Express {
@@ -52,7 +53,8 @@ export function requireRole(allowedRoles: UserRole[]) {
       return res.status(401).json({ error: 'UNAUTHORIZED', message: 'Authentication required' });
     }
 
-    if (user.role === 'PLATFORM_OWNER' || allowedRoles.includes(user.role)) {
+    const roleUpper = (user.role || '').toString().toUpperCase();
+    if (roleUpper === 'PLATFORM_OWNER' || roleUpper === 'SUPER_ADMIN' || allowedRoles.some(r => String(r).toUpperCase() === roleUpper)) {
       return next();
     }
 
@@ -82,7 +84,8 @@ export function requirePermission(permissionOrPermissions: Permission | Permissi
       return res.status(401).json({ error: 'UNAUTHORIZED', message: 'Authentication required' });
     }
 
-    if (user.role === 'PLATFORM_OWNER') {
+    const roleUpper = (user.role || '').toString().toUpperCase();
+    if (roleUpper === 'PLATFORM_OWNER' || roleUpper === 'SUPER_ADMIN') {
       return next();
     }
 
@@ -123,19 +126,21 @@ export function requireTenantAccess(req: Request, res: Response, next: NextFunct
   }
 
   // Super admins and Platform owners can access all tenants
-  if (user.role === 'SUPER_ADMIN' || user.role === 'PLATFORM_OWNER') {
+  const roleUpper = (user.role || '').toString().toUpperCase();
+  if (roleUpper === 'SUPER_ADMIN' || roleUpper === 'PLATFORM_OWNER' || roleUpper === 'ADMIN') {
     return next();
   }
 
-  const requestedTenantId =
+  const rawRequestedTenant =
     req.params.tenantId ||
     (req.body && req.body.tenant_id) ||
     (req.query && typeof req.query.tenantId === 'string' ? req.query.tenantId : undefined);
+  const requestedTenantId = normalizeTenantFilter(rawRequestedTenant);
 
   const defaultGroup = new Set(['vertex-default', 'default', 'TNT-001']);
   const isEquivalent = requestedTenantId && user.tenant_id && defaultGroup.has(requestedTenantId) && defaultGroup.has(user.tenant_id);
 
-  if (requestedTenantId && requestedTenantId !== 'ALL' && requestedTenantId !== user.tenant_id && !isEquivalent) {
+  if (requestedTenantId && requestedTenantId !== user.tenant_id && !isEquivalent) {
     writeSecurityAuditLog({
       tenantId: user.tenant_id,
       userName: user.name,
@@ -162,18 +167,26 @@ export function resolveStrictTenantScope(req: Request): string | undefined {
   const user = req.user;
   if (!user) return undefined;
 
-  // Non-super-admins are strictly locked to their own tenant
-  if (user.role !== 'SUPER_ADMIN' && user.role !== 'PLATFORM_OWNER') {
-    return user.tenant_id || undefined;
+  const roleUpper = (user.role || '').toString().toUpperCase();
+
+  // Non-super-admins are strictly locked to their own tenant (unless global/unset)
+  if (roleUpper !== 'SUPER_ADMIN' && roleUpper !== 'PLATFORM_OWNER' && roleUpper !== 'ADMIN') {
+    return normalizeTenantFilter(user.tenant_id);
   }
 
   // For Super Admin: simulated tenant filter via session or explicit query param
-  if (user.simulated_tenant_id) {
-    return user.simulated_tenant_id;
+  const simulated = normalizeTenantFilter(user.simulated_tenant_id);
+  if (simulated) {
+    return simulated;
   }
 
-  if (req.query.tenantId && typeof req.query.tenantId === 'string' && req.query.tenantId !== 'ALL') {
-    return req.query.tenantId;
+  const queryTenant = normalizeTenantFilter(
+    typeof req.query.tenantId === 'string'
+      ? req.query.tenantId
+      : (typeof req.query.tenant_id === 'string' ? req.query.tenant_id : undefined)
+  );
+  if (queryTenant) {
+    return queryTenant;
   }
 
   return undefined;

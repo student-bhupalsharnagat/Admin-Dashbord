@@ -50,11 +50,11 @@ export class TradingPlatformClient {
   private secret: string;
   private defaultTimeoutMs: number;
 
-  // Circuit breaker state
+  // Circuit breaker state (relaxed for cloud/cold-start resilience)
   private circuitState: CircuitBreakerState = 'CLOSED';
   private consecutiveFailures = 0;
-  private readonly FAILURE_THRESHOLD = 5;
-  private readonly CIRCUIT_RESET_TIMEOUT_MS = 15000;
+  private readonly FAILURE_THRESHOLD = 12;
+  private readonly CIRCUIT_RESET_TIMEOUT_MS = 8000;
   private lastStateChange = Date.now();
 
   // Observability metrics
@@ -74,7 +74,7 @@ export class TradingPlatformClient {
   public clockOffsetMs: number = 0;
   private lastClockSync: number = 0;
 
-  // 3-second in-memory response cache for read-only telemetry queries (capped at max 50 entries)
+  // 2-second in-memory response cache for read-only telemetry queries (capped at max 50 entries)
   private requestCache = new Map<string, { data: S2SResponse<any>; expiresAt: number }>();
   // In-flight request deduplication map to prevent concurrent duplicate network queries
   private inFlightRequests = new Map<string, Promise<S2SResponse<any>>>();
@@ -84,10 +84,17 @@ export class TradingPlatformClient {
     this.inFlightRequests.clear();
   }
 
+  public resetCircuitBreaker(): void {
+    this.circuitState = 'CLOSED';
+    this.consecutiveFailures = 0;
+    this.lastStateChange = Date.now();
+    this.metrics.circuitBreakerState = 'CLOSED';
+  }
+
   constructor(
     baseUrl: string = appConfig.tradingPlatformBaseUrl || 'https://trading-platform-2t6r.onrender.com',
     secret: string = appConfig.internalCommunicationSecret || 'nextrade-internal-hmac-secret-2026',
-    defaultTimeoutMs: number = appConfig.tradingPlatformTimeoutMs || 5000
+    defaultTimeoutMs: number = Math.max(appConfig.tradingPlatformTimeoutMs || 10000, 8000)
   ) {
     this.baseUrl = baseUrl.replace(/\/$/, '');
     this.secret = secret;
@@ -404,16 +411,15 @@ export class TradingPlatformClient {
 
   public async request<T = any>(options: S2SRequestOptions): Promise<S2SResponse<T>> {
     this.metrics.totalRequests++;
-    this.checkCircuitBreaker();
 
     // Normalize tenant aliases (TNT-001, TNT-002, TNT-003, vertex-default, default, ALL, ALL_TENANTS) to vertex-default
-    const defaultAliases = new Set(['vertex-default', 'default', 'TNT-001', 'TNT-002', 'TNT-003', 'ALL', 'ALL_TENANTS', '']);
+    const defaultAliases = new Set(['vertex-default', 'default', 'TNT-001', 'TNT-002', 'TNT-003', 'ALL', 'ALL_TENANTS', 'all', 'All Tenants', '']);
     const normalizedTenant = (!options.tenantId || defaultAliases.has(options.tenantId))
       ? 'vertex-default'
       : options.tenantId;
     const cacheKey = `${options.method}:${options.path}:${normalizedTenant}`;
 
-    // Fast return from in-memory cache for repeated GET telemetry requests (3s TTL)
+    // Fast return from in-memory cache for repeated GET telemetry requests (2s TTL)
     if (options.method === 'GET') {
       const cached = this.requestCache.get(cacheKey);
       if (cached && cached.expiresAt > Date.now()) {
@@ -424,7 +430,25 @@ export class TradingPlatformClient {
       if (inFlight) {
         return inFlight as Promise<S2SResponse<T>>;
       }
+      // Graceful non-throwing circuit breaker check for read-only telemetry
+      try {
+        this.checkCircuitBreaker();
+      } catch (cbErr: any) {
+        if (cached) {
+          return { ...(cached.data as S2SResponse<T>), fromFallback: true };
+        }
+        return {
+          success: false,
+          statusCode: 503,
+          data: null as any,
+          correlationId: options.correlationId || `cb_${Date.now()}`,
+          latencyMs: 0,
+          error: cbErr?.message || 'Trading Platform circuit breaker OPEN',
+          fromFallback: true
+        };
+      }
     } else {
+      this.checkCircuitBreaker();
       // Clear cache on write operations so data is immediately authoritative
       this.clearCache();
     }
@@ -526,7 +550,7 @@ export class TradingPlatformClient {
             latencyMs
           };
           if (options.method === 'GET') {
-            this.requestCache.set(cacheKey, { data: s2sRes, expiresAt: Date.now() + 3000 });
+            this.requestCache.set(cacheKey, { data: s2sRes, expiresAt: Date.now() + 2000 });
             if (this.requestCache.size > 50) {
               const firstKey = this.requestCache.keys().next().value;
               if (firstKey) this.requestCache.delete(firstKey);
@@ -563,7 +587,7 @@ export class TradingPlatformClient {
                 fromFallback: true
               };
               if (options.method === 'GET') {
-                this.requestCache.set(cacheKey, { data: fallbackResObj, expiresAt: Date.now() + 3000 });
+                this.requestCache.set(cacheKey, { data: fallbackResObj, expiresAt: Date.now() + 2000 });
                 if (this.requestCache.size > 50) {
                   const firstKey = this.requestCache.keys().next().value;
                   if (firstKey) this.requestCache.delete(firstKey);

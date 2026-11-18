@@ -14,6 +14,7 @@ import {
 import { ClientDetailView } from '../components/clients/ClientDetailView';
 import { initialClientsData } from './HierarchyViews';
 import { parseCleanNumber } from '../utils/cleanNumber';
+import { apiFetch } from '../utils/api';
 
 export interface OrderItem {
   orderId: string;
@@ -63,7 +64,7 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
 
   const fetchOrders = async () => {
     try {
-      const res = await fetch('/api/admin/orders', { credentials: 'include' });
+      const res = await apiFetch('/api/admin/orders', { credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data)) {
@@ -129,7 +130,11 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
     };
 
     window.addEventListener('admin:live-event', handleLiveEvent);
+    const pollInterval = setInterval(() => {
+      fetchOrders();
+    }, 4500);
     return () => {
+      clearInterval(pollInterval);
       window.removeEventListener('admin:live-event', handleLiveEvent);
     };
   }, []);
@@ -164,7 +169,7 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
 
   const handleCancelOrder = async (order: OrderItem) => {
     try {
-      await fetch(`/api/admin/orders/${encodeURIComponent(order.orderId)}/cancel`, {
+      await apiFetch(`/api/admin/orders/${encodeURIComponent(order.orderId)}/cancel`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',

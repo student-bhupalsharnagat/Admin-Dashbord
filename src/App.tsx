@@ -176,8 +176,11 @@ export default function App() {
               return;
             }
             setCurrentUser(data.user);
-            if (data.user.tenant_id && data.user.tenant_id !== 'GLOBAL') {
+            const isGlobalRole = ['SUPER_ADMIN', 'PLATFORM_OWNER', 'ADMIN'].includes(roleUpper);
+            if (!isGlobalRole && data.user.tenant_id && data.user.tenant_id !== 'GLOBAL') {
               setSelectedTenantScope(data.user.tenant_id);
+            } else if (isGlobalRole) {
+              setSelectedTenantScope(null);
             }
             loadDashboardData();
             loadHierarchyData();
@@ -208,7 +211,8 @@ export default function App() {
       return;
     }
     setCurrentUser(user);
-    if (user.tenant_id && user.tenant_id !== 'GLOBAL') {
+    const isGlobalRole = ['SUPER_ADMIN', 'PLATFORM_OWNER', 'ADMIN'].includes(roleUpper);
+    if (!isGlobalRole && user.tenant_id && user.tenant_id !== 'GLOBAL') {
       setSelectedTenantScope(user.tenant_id);
     } else {
       setSelectedTenantScope(null);
@@ -263,23 +267,24 @@ export default function App() {
     const isSilent = silent === true;
     try {
       const url = selectedTenantScope
-        ? `/api/admin/metrics?tenantId=${selectedTenantScope}`
+        ? `/api/admin/metrics?tenantId=${encodeURIComponent(selectedTenantScope)}`
         : '/api/admin/metrics';
       const res = await apiFetch(url);
       if (res.ok) {
         const data: any = await res.json();
         setDashboardError(null);
-        setDashboardData({
-          kpis: data.kpis || null,
-          volumeCommission: data.volumeCommission || data.charts?.volumeCommission || [],
-          clientGrowth: data.clientGrowth || data.charts?.clientGrowth || [],
+        setDashboardData(prev => ({
+          kpis: data.kpis || prev.kpis,
+          volumeCommission: data.volumeCommission || data.charts?.volumeCommission || prev.volumeCommission || [],
+          clientGrowth: data.clientGrowth || data.charts?.clientGrowth || prev.clientGrowth || [],
           dailyPL: Array.isArray(data.dailyPL)
             ? data.dailyPL
-            : (data.charts?.dailyPL?.data || []),
-          recentTrades: data.recentTrades || [],
-          pendingKYC: data.pendingKYC || [],
-          tenants: data.tenants || []
-        });
+            : (data.charts?.dailyPL?.data || prev.dailyPL || []),
+          dailyPLBadge: data.charts?.dailyPL?.mtdBadge || data.dailyPL?.mtdBadge || prev.dailyPLBadge || '',
+          recentTrades: data.recentTrades || prev.recentTrades || [],
+          pendingKYC: data.pendingKYC || prev.pendingKYC || [],
+          tenants: data.tenants || prev.tenants || []
+        }));
         if (data.tenants && Array.isArray(data.tenants)) setTenants(data.tenants);
         if (data.recentTrades && Array.isArray(data.recentTrades)) setRecentTrades(data.recentTrades);
         if (data.pendingKYC && Array.isArray(data.pendingKYC)) setPendingKYC(data.pendingKYC);
@@ -288,16 +293,31 @@ export default function App() {
         if (res.status === 401 || res.status === 403) {
           setDashboardError(null);
         } else {
-          setDashboardError('Failed to fetch dashboard live telemetry from PostgreSQL');
+          // Preserve any existing valid KPI state rather than wiping it to null on transient errors
+          setDashboardData(prev => {
+            const hasExisting = prev?.kpis && Number(prev.kpis.total_clients?.value || 0) >= 0 && prev.kpis.total_clients?.value !== '—';
+            if (hasExisting) {
+              setDashboardError(null);
+              return prev;
+            }
+            setDashboardError('Failed to fetch dashboard live telemetry from PostgreSQL');
+            return prev;
+          });
         }
-        setDashboardData(prev => ({ ...prev, kpis: null }));
       }
     } catch (err: any) {
       if (err.name === 'AbortError') return;
       if (!isSilent) {
         console.warn('Dashboard API fetch error:', err);
-        setDashboardError(err.message || 'Dashboard live telemetry unavailable');
-        setDashboardData(prev => ({ ...prev, kpis: null }));
+        setDashboardData(prev => {
+          const hasExisting = prev?.kpis && prev.kpis.total_clients?.value !== '—';
+          if (hasExisting) {
+            setDashboardError(null);
+            return prev;
+          }
+          setDashboardError(err.message || 'Dashboard live telemetry unavailable');
+          return prev;
+        });
       }
     }
   }, [selectedTenantScope]);
@@ -680,11 +700,11 @@ export default function App() {
 
     connectWebSocket();
 
-    // 2.5s Background silent metrics & hierarchy sync
+    // 4.5s Background silent metrics & hierarchy sync (safe 4000ms-5000ms interval)
     const fallbackSync = setInterval(() => {
       loadDashboardData(true);
       loadHierarchyData(true);
-    }, 2500);
+    }, 4500);
 
     return () => {
       if (ws) {
@@ -940,10 +960,13 @@ export default function App() {
         hierarchyLevel
       };
       setCurrentUser(updatedUser);
+      if (newRole === 'SUPER_ADMIN' || newRole === 'PLATFORM_OWNER') {
+        setSelectedTenantScope(null);
+      }
       showToast(`Active session role switched to ${newRole.replace(/_/g, ' ')}`, 'info');
 
       try {
-        await fetch('/api/auth/switch-role', {
+        await apiFetch('/api/auth/switch-role', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ role: newRole, hierarchyId, hierarchyLevel })

@@ -10,6 +10,7 @@ import {
   Shield
 } from 'lucide-react';
 import { parseCleanNumber, liveLtpLookup } from '../utils/cleanNumber';
+import { apiFetch } from '../utils/api';
 
 export interface PositionItem {
   id: string;
@@ -53,7 +54,7 @@ export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify, currentU
 
   const fetchPositions = async (_silent = false) => {
     try {
-      const res = await fetch('/api/admin/positions', { credentials: 'include' });
+      const res = await apiFetch('/api/admin/positions', { credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data)) {
@@ -251,10 +252,10 @@ export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify, currentU
 
     connectWs();
 
-    // Background fallback position sync interval at 2500ms (silent state merging)
+    // Background fallback position sync interval at 4500ms (safe 4000ms-5000ms interval)
     const fallbackInterval = setInterval(() => {
       fetchPositions(true);
-    }, 2500);
+    }, 4500);
 
     return () => {
       window.removeEventListener('admin:live-event', handleLiveEvent);
@@ -264,11 +265,11 @@ export const PositionsView: React.FC<PositionsViewProps> = ({ onNotify, currentU
         try { ws.close(); } catch {}
       }
     };
-  }, []);
+  }, [currentUser?.role]);
 
   const handleSquareOff = async (pos: PositionItem) => {
     try {
-      const res = await fetch(`/api/admin/positions/${pos.id}/square-off`, { method: 'POST', credentials: 'include' });
+      const res = await apiFetch(`/api/admin/positions/${pos.id}/square-off`, { method: 'POST', credentials: 'include' });
       if (res.ok) {
         fetchPositions();
         notify(`Position in ${pos.symbol} for ${pos.client} successfully squared off at market.`, 'success');

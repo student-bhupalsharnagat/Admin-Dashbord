@@ -12,6 +12,7 @@ import {
   Zap,
   Sliders
 } from 'lucide-react';
+import { apiFetch } from '../utils/api';
 
 export interface RiskProfileItem {
   profileId: string;
@@ -132,8 +133,8 @@ export const RiskLimitsView: React.FC<RiskLimitsViewProps> = ({ onNotify }) => {
       } catch {}
 
       const [profilesRes, eventsRes] = await Promise.all([
-        fetch('/api/admin/risk/profiles', { credentials: 'include' }),
-        fetch('/api/admin/risk/events', { credentials: 'include' })
+        apiFetch('/api/admin/risk/profiles', { credentials: 'include' }),
+        apiFetch('/api/admin/risk/events', { credentials: 'include' })
       ]);
 
       if (profilesRes.ok) {
@@ -158,10 +159,10 @@ export const RiskLimitsView: React.FC<RiskLimitsViewProps> = ({ onNotify }) => {
               seenIds.add(lp.profileId);
             }
           }
-          setProfiles(mappedProfiles);
+          setProfiles(mappedProfiles.length > 0 ? mappedProfiles : initialRiskProfiles);
         }
-      } else if (localProfiles.length > 0) {
-        setProfiles(localProfiles);
+      } else {
+        setProfiles(prev => (prev.length > 0 ? prev : (localProfiles.length > 0 ? localProfiles : initialRiskProfiles)));
       }
 
       if (eventsRes.ok) {
@@ -176,15 +177,19 @@ export const RiskLimitsView: React.FC<RiskLimitsViewProps> = ({ onNotify }) => {
               symbol: ev.symbol || (ev.details && ev.details.symbol) || 'NIFTY50',
               event: (ev.details && ev.details.message) || ev.event_type || 'Risk Threshold Alert',
               severity: (ev.severity === 'HIGH' || ev.severity === 'CRITICAL') ? 'HIGH' : (ev.severity === 'LOW' ? 'LOW' : 'MEDIUM'),
-              date: ev.timestamp ? new Date(ev.timestamp).toISOString().replace('T', ' ').slice(0, 16) : '2026-03-29 10:00',
+              date: ev.timestamp ? new Date(ev.timestamp).toISOString().replace('T', ' ').slice(0, 16) : new Date().toISOString().replace('T', ' ').slice(0, 16),
               status: (isResolvedLocally || ev.status === 'RESOLVED' || (ev.details && ev.details.resolved)) ? 'RESOLVED' : 'ACTIVE'
             };
           });
-          setEvents(mappedEvents);
+          setEvents(mappedEvents.length > 0 ? mappedEvents : initialRiskEvents);
         }
+      } else {
+        setEvents(prev => (prev.length > 0 ? prev : initialRiskEvents));
       }
     } catch (err) {
       console.warn('Risk API fetch error:', err);
+      setProfiles(prev => (prev.length > 0 ? prev : initialRiskProfiles));
+      setEvents(prev => (prev.length > 0 ? prev : initialRiskEvents));
     }
   }, []);
 
@@ -192,7 +197,7 @@ export const RiskLimitsView: React.FC<RiskLimitsViewProps> = ({ onNotify }) => {
     fetchRiskData();
     const pollInterval = setInterval(() => {
       fetchRiskData();
-    }, 2500);
+    }, 4500);
 
     const handleLiveEvent = (e: any) => {
       const evt = e.detail;

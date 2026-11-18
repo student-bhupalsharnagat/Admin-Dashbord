@@ -14,6 +14,10 @@ CREATE TABLE IF NOT EXISTS commission_transactions (
 
 ALTER TABLE commission_transactions ADD COLUMN IF NOT EXISTS currency VARCHAR(16) NOT NULL DEFAULT 'INR';
 ALTER TABLE commission_transactions ADD COLUMN IF NOT EXISTS disbursed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
-ALTER TABLE commission_transactions ALTER COLUMN date DROP NOT NULL;
+ALTER TABLE commission_transactions ADD COLUMN IF NOT EXISTS date VARCHAR(64);
+DO $$ BEGIN
+  ALTER TABLE commission_transactions ALTER COLUMN date DROP NOT NULL;
+EXCEPTION WHEN undefined_column THEN NULL;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_commission_transactions_tenant ON commission_transactions(tenant_id);
