@@ -1275,17 +1275,81 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     if (data.email) { params.push(data.email); fields.push(`email = $${params.length}`); }
     if (data.phone) { params.push(data.phone); fields.push(`phone = $${params.length}`); }
     if (data.status) { params.push(data.status); fields.push(`status = $${params.length}`); }
+    const comm = (data as any).commissionShare || data.commission || (data as any).commission_earned;
+    if (comm !== undefined) { params.push(String(comm)); fields.push(`commission = $${params.length}`); }
 
-    if (fields.length === 0) return (await this.getMasters()).find(m => m.id === id) || null;
+    if (fields.length > 0) {
+      params.push(id);
+      await this.executeQuery(
+        `UPDATE masters SET ${fields.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = $${params.length}`,
+        params
+      );
+    }
 
-    params.push(id);
-    await this.executeQuery(
-      `UPDATE masters SET ${fields.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = $${params.length}`,
-      params
-    );
+    if (this.createdMastersMap.has(id)) {
+      const existing = this.createdMastersMap.get(id)!;
+      this.createdMastersMap.set(id, { ...existing, ...data });
+    }
 
     const list = await this.getMasters();
     return list.find(m => m.id === id) || null;
+  }
+
+  async deleteMaster(id: string, reassignToMasterId?: string): Promise<{ success: boolean; reassignedBrokersCount: number; targetMasterId?: string; error?: string }> {
+    try {
+      // Find fallback master (must not be the one being deleted)
+      let targetMasterId = reassignToMasterId;
+      let targetMasterName = 'Central Master';
+      if (!targetMasterId) {
+        const fallbackRes = await this.executeQuery(
+          "SELECT id, name FROM masters WHERE id != $1 AND status = 'ACTIVE' ORDER BY created_at ASC LIMIT 1",
+          [id]
+        );
+        if (fallbackRes.rows.length > 0) {
+          targetMasterId = fallbackRes.rows[0].id;
+          targetMasterName = fallbackRes.rows[0].name;
+        } else {
+          targetMasterId = 'MST-001';
+        }
+      } else {
+        const mRes = await this.executeQuery("SELECT name FROM masters WHERE id = $1 LIMIT 1", [targetMasterId]);
+        if (mRes.rows.length > 0) targetMasterName = mRes.rows[0].name;
+      }
+
+      // Reassign downline brokers to target master
+      const reassignRes = await this.executeQuery(
+        "UPDATE brokers SET master_id = $1, master_name = $2, updated_at = CURRENT_TIMESTAMP WHERE master_id = $3",
+        [targetMasterId, targetMasterName, id]
+      );
+      const reassignedCount = reassignRes.rowCount ?? 0;
+
+      // Update in-memory brokers
+      for (const b of this.createdBrokersMap.values()) {
+        if (b.master_id === id || (b as any).masterId === id) {
+          b.master_id = targetMasterId;
+          (b as any).masterId = targetMasterId;
+          b.master_name = targetMasterName;
+        }
+      }
+
+      // Remove master from DB and memory
+      await this.executeQuery("DELETE FROM masters WHERE id = $1", [id]);
+      this.createdMastersMap.delete(id);
+
+      // Invalidate/delete login user
+      await this.executeQuery("DELETE FROM users WHERE hierarchy_id = $1", [id]);
+
+      // Update target master's brokers_count
+      await this.executeQuery(
+        "UPDATE masters SET brokers_count = (SELECT COUNT(*) FROM brokers WHERE master_id = $1) WHERE id = $1",
+        [targetMasterId]
+      ).catch(() => {});
+
+      return { success: true, reassignedBrokersCount: reassignedCount, targetMasterId };
+    } catch (err: any) {
+      console.error(`[PostgresTradingDataProvider] Failed to delete master ${id}:`, err);
+      return { success: false, reassignedBrokersCount: 0, error: err.message };
+    }
   }
 
   // ----------------------------------------------------
@@ -1473,7 +1537,16 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
 
     if (data.name) { params.push(data.name); fields.push(`name = $${params.length}`); }
     if (data.email) { params.push(data.email); fields.push(`email = $${params.length}`); }
+    if (data.phone) { params.push(data.phone); fields.push(`phone = $${params.length}`); }
     if (data.status) { params.push(data.status); fields.push(`status = $${params.length}`); }
+    const masterId = data.master_id || (data as any).masterId;
+    if (masterId) {
+      params.push(masterId); fields.push(`master_id = $${params.length}`);
+      const mName = (data as any).master_name || (data as any).masterName;
+      if (mName) { params.push(mName); fields.push(`master_name = $${params.length}`); }
+    }
+    const comm = (data as any).commissionShare || data.commission || (data as any).commission_earned;
+    if (comm !== undefined) { params.push(String(comm)); fields.push(`commission = $${params.length}`); }
 
     if (fields.length > 0) {
       params.push(id);
@@ -1482,8 +1555,71 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         params
       );
     }
+
+    if (this.createdBrokersMap.has(id)) {
+      const existing = this.createdBrokersMap.get(id)!;
+      this.createdBrokersMap.set(id, { ...existing, ...data });
+    }
+
     const list = await this.getBrokers();
     return list.find(b => b.id === id) || null;
+  }
+
+  async deleteBroker(id: string, reassignToBrokerId?: string): Promise<{ success: boolean; reassignedSubBrokersCount: number; targetBrokerId?: string; error?: string }> {
+    try {
+      // Find fallback broker (must not be the one being deleted)
+      let targetBrokerId = reassignToBrokerId;
+      let targetBrokerName = 'Apex Broking';
+      if (!targetBrokerId) {
+        const fallbackRes = await this.executeQuery(
+          "SELECT id, name FROM brokers WHERE id != $1 AND status = 'ACTIVE' ORDER BY created_at ASC LIMIT 1",
+          [id]
+        );
+        if (fallbackRes.rows.length > 0) {
+          targetBrokerId = fallbackRes.rows[0].id;
+          targetBrokerName = fallbackRes.rows[0].name;
+        } else {
+          targetBrokerId = 'BRK-001';
+        }
+      } else {
+        const bRes = await this.executeQuery("SELECT name FROM brokers WHERE id = $1 LIMIT 1", [targetBrokerId]);
+        if (bRes.rows.length > 0) targetBrokerName = bRes.rows[0].name;
+      }
+
+      // Reassign downline sub-brokers to target broker
+      const reassignRes = await this.executeQuery(
+        "UPDATE sub_brokers SET broker_id = $1, broker_name = $2, updated_at = CURRENT_TIMESTAMP WHERE broker_id = $3",
+        [targetBrokerId, targetBrokerName, id]
+      );
+      const reassignedCount = reassignRes.rowCount ?? 0;
+
+      // Update in-memory sub-brokers
+      for (const sb of this.createdSubBrokersMap.values()) {
+        if (sb.broker_id === id || (sb as any).brokerId === id) {
+          sb.broker_id = targetBrokerId;
+          (sb as any).brokerId = targetBrokerId;
+          sb.broker_name = targetBrokerName;
+        }
+      }
+
+      // Remove broker from DB and memory
+      await this.executeQuery("DELETE FROM brokers WHERE id = $1", [id]);
+      this.createdBrokersMap.delete(id);
+
+      // Invalidate/delete login user
+      await this.executeQuery("DELETE FROM users WHERE hierarchy_id = $1", [id]);
+
+      // Update target broker's sub_brokers_count
+      await this.executeQuery(
+        "UPDATE brokers SET sub_brokers_count = (SELECT COUNT(*) FROM sub_brokers WHERE broker_id = $1) WHERE id = $1",
+        [targetBrokerId]
+      ).catch(() => {});
+
+      return { success: true, reassignedSubBrokersCount: reassignedCount, targetBrokerId };
+    } catch (err: any) {
+      console.error(`[PostgresTradingDataProvider] Failed to delete broker ${id}:`, err);
+      return { success: false, reassignedSubBrokersCount: 0, error: err.message };
+    }
   }
 
   // ----------------------------------------------------
@@ -1662,7 +1798,16 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
 
     if (data.name) { params.push(data.name); fields.push(`name = $${params.length}`); }
     if (data.email) { params.push(data.email); fields.push(`email = $${params.length}`); }
+    if (data.phone) { params.push(data.phone); fields.push(`phone = $${params.length}`); }
     if (data.status) { params.push(data.status); fields.push(`status = $${params.length}`); }
+    const brokerId = data.broker_id || (data as any).brokerId;
+    if (brokerId) {
+      params.push(brokerId); fields.push(`broker_id = $${params.length}`);
+      const bName = (data as any).broker_name || (data as any).brokerName;
+      if (bName) { params.push(bName); fields.push(`broker_name = $${params.length}`); }
+    }
+    const comm = (data as any).commissionShare || data.commission || (data as any).commission_earned;
+    if (comm !== undefined) { params.push(String(comm)); fields.push(`commission = $${params.length}`); }
 
     if (fields.length > 0) {
       params.push(id);
@@ -1671,8 +1816,70 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         params
       );
     }
+
+    if (this.createdSubBrokersMap.has(id)) {
+      const existing = this.createdSubBrokersMap.get(id)!;
+      this.createdSubBrokersMap.set(id, { ...existing, ...data });
+    }
+
     const list = await this.getSubBrokers();
     return list.find(sb => sb.id === id) || null;
+  }
+
+  async deleteSubBroker(id: string, reassignToSubBrokerId?: string): Promise<{ success: boolean; reassignedClientsCount: number; targetSubBrokerId?: string; error?: string }> {
+    try {
+      // Find fallback sub-broker (must not be the one being deleted)
+      let targetSubBrokerId = reassignToSubBrokerId;
+      let targetSubBrokerName = 'Apex Sub-Broker';
+      if (!targetSubBrokerId) {
+        const fallbackRes = await this.executeQuery(
+          "SELECT id, name FROM sub_brokers WHERE id != $1 AND status = 'ACTIVE' ORDER BY created_at ASC LIMIT 1",
+          [id]
+        );
+        if (fallbackRes.rows.length > 0) {
+          targetSubBrokerId = fallbackRes.rows[0].id;
+          targetSubBrokerName = fallbackRes.rows[0].name;
+        } else {
+          targetSubBrokerId = 'SBRK-001';
+        }
+      } else {
+        const sbRes = await this.executeQuery("SELECT name FROM sub_brokers WHERE id = $1 LIMIT 1", [targetSubBrokerId]);
+        if (sbRes.rows.length > 0) targetSubBrokerName = sbRes.rows[0].name;
+      }
+
+      // Reassign downline clients to target sub-broker
+      const reassignRes = await this.executeQuery(
+        "UPDATE clients SET sub_broker_id = $1, sub_broker_name = $2, updated_at = CURRENT_TIMESTAMP WHERE sub_broker_id = $3",
+        [targetSubBrokerId, targetSubBrokerName, id]
+      );
+      const reassignedCount = reassignRes.rowCount ?? 0;
+
+      // Update in-memory client overrides
+      for (const [cId, ov] of this.clientOverrides.entries()) {
+        if (ov.subBrokerId === id) {
+          ov.subBrokerId = targetSubBrokerId;
+          ov.subBrokerName = targetSubBrokerName;
+        }
+      }
+
+      // Remove sub-broker from DB and memory
+      await this.executeQuery("DELETE FROM sub_brokers WHERE id = $1", [id]);
+      this.createdSubBrokersMap.delete(id);
+
+      // Invalidate/delete login user
+      await this.executeQuery("DELETE FROM users WHERE hierarchy_id = $1", [id]);
+
+      // Update target sub-broker's clients_count
+      await this.executeQuery(
+        "UPDATE sub_brokers SET clients_count = (SELECT COUNT(*) FROM clients WHERE sub_broker_id = $1) WHERE id = $1",
+        [targetSubBrokerId]
+      ).catch(() => {});
+
+      return { success: true, reassignedClientsCount: reassignedCount, targetSubBrokerId };
+    } catch (err: any) {
+      console.error(`[PostgresTradingDataProvider] Failed to delete sub-broker ${id}:`, err);
+      return { success: false, reassignedClientsCount: 0, error: err.message };
+    }
   }
 
   // ----------------------------------------------------
@@ -2074,7 +2281,9 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       phone: data.phone !== undefined ? data.phone : existing.phone,
       email: data.email !== undefined ? data.email : existing.email,
       masterName: (data as any).master || (data as any).masterName || existing.masterName,
-      brokerName: (data as any).broker || (data as any).brokerName || existing.brokerName
+      brokerName: (data as any).broker || (data as any).brokerName || existing.brokerName,
+      subBrokerId: data.sub_broker_id !== undefined ? data.sub_broker_id : existing.subBrokerId,
+      subBrokerName: (data as any).sub_broker_name || (data as any).subBrokerName || existing.subBrokerName
     };
     this.clientOverrides.set(id, updatedOverrides);
     this.clientOverrides.set(id.replace('-', ''), updatedOverrides);
@@ -2086,6 +2295,11 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     if (data.email) { params.push(data.email); fields.push(`email = $${params.length}`); }
     if (data.phone) { params.push(data.phone); fields.push(`phone = $${params.length}`); }
     if (data.status) { params.push(data.status); fields.push(`status = $${params.length}`); }
+    if (data.sub_broker_id !== undefined) {
+      params.push(data.sub_broker_id); fields.push(`sub_broker_id = $${params.length}`);
+      const sbName = (data as any).sub_broker_name || (data as any).subBrokerName;
+      if (sbName) { params.push(sbName); fields.push(`sub_broker_name = $${params.length}`); }
+    }
     if (data.wallet_balance !== undefined) { params.push(data.wallet_balance); fields.push(`balance = $${params.length}`); }
 
     if (fields.length > 0) {
@@ -2097,6 +2311,49 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     }
     const list = await this.getClients();
     return list.find(c => c.id === id || c.client_code === id || c.id === id.replace('-', '')) || null;
+  }
+
+  async deleteClient(id: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      // Find client record for sub-broker counter decrement
+      const cRes = await this.executeQuery(
+        "SELECT id, client_code, sub_broker_id FROM clients WHERE id = $1 OR client_code = $1 LIMIT 1",
+        [id]
+      );
+      const subBrokerId = cRes.rows[0]?.sub_broker_id;
+
+      // Delete from clients table
+      await this.executeQuery(
+        "DELETE FROM clients WHERE id = $1 OR client_code = $1",
+        [id]
+      );
+
+      // Clean overrides cache
+      this.clientOverrides.delete(id);
+      this.clientOverrides.delete(id.replace('-', ''));
+      if (cRes.rows[0]?.client_code) {
+        this.clientOverrides.delete(cRes.rows[0].client_code);
+      }
+
+      // Decrement parent sub-broker's clients count
+      if (subBrokerId) {
+        await this.executeQuery(
+          "UPDATE sub_brokers SET clients_count = GREATEST(0, clients_count - 1) WHERE id = $1",
+          [subBrokerId]
+        ).catch(() => {});
+      }
+
+      // Delete/invalidate login user
+      await this.executeQuery(
+        "DELETE FROM users WHERE hierarchy_id = $1 OR id = $1",
+        [id]
+      );
+
+      return { success: true };
+    } catch (err: any) {
+      console.error(`[PostgresTradingDataProvider] Failed to delete client ${id}:`, err);
+      return { success: false, error: err.message };
+    }
   }
 
   // ----------------------------------------------------

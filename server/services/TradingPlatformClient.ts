@@ -1437,7 +1437,7 @@ export class TradingPlatformClient {
    */
   public async syncHierarchyNode(data: {
     type: 'master' | 'broker' | 'sub_broker' | 'client';
-    action: 'created' | 'updated' | 'status_updated';
+    action: 'created' | 'updated' | 'status_updated' | 'deleted' | 'UPSERT' | 'DELETE' | 'STATUS_CHANGE' | 'PASSWORD_RESET' | string;
     tenantId?: string;
     node: any;
   }): Promise<S2SResponse> {
@@ -1455,6 +1455,19 @@ export class TradingPlatformClient {
     const brokerId = n.brokerId ?? n.broker_id ?? (data.type === 'broker' ? n.id : null);
     const subBrokerId = n.subBrokerId ?? n.sub_broker_id ?? (data.type === 'sub_broker' ? n.id : null);
     const commissionShare = n.commissionShare ?? n.commission_share ?? n.commission_earned ?? n.commission ?? null;
+
+    // Normalize S2S action to standardized enterprise enum
+    const actionUpper = String(data.action || '').toUpperCase();
+    let normalizedAction: 'UPSERT' | 'DELETE' | 'STATUS_CHANGE' | 'PASSWORD_RESET' = 'UPSERT';
+    if (actionUpper === 'DELETE' || actionUpper === 'DELETED') {
+      normalizedAction = 'DELETE';
+    } else if (actionUpper === 'STATUS_CHANGE' || actionUpper === 'STATUS_UPDATED') {
+      normalizedAction = 'STATUS_CHANGE';
+    } else if (actionUpper === 'PASSWORD_RESET') {
+      normalizedAction = 'PASSWORD_RESET';
+    } else {
+      normalizedAction = 'UPSERT';
+    }
 
     const normalizedNode = {
       ...n,
@@ -1478,20 +1491,21 @@ export class TradingPlatformClient {
     const syncBody = {
       event: 'HIERARCHY_NODE_SYNC',
       type: data.type,
-      action: data.action,
+      action: normalizedAction,
+      legacyAction: data.action,
       id: normalizedNode.id,
       name: normalizedNode.name,
       email: normalizedNode.email,
       phone: normalizedNode.phone,
       passwordHash: normalizedNode.passwordHash,
       role: normalizedNode.role,
+      status: normalizedNode.status,
+      referralCode: normalizedNode.referralCode,
       tenantId: outboundTenantId,
       masterId: normalizedNode.masterId,
       brokerId: normalizedNode.brokerId,
       subBrokerId: normalizedNode.subBrokerId,
       commissionShare: normalizedNode.commissionShare,
-      referralCode: normalizedNode.referralCode,
-      status: normalizedNode.status,
       node: normalizedNode,
       timestamp: new Date().toISOString()
     };

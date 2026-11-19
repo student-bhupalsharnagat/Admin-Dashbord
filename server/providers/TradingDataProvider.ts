@@ -81,6 +81,10 @@ export interface ITradingDataProvider {
   updateBroker(id: string, data: Partial<Broker>): Promise<Broker | null>;
   updateSubBroker(id: string, data: Partial<SubBroker>): Promise<SubBroker | null>;
   updateClient(id: string, data: Partial<Client>): Promise<Client | null>;
+  deleteMaster?(id: string, reassignToMasterId?: string): Promise<{ success: boolean; reassignedBrokersCount: number; targetMasterId?: string; error?: string }>;
+  deleteBroker?(id: string, reassignToBrokerId?: string): Promise<{ success: boolean; reassignedSubBrokersCount: number; targetBrokerId?: string; error?: string }>;
+  deleteSubBroker?(id: string, reassignToSubBrokerId?: string): Promise<{ success: boolean; reassignedClientsCount: number; targetSubBrokerId?: string; error?: string }>;
+  deleteClient?(id: string): Promise<{ success: boolean; error?: string }>;
   getClientAccountDetails?(clientId: string, tenantId?: string): Promise<any>;
   getClientOrders?(clientId: string, tenantId?: string): Promise<any[]>;
   getClientTrades?(clientId: string, tenantId?: string): Promise<any[]>;
@@ -1645,6 +1649,52 @@ export class MockTradingDataProvider implements ITradingDataProvider {
     if (!client) return null;
     Object.assign(client, data);
     return client;
+  }
+
+  async deleteMaster(id: string, reassignToMasterId?: string): Promise<{ success: boolean; reassignedBrokersCount: number; targetMasterId?: string }> {
+    const targetMaster = reassignToMasterId || this.masters.find(m => m.id !== id)?.id || 'MST-001';
+    let reassigned = 0;
+    this.brokers.forEach(b => {
+      if (b.master_id === id || (b as any).masterId === id) {
+        b.master_id = targetMaster;
+        (b as any).masterId = targetMaster;
+        reassigned++;
+      }
+    });
+    this.masters = this.masters.filter(m => m.id !== id);
+    return { success: true, reassignedBrokersCount: reassigned, targetMasterId: targetMaster };
+  }
+
+  async deleteBroker(id: string, reassignToBrokerId?: string): Promise<{ success: boolean; reassignedSubBrokersCount: number; targetBrokerId?: string }> {
+    const targetBroker = reassignToBrokerId || this.brokers.find(b => b.id !== id)?.id || 'BRK-001';
+    let reassigned = 0;
+    this.subBrokers.forEach(sb => {
+      if (sb.broker_id === id || (sb as any).brokerId === id) {
+        sb.broker_id = targetBroker;
+        (sb as any).brokerId = targetBroker;
+        reassigned++;
+      }
+    });
+    this.brokers = this.brokers.filter(b => b.id !== id);
+    return { success: true, reassignedSubBrokersCount: reassigned, targetBrokerId: targetBroker };
+  }
+
+  async deleteSubBroker(id: string, reassignToSubBrokerId?: string): Promise<{ success: boolean; reassignedClientsCount: number; targetSubBrokerId?: string }> {
+    const targetSub = reassignToSubBrokerId || this.subBrokers.find(s => s.id !== id)?.id || 'SBRK-001';
+    let reassigned = 0;
+    this.clients.forEach(c => {
+      if (c.sub_broker_id === id) {
+        c.sub_broker_id = targetSub;
+        reassigned++;
+      }
+    });
+    this.subBrokers = this.subBrokers.filter(s => s.id !== id);
+    return { success: true, reassignedClientsCount: reassigned, targetSubBrokerId: targetSub };
+  }
+
+  async deleteClient(id: string): Promise<{ success: boolean }> {
+    this.clients = this.clients.filter(c => c.id !== id && c.client_code !== id);
+    return { success: true };
   }
 
   async getClientAccountDetails(clientId: string, tenantId?: string): Promise<any> {

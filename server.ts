@@ -28,6 +28,7 @@ import {
   verifyPassword,
   createAuthenticatedSession,
   invalidateSession,
+  invalidateAllUserSessions,
   writeSecurityAuditLog
 } from './server/auth/authService.ts';
 import { getPermissionsForRole } from './server/auth/rbac.ts';
@@ -1760,7 +1761,7 @@ async function startServer() {
 
   async function notifyHierarchyChange(
     type: 'master' | 'broker' | 'sub_broker' | 'client',
-    action: 'created' | 'updated' | 'status_updated',
+    action: 'created' | 'updated' | 'status_updated' | 'deleted' | 'UPSERT' | 'DELETE' | 'STATUS_CHANGE' | 'PASSWORD_RESET' | string,
     node: any,
     passwordHash?: string | null
   ) {
@@ -1899,7 +1900,7 @@ async function startServer() {
         name: updated.name,
         email: updated.email,
         role: 'MASTER',
-        password: req.body.password,
+        password: req.body.password || req.body.newPassword,
         phone: updated.phone,
         isUpdate: true
       });
@@ -1917,6 +1918,52 @@ async function startServer() {
       if (!updated) return res.status(404).json({ error: 'Master not found' });
       await notifyHierarchyChange('master', 'status_updated', updated);
       res.json(updated);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete(['/api/admin/masters/:id', '/api/masters/:id'], authenticate, requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER']), requireHierarchyEntity('master'), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { reassignToMasterId } = req.body || {};
+      const user = req.user!;
+      const existing = (await activeTradingDataProvider.getMasters()).find(m => m.id === id);
+      if (!existing) return res.status(404).json({ error: 'Master not found' });
+
+      // Invalidate all active sessions for this master's user account
+      const userRecord = await query<{ id: string }>('SELECT id FROM users WHERE hierarchy_id = $1 LIMIT 1', [id]);
+      if (userRecord.rows.length > 0) {
+        await invalidateAllUserSessions(userRecord.rows[0].id, user.name);
+      }
+
+      // Execute downline reassignment & master removal in provider
+      const delResult = typeof (activeTradingDataProvider as any).deleteMaster === 'function'
+        ? await (activeTradingDataProvider as any).deleteMaster(id, reassignToMasterId)
+        : { success: true, reassignedBrokersCount: 0 };
+
+      if (!delResult.success) {
+        return res.status(500).json({ error: delResult.error || 'Failed to delete master' });
+      }
+
+      // Notify S2S with action: 'DELETE'
+      await notifyHierarchyChange('master', 'DELETE', { ...existing, status: 'DELETED' });
+
+      await writeSecurityAuditLog({
+        tenantId: existing.tenant_id,
+        userName: user.name,
+        action: 'MASTER_DELETED',
+        module: 'HIERARCHY',
+        details: `Deleted master ${existing.name} (${id}). Reassigned ${delResult.reassignedBrokersCount || 0} brokers to ${delResult.targetMasterId || 'central master'}.`,
+        ipAddress: req.ip
+      });
+
+      res.json({
+        success: true,
+        message: `Master ${existing.name} deleted successfully.`,
+        reassignedBrokersCount: delResult.reassignedBrokersCount,
+        reassignedTo: delResult.targetMasterId
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -1980,7 +2027,7 @@ async function startServer() {
         name: updated.name,
         email: updated.email,
         role: 'BROKER',
-        password: req.body.password,
+        password: req.body.password || req.body.newPassword,
         phone: updated.phone,
         isUpdate: true
       });
@@ -1998,6 +2045,52 @@ async function startServer() {
       if (!updated) return res.status(404).json({ error: 'Broker not found' });
       await notifyHierarchyChange('broker', 'status_updated', updated);
       res.json(updated);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete(['/api/admin/brokers/:id', '/api/brokers/:id'], authenticate, requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN', 'MASTER']), requireHierarchyEntity('broker'), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { reassignToBrokerId } = req.body || {};
+      const user = req.user!;
+      const existing = (await activeTradingDataProvider.getBrokers()).find(b => b.id === id);
+      if (!existing) return res.status(404).json({ error: 'Broker not found' });
+
+      // Invalidate all active sessions for this broker's user account
+      const userRecord = await query<{ id: string }>('SELECT id FROM users WHERE hierarchy_id = $1 LIMIT 1', [id]);
+      if (userRecord.rows.length > 0) {
+        await invalidateAllUserSessions(userRecord.rows[0].id, user.name);
+      }
+
+      // Execute downline reassignment & broker removal in provider
+      const delResult = typeof (activeTradingDataProvider as any).deleteBroker === 'function'
+        ? await (activeTradingDataProvider as any).deleteBroker(id, reassignToBrokerId)
+        : { success: true, reassignedSubBrokersCount: 0 };
+
+      if (!delResult.success) {
+        return res.status(500).json({ error: delResult.error || 'Failed to delete broker' });
+      }
+
+      // Notify S2S with action: 'DELETE'
+      await notifyHierarchyChange('broker', 'DELETE', { ...existing, status: 'DELETED' });
+
+      await writeSecurityAuditLog({
+        tenantId: existing.tenant_id,
+        userName: user.name,
+        action: 'BROKER_DELETED',
+        module: 'HIERARCHY',
+        details: `Deleted broker ${existing.name} (${id}). Reassigned ${delResult.reassignedSubBrokersCount || 0} sub-brokers to ${delResult.targetBrokerId || 'house broker'}.`,
+        ipAddress: req.ip
+      });
+
+      res.json({
+        success: true,
+        message: `Broker ${existing.name} deleted successfully.`,
+        reassignedSubBrokersCount: delResult.reassignedSubBrokersCount,
+        reassignedTo: delResult.targetBrokerId
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -2060,7 +2153,7 @@ async function startServer() {
         name: updated.name,
         email: updated.email,
         role: 'SUB_BROKER',
-        password: req.body.password,
+        password: req.body.password || req.body.newPassword,
         phone: updated.phone,
         isUpdate: true
       });
@@ -2078,6 +2171,52 @@ async function startServer() {
       if (!updated) return res.status(404).json({ error: 'Sub-Broker not found' });
       await notifyHierarchyChange('sub_broker', 'status_updated', updated);
       res.json(updated);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete(['/api/admin/sub-brokers/:id', '/api/sub-brokers/:id'], authenticate, requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN', 'MASTER', 'BROKER']), requireHierarchyEntity('sub_broker'), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { reassignToSubBrokerId } = req.body || {};
+      const user = req.user!;
+      const existing = (await activeTradingDataProvider.getSubBrokers()).find(s => s.id === id);
+      if (!existing) return res.status(404).json({ error: 'Sub-Broker not found' });
+
+      // Invalidate all active sessions for this sub-broker's user account
+      const userRecord = await query<{ id: string }>('SELECT id FROM users WHERE hierarchy_id = $1 LIMIT 1', [id]);
+      if (userRecord.rows.length > 0) {
+        await invalidateAllUserSessions(userRecord.rows[0].id, user.name);
+      }
+
+      // Execute downline reassignment & sub-broker removal in provider
+      const delResult = typeof (activeTradingDataProvider as any).deleteSubBroker === 'function'
+        ? await (activeTradingDataProvider as any).deleteSubBroker(id, reassignToSubBrokerId)
+        : { success: true, reassignedClientsCount: 0 };
+
+      if (!delResult.success) {
+        return res.status(500).json({ error: delResult.error || 'Failed to delete sub-broker' });
+      }
+
+      // Notify S2S with action: 'DELETE'
+      await notifyHierarchyChange('sub_broker', 'DELETE', { ...existing, status: 'DELETED' });
+
+      await writeSecurityAuditLog({
+        tenantId: existing.tenant_id,
+        userName: user.name,
+        action: 'SUB_BROKER_DELETED',
+        module: 'HIERARCHY',
+        details: `Deleted sub-broker ${existing.name} (${id}). Reassigned ${delResult.reassignedClientsCount || 0} clients to ${delResult.targetSubBrokerId || 'house sub-broker'}.`,
+        ipAddress: req.ip
+      });
+
+      res.json({
+        success: true,
+        message: `Sub-Broker ${existing.name} deleted successfully.`,
+        reassignedClientsCount: delResult.reassignedClientsCount,
+        reassignedTo: delResult.targetSubBrokerId
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -2146,7 +2285,7 @@ async function startServer() {
         name: updated.name,
         email: updated.email,
         role: 'CLIENT',
-        password: req.body.password,
+        password: req.body.password || req.body.newPassword,
         phone: updated.phone,
         isUpdate: true
       });
@@ -2164,6 +2303,49 @@ async function startServer() {
       if (!updated) return res.status(404).json({ error: 'Client not found' });
       await notifyHierarchyChange('client', 'status_updated', updated);
       res.json(updated);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete(['/api/admin/clients/:id', '/api/clients/:id'], authenticate, requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN', 'MASTER', 'BROKER']), requireHierarchyEntity('client'), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const user = req.user!;
+      const existing = (await activeTradingDataProvider.getClients()).find(c => c.id === id || c.client_code === id);
+      if (!existing) return res.status(404).json({ error: 'Client not found' });
+
+      // Invalidate all active sessions for this client's user account
+      const userRecord = await query<{ id: string }>('SELECT id FROM users WHERE hierarchy_id = $1 OR id = $1 LIMIT 1', [id]);
+      if (userRecord.rows.length > 0) {
+        await invalidateAllUserSessions(userRecord.rows[0].id, user.name);
+      }
+
+      // Execute client deletion in provider
+      const delResult = typeof (activeTradingDataProvider as any).deleteClient === 'function'
+        ? await (activeTradingDataProvider as any).deleteClient(id)
+        : { success: true };
+
+      if (!delResult.success) {
+        return res.status(500).json({ error: delResult.error || 'Failed to delete client' });
+      }
+
+      // Notify S2S with action: 'DELETE'
+      await notifyHierarchyChange('client', 'DELETE', { ...existing, status: 'DELETED' });
+
+      await writeSecurityAuditLog({
+        tenantId: existing.tenant_id,
+        userName: user.name,
+        action: 'CLIENT_DELETED',
+        module: 'HIERARCHY',
+        details: `Deleted client ${existing.name} (${id})`,
+        ipAddress: req.ip
+      });
+
+      res.json({
+        success: true,
+        message: `Client ${existing.name} deleted successfully.`
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

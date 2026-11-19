@@ -24,7 +24,9 @@ import {
   TrendingUp,
   AlertTriangle,
   ExternalLink,
-  Key
+  Key,
+  Trash2,
+  Power
 } from 'lucide-react';
 import { Master, Broker, SubBroker, Client, Tenant } from '../types';
 import { ClientDetailView } from '../components/clients/ClientDetailView';
@@ -553,6 +555,20 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
     return false;
   }, [currentUser?.role, level]);
 
+  const canDeleteEntity = React.useMemo(() => {
+    const role = (currentUser?.role || 'SUPER_ADMIN').toUpperCase();
+    if (role === 'SUPER_ADMIN' || role === 'PLATFORM_OWNER' || role === 'ADMIN' || role === 'TENANT_ADMIN') {
+      return true;
+    }
+    if (role === 'MASTER') {
+      return level === 'brokers' || level === 'sub-brokers' || level === 'clients';
+    }
+    if (role === 'BROKER') {
+      return level === 'sub-brokers' || level === 'clients';
+    }
+    return false;
+  }, [currentUser?.role, level]);
+
   // Local state for entities ensuring live PostgreSQL data and empty states are synchronized
   const [mastersList, setMastersList] = useState(() => (propMasters || []).map(normalizeMaster));
   const [brokersList, setBrokersList] = useState(() => (propBrokers || []).map(normalizeBroker));
@@ -606,8 +622,12 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
   // Interactive Modals State
   const [selectedEntity, setSelectedEntity] = useState<any | null>(null);
   const [modalType, setModalType] = useState<
-    'view' | 'edit' | 'create' | 'link' | 'stats' | 'wallet' | 'kyc' | 'reset-password' | null
+    'view' | 'edit' | 'create' | 'link' | 'stats' | 'wallet' | 'kyc' | 'reset-password' | 'delete' | null
   >(null);
+
+  // Delete Entity Modal State (top-level hooks)
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
 
   // Reset Password Modal State (top-level hooks)
   const [resetPasswordValue, setResetPasswordValue] = useState('');
@@ -1138,8 +1158,47 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
       setResetPasswordConfirm('');
       setResetPasswordError('');
       setModalType('reset-password');
+    } else if (action === 'delete') {
+      setDeleteError('');
+      setModalType('delete');
     } else if (action === 'userplus') {
       notify(`Provisioning downline delegate under ${entity.name}...`, 'info');
+    }
+  };
+
+  const handleDeleteEntity = async () => {
+    if (!selectedEntity) return;
+    setIsDeleting(true);
+    setDeleteError('');
+    try {
+      const res = await fetch(`/api/admin/${level}/${encodeURIComponent(selectedEntity.id)}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include'
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.message || data.error || `Failed to delete ${level} entity`);
+      }
+
+      if (level === 'masters') {
+        setMastersList(prev => prev.filter(m => m.id !== selectedEntity.id));
+      } else if (level === 'brokers') {
+        setBrokersList(prev => prev.filter(b => b.id !== selectedEntity.id));
+      } else if (level === 'sub-brokers') {
+        setSubBrokersList(prev => prev.filter(s => s.id !== selectedEntity.id));
+      } else if (level === 'clients') {
+        setClientsList(prev => prev.filter(c => c.id !== selectedEntity.id));
+      }
+
+      notify(data.message || `Successfully removed ${selectedEntity.name}`, 'success');
+      setModalType(null);
+      setSelectedEntity(null);
+      if (onRefresh) await onRefresh();
+    } catch (err: any) {
+      setDeleteError(err?.message || 'Deletion failed');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -1470,6 +1529,26 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
                             <Key size={13} />
                           </button>
                         )}
+                        {canManageStatus && (
+                          <button
+                            onClick={() => executeToggleStatus(master)}
+                            title={master.status === 'ACTIVE' ? 'Suspend Master' : 'Activate Master'}
+                            className={`transition-colors p-1 rounded hover:bg-slate-800/50 cursor-pointer ${
+                              master.status === 'ACTIVE' ? 'hover:text-amber-400 text-slate-400' : 'hover:text-emerald-400 text-amber-400'
+                            }`}
+                          >
+                            <Power size={13} />
+                          </button>
+                        )}
+                        {canDeleteEntity && (
+                          <button
+                            onClick={() => handleQuickAction('delete', master)}
+                            title="Delete Master (Reassign Downline)"
+                            className="hover:text-rose-400 transition-colors p-1 rounded hover:bg-slate-800/50 cursor-pointer"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -1599,6 +1678,26 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
                             <Key size={13} />
                           </button>
                         )}
+                        {canManageStatus && (
+                          <button
+                            onClick={() => executeToggleStatus(broker)}
+                            title={broker.status === 'ACTIVE' ? 'Suspend Broker' : 'Activate Broker'}
+                            className={`transition-colors p-1 rounded hover:bg-slate-800/50 cursor-pointer ${
+                              broker.status === 'ACTIVE' ? 'hover:text-amber-400 text-slate-400' : 'hover:text-emerald-400 text-amber-400'
+                            }`}
+                          >
+                            <Power size={13} />
+                          </button>
+                        )}
+                        {canDeleteEntity && (
+                          <button
+                            onClick={() => handleQuickAction('delete', broker)}
+                            title="Delete Broker (Reassign Downline)"
+                            className="hover:text-rose-400 transition-colors p-1 rounded hover:bg-slate-800/50 cursor-pointer"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -1705,6 +1804,26 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
                             className="hover:text-amber-300 transition-colors p-1 rounded hover:bg-slate-800/50 cursor-pointer"
                           >
                             <Key size={13} />
+                          </button>
+                        )}
+                        {canManageStatus && (
+                          <button
+                            onClick={() => executeToggleStatus(sub)}
+                            title={sub.status === 'ACTIVE' ? 'Suspend Sub-Broker' : 'Activate Sub-Broker'}
+                            className={`transition-colors p-1 rounded hover:bg-slate-800/50 cursor-pointer ${
+                              sub.status === 'ACTIVE' ? 'hover:text-amber-400 text-slate-400' : 'hover:text-emerald-400 text-amber-400'
+                            }`}
+                          >
+                            <Power size={13} />
+                          </button>
+                        )}
+                        {canDeleteEntity && (
+                          <button
+                            onClick={() => handleQuickAction('delete', sub)}
+                            title="Delete Sub-Broker (Reassign Downline)"
+                            className="hover:text-rose-400 transition-colors p-1 rounded hover:bg-slate-800/50 cursor-pointer"
+                          >
+                            <Trash2 size={13} />
                           </button>
                         )}
                       </div>
@@ -1834,6 +1953,26 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
                             className="hover:text-amber-300 transition-colors p-1 rounded hover:bg-slate-800/50 cursor-pointer"
                           >
                             <Key size={13} />
+                          </button>
+                        )}
+                        {canManageStatus && (
+                          <button
+                            onClick={() => executeToggleStatus(client)}
+                            title={(client.status === 'ACTIVE' || client.account === 'ACTIVE') ? 'Suspend Client' : 'Activate Client'}
+                            className={`transition-colors p-1 rounded hover:bg-slate-800/50 cursor-pointer ${
+                              (client.status === 'ACTIVE' || client.account === 'ACTIVE') ? 'hover:text-amber-400 text-slate-400' : 'hover:text-emerald-400 text-amber-400'
+                            }`}
+                          >
+                            <Power size={13} />
+                          </button>
+                        )}
+                        {canDeleteEntity && (
+                          <button
+                            onClick={() => handleQuickAction('delete', client)}
+                            title="Delete Client"
+                            className="hover:text-rose-400 transition-colors p-1 rounded hover:bg-slate-800/50 cursor-pointer"
+                          >
+                            <Trash2 size={13} />
                           </button>
                         )}
                       </div>
@@ -2081,6 +2220,16 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
                     }`}
                   >
                     {(selectedEntity.status === 'ACTIVE' || selectedEntity.account === 'ACTIVE') ? 'Suspend Entity' : 'Activate Entity'}
+                  </button>
+                )}
+                {canDeleteEntity && (
+                  <button
+                    type="button"
+                    onClick={() => handleQuickAction('delete', selectedEntity)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-300 transition-colors cursor-pointer"
+                  >
+                    <Trash2 size={12} />
+                    <span>Delete</span>
                   </button>
                 )}
                 <button
@@ -2404,6 +2553,30 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
                   required
                   value={formData.email || ''}
                   onChange={e => setFormData({ ...formData, email: e.target.value })}
+                  className="w-full px-3 py-1.5 bg-[#080e1c] border border-[#152342] rounded-lg text-slate-200 focus:outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-400 text-[11px] mb-1 font-medium">Phone</label>
+                <input
+                  type="text"
+                  placeholder="+91 98000 00000"
+                  value={formData.phone || ''}
+                  onChange={e => setFormData({ ...formData, phone: e.target.value })}
+                  className="w-full px-3 py-1.5 bg-[#080e1c] border border-[#152342] rounded-lg text-slate-200 focus:outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-400 text-[11px] mb-1 font-medium">
+                  New Password <span className="text-slate-500 font-normal">(Leave blank to keep unchanged)</span>
+                </label>
+                <input
+                  type="password"
+                  placeholder="Enter new password..."
+                  value={formData.newPassword || formData.password || ''}
+                  onChange={e => setFormData({ ...formData, newPassword: e.target.value, password: e.target.value })}
                   className="w-full px-3 py-1.5 bg-[#080e1c] border border-[#152342] rounded-lg text-slate-200 focus:outline-none focus:border-blue-500"
                 />
               </div>
@@ -2877,6 +3050,85 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* DELETE CONFIRMATION MODAL WITH DOWNLINE REASSIGNMENT NOTICE */}
+      {modalType === 'delete' && selectedEntity && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4">
+          <div className="bg-[#0b1426] border border-rose-500/30 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between p-4 border-b border-[#142340] bg-rose-500/10">
+              <div className="flex items-center gap-2 text-rose-400">
+                <AlertTriangle size={18} />
+                <h3 className="font-bold text-white text-sm">
+                  Delete {level === 'masters' ? 'Master' : level === 'brokers' ? 'Broker' : level === 'sub-brokers' ? 'Sub-Broker' : 'Client'} Account
+                </h3>
+              </div>
+              <button
+                onClick={() => setModalType(null)}
+                className="p-1 rounded text-slate-400 hover:text-white hover:bg-[#121f3b] transition-colors cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 text-xs">
+              <div className="bg-[#080e1c] border border-[#152342] rounded-xl p-3.5 space-y-2">
+                <div className="flex justify-between items-center text-slate-300">
+                  <span className="text-slate-400 font-medium">Target Entity:</span>
+                  <span className="font-bold text-white font-mono">{selectedEntity.id}</span>
+                </div>
+                <div className="flex justify-between items-center text-slate-300">
+                  <span className="text-slate-400 font-medium">Name:</span>
+                  <span className="font-semibold text-slate-200">{selectedEntity.name}</span>
+                </div>
+                <div className="flex justify-between items-center text-slate-300">
+                  <span className="text-slate-400 font-medium">Email:</span>
+                  <span className="font-mono text-slate-300">{selectedEntity.email}</span>
+                </div>
+              </div>
+
+              <div className="p-3 bg-amber-500/10 border border-amber-500/25 rounded-xl text-amber-200 leading-relaxed text-[11px]">
+                <strong className="block text-amber-300 font-semibold mb-1">Downline Protection & S2S Sync:</strong>
+                {level === 'masters' && 'Deleting this Master will automatically reassign all child brokers and accounts to the Central Master pool. Active sessions will be revoked and S2S deletion dispatched to Trading Platform and User Panel.'}
+                {level === 'brokers' && 'Deleting this Broker will automatically reassign all downline sub-brokers to the Central House Broker. Active sessions will be revoked and S2S deletion dispatched to Trading Platform and User Panel.'}
+                {level === 'sub-brokers' && 'Deleting this Sub-Broker will automatically reassign all downline clients to the parent default Sub-Broker. Active sessions will be revoked and S2S deletion dispatched to Trading Platform and User Panel.'}
+                {level === 'clients' && 'Deleting this Client will remove their account and revoke active login sessions across both Trading Platform and User Panel.'}
+              </div>
+
+              {deleteError && (
+                <div className="p-2.5 bg-rose-500/10 border border-rose-500/30 rounded-lg text-rose-300 text-xs">
+                  {deleteError}
+                </div>
+              )}
+
+              <div className="pt-2 flex items-center justify-end gap-2 border-t border-[#142340]">
+                <button
+                  type="button"
+                  disabled={isDeleting}
+                  onClick={() => setModalType(null)}
+                  className="px-3.5 py-1.5 rounded-lg bg-[#14213d] hover:bg-[#1a2c52] text-slate-300 font-semibold cursor-pointer disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={isDeleting}
+                  onClick={handleDeleteEntity}
+                  className="px-4 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-semibold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  {isDeleting ? (
+                    <span>Deleting & Reassigning...</span>
+                  ) : (
+                    <>
+                      <Trash2 size={13} />
+                      <span>Confirm Delete</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

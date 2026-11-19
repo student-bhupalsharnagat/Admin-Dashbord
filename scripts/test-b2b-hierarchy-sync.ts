@@ -81,7 +81,29 @@ async function main() {
       assert.strictEqual(req.body.brokerId, 'BRK-901');
       assert.strictEqual(req.body.commissionShare, '15%');
       assert.strictEqual(req.body.referralCode, brkCode);
+      assert.strictEqual(req.body.action, 'UPSERT');
     }
+
+    // Test DELETE action S2S sync
+    captured.length = 0;
+    await client.syncHierarchyNode({
+      type: 'broker',
+      action: 'DELETE',
+      tenantId: 'vertex-default',
+      node: {
+        id: 'BRK-901',
+        name: 'Alpha Broker',
+        email: 'alpha@broker.test',
+        role: 'BROKER',
+        status: 'DELETED'
+      }
+    });
+    const tpDel = captured.find(c => c.url === 'https://tp.test.local/api/internal/v1/hierarchy/sync');
+    const upDel = captured.find(c => c.url === 'https://up.test.local/api/internal/v1/hierarchy/sync');
+    assert(tpDel && upDel, 'Expected S2S DELETE dispatch to both Trading Platform and User Panel');
+    assert.strictEqual(tpDel.body.action, 'DELETE');
+    assert.strictEqual(upDel.body.action, 'DELETE');
+    assert.strictEqual(tpDel.body.status, 'DELETED');
 
     // Test dual-target white-label broadcast
     captured.length = 0;
