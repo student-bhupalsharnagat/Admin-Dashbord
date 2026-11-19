@@ -30,6 +30,7 @@ import {
 } from 'lucide-react';
 import { Master, Broker, SubBroker, Client, Tenant } from '../types';
 import { ClientDetailView } from '../components/clients/ClientDetailView';
+import { AssignHierarchyModal } from '../components/modals/AssignHierarchyModal';
 
 export interface HierarchyViewsProps {
   level: 'masters' | 'brokers' | 'sub-brokers' | 'clients' | 'tree';
@@ -622,7 +623,7 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
   // Interactive Modals State
   const [selectedEntity, setSelectedEntity] = useState<any | null>(null);
   const [modalType, setModalType] = useState<
-    'view' | 'edit' | 'create' | 'link' | 'stats' | 'wallet' | 'kyc' | 'reset-password' | 'delete' | null
+    'view' | 'edit' | 'create' | 'link' | 'stats' | 'wallet' | 'kyc' | 'reset-password' | 'delete' | 'assign-hierarchy' | null
   >(null);
 
   // Delete Entity Modal State (top-level hooks)
@@ -1061,7 +1062,7 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
         const newClient = {
           id: formData.id || `CLT00${clientsList.length + 1}`,
           name: formData.name,
-          email: formData.email || `client@mail.com`,
+          email: (formData.email || 'client@mail.com').trim().toLowerCase(),
           master: formData.master || 'Apex Capital',
           broker: selectedBroker?.name || formData.broker || 'Ryan Chen',
           broker_id: selectedBroker?.id || formData.brokerId || 'BRK001',
@@ -1161,8 +1162,13 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
     } else if (action === 'delete') {
       setDeleteError('');
       setModalType('delete');
-    } else if (action === 'userplus') {
-      notify(`Provisioning downline delegate under ${entity.name}...`, 'info');
+    } else if (action === 'userplus' || action === 'assign-hierarchy') {
+      if (level === 'clients') {
+        setSelectedEntity(entity);
+        setModalType('assign-hierarchy');
+      } else {
+        notify(`Provisioning downline delegate under ${entity.name}...`, 'info');
+      }
     }
   };
 
@@ -1940,8 +1946,8 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
                           <Wallet size={13} />
                         </button>
                         <button
-                          onClick={() => handleQuickAction('userplus', client)}
-                          title="Assign Sub-Broker / Refer"
+                          onClick={() => handleQuickAction('assign-hierarchy', client)}
+                          title="Assign / Transfer Hierarchy"
                           className="hover:text-purple-400 transition-colors p-1 rounded hover:bg-slate-800/50 cursor-pointer"
                         >
                           <UserPlus size={13} />
@@ -3131,6 +3137,28 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* ASSIGN / TRANSFER CLIENT HIERARCHY MODAL */}
+      {modalType === 'assign-hierarchy' && selectedEntity && (
+        <AssignHierarchyModal
+          isOpen={true}
+          onClose={() => {
+            setModalType(null);
+            setSelectedEntity(null);
+          }}
+          client={selectedEntity}
+          masters={mastersList}
+          brokers={brokersList}
+          subBrokers={subBrokersList}
+          currentUser={currentUser}
+          onSuccess={async () => {
+            setModalType(null);
+            setSelectedEntity(null);
+            if (onRefresh) await onRefresh();
+          }}
+          onNotify={notify}
+        />
       )}
     </div>
   );

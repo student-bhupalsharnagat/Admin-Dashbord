@@ -29,7 +29,8 @@ import {
   createAuthenticatedSession,
   invalidateSession,
   invalidateAllUserSessions,
-  writeSecurityAuditLog
+  writeSecurityAuditLog,
+  validateSessionAndUser
 } from './server/auth/authService.ts';
 import { getPermissionsForRole } from './server/auth/rbac.ts';
 import { runMigrations } from './server/db/migrate.ts';
@@ -1031,25 +1032,31 @@ async function startServer() {
     }
   });
 
-  app.post('/api/auth/logout', authenticate, async (req, res) => {
+  app.post('/api/auth/logout', async (req, res) => {
     try {
-      const user = req.user!;
-      if (user.session_id) {
-        await invalidateSession(user.session_id, user.name);
+      const token = (req.query?.token as string) || req.cookies?.tradepro_session || req.headers.authorization?.replace(/^Bearer\s+/i, '');
+      if (token) {
+        try {
+          const user = await validateSessionAndUser(token);
+          if (user && user.session_id) {
+            await invalidateSession(user.session_id, user.name);
+            await writeSecurityAuditLog({
+              tenantId: user.tenant_id,
+              userName: user.name,
+              action: 'LOGOUT',
+              module: 'AUTH',
+              details: `User logged out. Session ${user.session_id} invalidated.`,
+              ipAddress: req.ip || req.socket.remoteAddress
+            });
+          }
+        } catch {
+          // Ignore invalid session lookup on logout
+        }
       }
-
-      await writeSecurityAuditLog({
-        tenantId: user.tenant_id,
-        userName: user.name,
-        action: 'LOGOUT',
-        module: 'AUTH',
-        details: `User logged out. Session ${user.session_id} invalidated.`,
-        ipAddress: req.ip || req.socket.remoteAddress
-      });
     } catch (err) {
       console.error('[Auth API] Logout error:', err);
     } finally {
-      res.clearCookie('tradepro_session');
+      res.clearCookie('tradepro_session', { path: '/' });
       res.json({ success: true, message: 'Logged out successfully.' });
     }
   });
@@ -1807,14 +1814,20 @@ async function startServer() {
 
     const commissionShare = node?.commissionShare ?? node?.commission_share ?? node?.commission_earned ?? node?.commission ?? null;
     const referralCode = node?.referralCode || node?.referral_code || node?.code || null;
+    const cleanEmail = (node?.email || '').trim().toLowerCase();
+    const rawBalance = node?.initialBalance ?? node?.initial_balance ?? node?.wallet_balance ?? node?.balance ?? 0;
+    const initialBalance = typeof rawBalance === 'number'
+      ? rawBalance
+      : parseFloat(String(rawBalance).replace(/[^0-9.-]/g, '')) || 0;
 
     const s2sNode = {
       ...node,
       id: node?.id,
       name: node?.name,
-      email: node?.email,
+      email: cleanEmail,
       phone: node?.phone || null,
       passwordHash: resolvedHash,
+      initialBalance,
       role: (node?.role || roleMap[type] || 'CLIENT').toString().toUpperCase(),
       tenantId: node?.tenantId || node?.tenant_id || 'TNT-001',
       masterId,
@@ -1825,12 +1838,15 @@ async function startServer() {
       status: node?.status || node?.account || 'ACTIVE'
     };
 
-    tradingPlatformClient.syncHierarchyNode({
+    await tradingPlatformClient.syncHierarchyNode({
       type,
       action,
       tenantId: s2sNode.tenantId,
       node: s2sNode
-    }).catch(() => {});
+    }).catch(err => {
+      console.warn(`[notifyHierarchyChange] Notice syncing ${type} ${s2sNode.id}:`, err?.message || err);
+      return null;
+    });
 
     // Strip passwordHash before broadcasting over SSE to browser admin clients
     const { passwordHash: _omit1, password_hash: _omit2, ...safeNode } = s2sNode;
@@ -1862,6 +1878,7 @@ async function startServer() {
     try {
       const user = req.user!;
       const data = { ...req.body };
+      if (data.email) data.email = data.email.trim().toLowerCase();
       if (user.role !== 'SUPER_ADMIN' && user.role !== 'PLATFORM_OWNER') {
         data.tenant_id = user.tenant_id;
       }
@@ -1870,12 +1887,20 @@ async function startServer() {
         entityId: master.id,
         tenantId: master.tenant_id,
         name: master.name,
-        email: master.email || req.body.email,
+        email: master.email || data.email,
         role: 'MASTER',
         password: req.body.password,
         phone: master.phone || req.body.phone
       });
-      await notifyHierarchyChange('master', 'created', master, passwordHash);
+      await notifyHierarchyChange('master', 'UPSERT', {
+        ...master,
+        masterId: master.id,
+        brokerId: null,
+        subBrokerId: null,
+        role: 'MASTER',
+        status: master.status || 'ACTIVE',
+        referralCode: master.referralCode || master.code || null
+      }, passwordHash);
       await writeSecurityAuditLog({
         tenantId: master.tenant_id,
         userName: user.name,
@@ -1985,6 +2010,7 @@ async function startServer() {
     try {
       const user = req.user!;
       const data = { ...req.body };
+      if (data.email) data.email = data.email.trim().toLowerCase();
       if (user.role !== 'SUPER_ADMIN' && user.role !== 'PLATFORM_OWNER') {
         data.tenant_id = user.tenant_id;
       }
@@ -1997,12 +2023,20 @@ async function startServer() {
         entityId: broker.id,
         tenantId: broker.tenant_id,
         name: broker.name,
-        email: broker.email || req.body.email,
+        email: broker.email || data.email,
         role: 'BROKER',
         password: req.body.password,
         phone: broker.phone || req.body.phone
       });
-      await notifyHierarchyChange('broker', 'created', broker, passwordHash);
+      await notifyHierarchyChange('broker', 'UPSERT', {
+        ...broker,
+        masterId: (broker as any).masterId || broker.master_id || null,
+        brokerId: broker.id,
+        subBrokerId: null,
+        role: 'BROKER',
+        status: broker.status || 'ACTIVE',
+        referralCode: broker.referralCode || broker.code || null
+      }, passwordHash);
       await writeSecurityAuditLog({
         tenantId: broker.tenant_id,
         userName: user.name,
@@ -2112,6 +2146,7 @@ async function startServer() {
     try {
       const user = req.user!;
       const data = { ...req.body };
+      if (data.email) data.email = data.email.trim().toLowerCase();
       if (user.role !== 'SUPER_ADMIN' && user.role !== 'PLATFORM_OWNER') {
         data.tenant_id = user.tenant_id;
       }
@@ -2123,12 +2158,20 @@ async function startServer() {
         entityId: subBroker.id,
         tenantId: subBroker.tenant_id,
         name: subBroker.name,
-        email: subBroker.email || req.body.email,
+        email: subBroker.email || data.email,
         role: 'SUB_BROKER',
         password: req.body.password,
         phone: subBroker.phone || req.body.phone
       });
-      await notifyHierarchyChange('sub_broker', 'created', subBroker, passwordHash);
+      await notifyHierarchyChange('sub_broker', 'UPSERT', {
+        ...subBroker,
+        masterId: (subBroker as any).master_id || (subBroker as any).masterId || null,
+        brokerId: (subBroker as any).brokerId || subBroker.broker_id || null,
+        subBrokerId: subBroker.id,
+        role: 'SUB_BROKER',
+        status: subBroker.status || 'ACTIVE',
+        referralCode: subBroker.referralCode || subBroker.code || null
+      }, passwordHash);
       await writeSecurityAuditLog({
         tenantId: subBroker.tenant_id,
         userName: user.name,
@@ -2238,6 +2281,7 @@ async function startServer() {
     try {
       const user = req.user!;
       const data = { ...req.body };
+      if (data.email) data.email = data.email.trim().toLowerCase();
       if (user.role !== 'SUPER_ADMIN' && user.role !== 'PLATFORM_OWNER') {
         data.tenant_id = user.tenant_id;
       }
@@ -2255,12 +2299,24 @@ async function startServer() {
         entityId: client.id,
         tenantId: client.tenant_id,
         name: client.name,
-        email: client.email || req.body.email,
+        email: client.email || data.email,
         role: 'CLIENT',
         password: req.body.password,
         phone: client.phone || req.body.phone
       });
-      await notifyHierarchyChange('client', 'created', client, passwordHash);
+      const initialBalance = Number(data.initialBalance ?? data.initial_balance ?? data.wallet_balance ?? data.balance ?? 0);
+      await notifyHierarchyChange('client', 'UPSERT', {
+        ...client,
+        name: client.name,
+        email: (client.email || data.email || '').trim().toLowerCase(),
+        phone: client.phone || data.phone || null,
+        passwordHash,
+        initialBalance,
+        status: client.status || 'ACTIVE',
+        masterId: data.masterId || data.master_id || (client as any).master_id || (client as any).masterId || null,
+        brokerId: data.brokerId || data.broker_id || (client as any).broker_id || (client as any).brokerId || null,
+        subBrokerId: data.subBrokerId || data.sub_broker_id || client.sub_broker_id || null
+      }, passwordHash);
       await writeSecurityAuditLog({
         tenantId: client.tenant_id,
         userName: user.name,
@@ -2271,6 +2327,129 @@ async function startServer() {
       });
       res.status(201).json(client);
     } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.put(['/api/admin/clients/:id/hierarchy', '/api/clients/:id/hierarchy'], authenticate, requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN', 'MASTER', 'BROKER']), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { masterId, brokerId, subBrokerId } = req.body;
+      const user = req.user!;
+
+      // Find the client
+      const allClients = await activeTradingDataProvider.getClients();
+      const client = allClients.find(c => c.id === id || c.client_code === id);
+      if (!client) {
+        return res.status(404).json({ error: 'Client not found' });
+      }
+
+      // Enforce role-based hierarchy boundaries
+      if (user.role === 'BROKER' && user.hierarchy_id) {
+        if (brokerId && brokerId !== user.hierarchy_id) {
+          return res.status(403).json({ error: 'FORBIDDEN', message: 'Brokers can only assign clients under their own organization.' });
+        }
+      } else if (user.role === 'MASTER' && user.hierarchy_id) {
+        if (masterId && masterId !== user.hierarchy_id) {
+          return res.status(403).json({ error: 'FORBIDDEN', message: 'Masters can only assign clients under their own hierarchy.' });
+        }
+      }
+
+      let resolvedMasterId = masterId || (client as any).master_id || (client as any).masterId || null;
+      let resolvedBrokerId = brokerId || (client as any).broker_id || (client as any).brokerId || null;
+      let resolvedSubBrokerId = subBrokerId || client.sub_broker_id || null;
+
+      let masterName = (client as any).master_name || client.master || '';
+      let brokerName = (client as any).broker_name || client.broker || '';
+      let subBrokerName = client.sub_broker_name || (client as any).subBroker || '';
+
+      if (resolvedSubBrokerId) {
+        const sbRes = await query<{ name: string; broker_id: string }>(
+          'SELECT name, broker_id FROM sub_brokers WHERE id = $1 LIMIT 1',
+          [resolvedSubBrokerId]
+        );
+        if (sbRes.rows[0]) {
+          subBrokerName = sbRes.rows[0].name;
+          if (!resolvedBrokerId) {
+            resolvedBrokerId = sbRes.rows[0].broker_id;
+          }
+        }
+      }
+
+      if (resolvedBrokerId) {
+        const bRes = await query<{ name: string; master_id: string }>(
+          'SELECT name, master_id FROM brokers WHERE id = $1 LIMIT 1',
+          [resolvedBrokerId]
+        );
+        if (bRes.rows[0]) {
+          brokerName = bRes.rows[0].name;
+          if (!resolvedMasterId) {
+            resolvedMasterId = bRes.rows[0].master_id;
+          }
+        }
+      }
+
+      if (resolvedMasterId) {
+        const mRes = await query<{ name: string }>(
+          'SELECT name FROM masters WHERE id = $1 LIMIT 1',
+          [resolvedMasterId]
+        );
+        if (mRes.rows[0]) {
+          masterName = mRes.rows[0].name;
+        }
+      }
+
+      const updateData: any = {
+        sub_broker_id: resolvedSubBrokerId,
+        sub_broker_name: subBrokerName,
+        broker_id: resolvedBrokerId,
+        broker_name: brokerName,
+        master_id: resolvedMasterId,
+        master_name: masterName,
+        subBrokerId: resolvedSubBrokerId,
+        subBrokerName: subBrokerName,
+        brokerId: resolvedBrokerId,
+        brokerName,
+        masterId: resolvedMasterId,
+        masterName
+      };
+
+      const updated = await activeTradingDataProvider.updateClient(id, updateData);
+
+      const s2sPayload = {
+        ...(updated || client),
+        id: client.id,
+        name: client.name,
+        email: (client.email || '').trim().toLowerCase(),
+        phone: client.phone || null,
+        masterId: resolvedMasterId,
+        brokerId: resolvedBrokerId,
+        subBrokerId: resolvedSubBrokerId,
+        masterName,
+        brokerName,
+        subBrokerName,
+        status: client.status || 'ACTIVE',
+        tenantId: client.tenant_id
+      };
+
+      await notifyHierarchyChange('client', 'UPSERT', s2sPayload);
+
+      await writeSecurityAuditLog({
+        tenantId: client.tenant_id,
+        userName: user.name,
+        action: 'CLIENT_HIERARCHY_TRANSFER',
+        module: 'HIERARCHY',
+        details: `Client ${client.name} (${client.id}) transferred to Master: ${masterName} (${resolvedMasterId}), Broker: ${brokerName} (${resolvedBrokerId}), Sub-Broker: ${subBrokerName} (${resolvedSubBrokerId})`,
+        ipAddress: req.ip
+      });
+
+      res.json({
+        success: true,
+        message: 'Client hierarchy updated and synchronized successfully.',
+        client: updated || s2sPayload
+      });
+    } catch (err: any) {
+      console.error('[Clients Hierarchy API] Error updating hierarchy:', err);
       res.status(500).json({ error: err.message });
     }
   });

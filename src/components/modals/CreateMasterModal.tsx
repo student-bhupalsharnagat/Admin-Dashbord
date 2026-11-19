@@ -34,11 +34,11 @@ export const CreateMasterModal: React.FC<CreateMasterModalProps> = ({
     try {
       await onSubmit({
         tenant_id: tenantId,
-        name,
-        company: company || (name ? `${name} Capital Ltd` : 'Master Corp'),
-        code,
-        email,
-        phone,
+        name: name.trim(),
+        company: company || (name ? `${name.trim()} Capital Ltd` : 'Master Corp'),
+        code: code.trim(),
+        email: email.trim().toLowerCase(),
+        phone: phone.trim(),
         password: password || 'Password@123',
         commissionShare: commissionShare || '20%',
         commission: commissionShare || '20%',

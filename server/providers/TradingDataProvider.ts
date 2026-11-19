@@ -1647,7 +1647,12 @@ export class MockTradingDataProvider implements ITradingDataProvider {
   async updateClient(id: string, data: Partial<Client>): Promise<Client | null> {
     const client = this.clients.find(c => c.id === id || c.client_code === id);
     if (!client) return null;
+    if (data.email) data.email = data.email.trim().toLowerCase();
     Object.assign(client, data);
+    if ((data as any).master_id) (client as any).master_id = (data as any).master_id;
+    if ((data as any).broker_id) (client as any).broker_id = (data as any).broker_id;
+    if ((data as any).master_name) client.master_name = (data as any).master_name;
+    if ((data as any).broker_name) client.broker_name = (data as any).broker_name;
     return client;
   }
 

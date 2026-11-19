@@ -24,8 +24,14 @@ export function validateAndLoadConfig(): AppConfig {
 
   const jwtSecret = process.env.JWT_SECRET || 'Jt9#vQ7!mX2akL8SzP4&nR6*fhgjg8eerrnm';
   const internalSecret = process.env.INTERNAL_COMMUNICATION_SECRET || process.env.INTERNAL_API_SECRET || process.env.CENTRAL_ADMIN_INTERNAL_SECRET || 'nextrade-internal-hmac-secret-2026';
-  const tradingPlatformBaseUrl = process.env.TRADING_PLATFORM_BASE_URL || process.env.TRADING_PLATFORM_URL || 'https://trading-platform-2t6r.onrender.com';
-  const userPanelBaseUrl = process.env.USER_PANEL_URL || process.env.USER_PANEL_BASE_URL || 'https://user-panel-dashbord-ofrt.onrender.com';
+  const DEFAULT_TRADING_PLATFORM_URL = 'https://trading-platform-2t6r.onrender.com';
+  const DEFAULT_USER_PANEL_URL = 'https://user-panel-dashbord-ofrt.onrender.com';
+
+  const rawTradingPlatformUrl = process.env.TRADING_PLATFORM_URL || process.env.TRADING_PLATFORM_BASE_URL || DEFAULT_TRADING_PLATFORM_URL;
+  const tradingPlatformBaseUrl = (rawTradingPlatformUrl.trim() || DEFAULT_TRADING_PLATFORM_URL).replace(/\/+$/, '');
+
+  const rawUserPanelUrl = process.env.USER_PANEL_URL || process.env.USER_PANEL_BASE_URL || DEFAULT_USER_PANEL_URL;
+  const userPanelBaseUrl = (rawUserPanelUrl.trim() || DEFAULT_USER_PANEL_URL).replace(/\/+$/, '');
   const tradingPlatformTimeoutMs = parseInt(process.env.TRADING_PLATFORM_TIMEOUT_MS || '10000', 10);
   const databaseUrl = process.env.DATABASE_URL || '';
   const redisUrl = process.env.REDIS_URL;

@@ -296,6 +296,10 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       `ALTER TABLE sub_brokers ADD COLUMN IF NOT EXISTS commission_share NUMERIC(8, 2) DEFAULT 20.00`,
       `ALTER TABLE clients ADD COLUMN IF NOT EXISTS sub_broker_id VARCHAR(64)`,
       `ALTER TABLE clients ADD COLUMN IF NOT EXISTS sub_broker_name VARCHAR(255)`,
+      `ALTER TABLE clients ADD COLUMN IF NOT EXISTS broker_id VARCHAR(64)`,
+      `ALTER TABLE clients ADD COLUMN IF NOT EXISTS broker_name VARCHAR(255)`,
+      `ALTER TABLE clients ADD COLUMN IF NOT EXISTS master_id VARCHAR(64)`,
+      `ALTER TABLE clients ADD COLUMN IF NOT EXISTS master_name VARCHAR(255)`,
       `ALTER TABLE clients ADD COLUMN IF NOT EXISTS broker_code VARCHAR(64)`,
       `ALTER TABLE clients ADD COLUMN IF NOT EXISTS phone VARCHAR(64)`,
       `ALTER TABLE clients ADD COLUMN IF NOT EXISTS user_id VARCHAR(64)`,
@@ -1888,13 +1892,17 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
   async getClients(tenantId?: string, subBrokerId?: string): Promise<Client[]> {
     const defaultTenants = new Set(['vertex-default', 'default', 'TNT-001', 'ALL', 'ALL_TENANTS', '']);
     let sql = `
-      SELECT c.*, t.name as tenant_name, sb.name as parent_sub_broker_name,
-             b.name as parent_broker_name, m.name as parent_master_name
+      SELECT c.*, t.name as tenant_name,
+             COALESCE(c.sub_broker_name, sb.name) as parent_sub_broker_name,
+             COALESCE(c.broker_name, b.name) as parent_broker_name,
+             COALESCE(c.master_name, m.name) as parent_master_name,
+             COALESCE(c.broker_id, sb.broker_id) as resolved_broker_id,
+             COALESCE(c.master_id, b.master_id) as resolved_master_id
       FROM clients c
       LEFT JOIN tenants t ON c.tenant_id = t.id
       LEFT JOIN sub_brokers sb ON c.sub_broker_id = sb.id
-      LEFT JOIN brokers b ON sb.broker_id = b.id
-      LEFT JOIN masters m ON b.master_id = m.id
+      LEFT JOIN brokers b ON COALESCE(c.broker_id, sb.broker_id) = b.id
+      LEFT JOIN masters m ON COALESCE(c.master_id, b.master_id) = m.id
       WHERE 1=1
     `;
     const params: any[] = [];
@@ -1916,10 +1924,12 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       client_code: r.client_code,
       sub_broker_id: r.sub_broker_id,
       sub_broker_name: r.parent_sub_broker_name || r.sub_broker_name || (r.sub_broker_id ? 'Sub-Broker Admin' : 'Unassigned'),
-      broker_name: r.parent_broker_name || 'Apex Broking',
-      broker: r.parent_broker_name || 'Apex Broking',
-      master_name: r.parent_master_name || 'Alpha Prime Master',
-      master: r.parent_master_name || 'Alpha Prime Master',
+      broker_id: r.broker_id || r.resolved_broker_id,
+      broker_name: r.parent_broker_name || r.broker_name || 'Apex Broking',
+      broker: r.parent_broker_name || r.broker_name || 'Apex Broking',
+      master_id: r.master_id || r.resolved_master_id,
+      master_name: r.parent_master_name || r.master_name || 'Alpha Prime Master',
+      master: r.parent_master_name || r.master_name || 'Alpha Prime Master',
       tenant_id: r.tenant_id,
       tenant_name: r.tenant_name || 'Alpha Prime Capital',
       name: r.name,
@@ -2274,16 +2284,25 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
 
   async updateClient(id: string, data: Partial<Client>): Promise<Client | null> {
     const existing = this.clientOverrides.get(id) || this.clientOverrides.get(id.replace('-', '')) || {};
+    const masterIdVal = (data as any).master_id !== undefined ? (data as any).master_id : (data as any).masterId;
+    const masterNameVal = (data as any).master_name || (data as any).masterName || (data as any).master;
+    const brokerIdVal = (data as any).broker_id !== undefined ? (data as any).broker_id : (data as any).brokerId;
+    const brokerNameVal = (data as any).broker_name || (data as any).brokerName || (data as any).broker;
+    const subBrokerIdVal = data.sub_broker_id !== undefined ? data.sub_broker_id : (data as any).subBrokerId;
+    const subBrokerNameVal = (data as any).sub_broker_name || (data as any).subBrokerName;
+
     const updatedOverrides = {
       ...existing,
       ...data,
       name: data.name !== undefined ? data.name : existing.name,
       phone: data.phone !== undefined ? data.phone : existing.phone,
-      email: data.email !== undefined ? data.email : existing.email,
-      masterName: (data as any).master || (data as any).masterName || existing.masterName,
-      brokerName: (data as any).broker || (data as any).brokerName || existing.brokerName,
-      subBrokerId: data.sub_broker_id !== undefined ? data.sub_broker_id : existing.subBrokerId,
-      subBrokerName: (data as any).sub_broker_name || (data as any).subBrokerName || existing.subBrokerName
+      email: data.email !== undefined ? data.email.trim().toLowerCase() : existing.email,
+      masterId: masterIdVal !== undefined ? masterIdVal : existing.masterId,
+      masterName: masterNameVal || existing.masterName,
+      brokerId: brokerIdVal !== undefined ? brokerIdVal : existing.brokerId,
+      brokerName: brokerNameVal || existing.brokerName,
+      subBrokerId: subBrokerIdVal !== undefined ? subBrokerIdVal : existing.subBrokerId,
+      subBrokerName: subBrokerNameVal || existing.subBrokerName
     };
     this.clientOverrides.set(id, updatedOverrides);
     this.clientOverrides.set(id.replace('-', ''), updatedOverrides);
@@ -2292,13 +2311,20 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     const params: any[] = [];
 
     if (data.name) { params.push(data.name); fields.push(`name = $${params.length}`); }
-    if (data.email) { params.push(data.email); fields.push(`email = $${params.length}`); }
+    if (data.email) { params.push(data.email.trim().toLowerCase()); fields.push(`email = $${params.length}`); }
     if (data.phone) { params.push(data.phone); fields.push(`phone = $${params.length}`); }
     if (data.status) { params.push(data.status); fields.push(`status = $${params.length}`); }
-    if (data.sub_broker_id !== undefined) {
-      params.push(data.sub_broker_id); fields.push(`sub_broker_id = $${params.length}`);
-      const sbName = (data as any).sub_broker_name || (data as any).subBrokerName;
-      if (sbName) { params.push(sbName); fields.push(`sub_broker_name = $${params.length}`); }
+    if (subBrokerIdVal !== undefined) {
+      params.push(subBrokerIdVal); fields.push(`sub_broker_id = $${params.length}`);
+      if (subBrokerNameVal) { params.push(subBrokerNameVal); fields.push(`sub_broker_name = $${params.length}`); }
+    }
+    if (brokerIdVal !== undefined) {
+      params.push(brokerIdVal); fields.push(`broker_id = $${params.length}`);
+      if (brokerNameVal) { params.push(brokerNameVal); fields.push(`broker_name = $${params.length}`); }
+    }
+    if (masterIdVal !== undefined) {
+      params.push(masterIdVal); fields.push(`master_id = $${params.length}`);
+      if (masterNameVal) { params.push(masterNameVal); fields.push(`master_name = $${params.length}`); }
     }
     if (data.wallet_balance !== undefined) { params.push(data.wallet_balance); fields.push(`balance = $${params.length}`); }
 

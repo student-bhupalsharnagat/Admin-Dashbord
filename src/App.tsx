@@ -28,7 +28,7 @@ import { TradingPlatformView } from './views/TradingPlatformView';
 import { SystemToolsView } from './views/SystemToolsView';
 import { RbacView } from './components/views/RbacView';
 import { useTheme } from './context/ThemeContext';
-import { apiFetch } from './utils/api';
+import { apiFetch, setAuthToken, setStoredUser } from './utils/api';
 import { canAccessTab } from './utils/rbac';
 import { parseCleanNumber, liveLtpLookup, updateLivePrices } from './utils/cleanNumber';
 import { ShieldAlert } from 'lucide-react';
@@ -138,6 +138,7 @@ export default function App() {
 
   // Authentication State (managed via secure HTTP-only cookie session)
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [authChecking, setAuthChecking] = useState(false);
 
   // Check active session on initial load in background (non-blocking)
@@ -172,10 +173,12 @@ export default function App() {
               localStorage.removeItem('auth_token');
               sessionStorage.removeItem('auth_token');
               setCurrentUser(null);
+              setIsAuthenticated(false);
               showToast('Access Denied: Trader Clients cannot access the Admin Portal. Please login via the Trading Platform.', 'warning');
               return;
             }
             setCurrentUser(data.user);
+            setIsAuthenticated(true);
             const isGlobalRole = ['SUPER_ADMIN', 'PLATFORM_OWNER', 'ADMIN'].includes(roleUpper);
             if (!isGlobalRole && data.user.tenant_id && data.user.tenant_id !== 'GLOBAL') {
               setSelectedTenantScope(data.user.tenant_id);
@@ -207,10 +210,12 @@ export default function App() {
       localStorage.removeItem('auth_token');
       sessionStorage.removeItem('auth_token');
       setCurrentUser(null);
+      setIsAuthenticated(false);
       showToast('Access Denied: Trader Clients cannot access the Admin Portal. Please login via the Trading Platform.', 'warning');
       return;
     }
     setCurrentUser(user);
+    setIsAuthenticated(true);
     const isGlobalRole = ['SUPER_ADMIN', 'PLATFORM_OWNER', 'ADMIN'].includes(roleUpper);
     if (!isGlobalRole && user.tenant_id && user.tenant_id !== 'GLOBAL') {
       setSelectedTenantScope(user.tenant_id);
@@ -232,7 +237,26 @@ export default function App() {
     } catch (e) {
       console.warn('Logout error:', e);
     }
+    try {
+      localStorage.removeItem('auth_token');
+      localStorage.removeItem('token');
+      localStorage.removeItem('tradepro_user');
+      localStorage.removeItem('user_role');
+      localStorage.removeItem('user');
+      localStorage.removeItem('role');
+      sessionStorage.removeItem('auth_token');
+      sessionStorage.removeItem('token');
+      sessionStorage.removeItem('tradepro_user');
+      sessionStorage.removeItem('user_role');
+      sessionStorage.removeItem('user');
+      sessionStorage.removeItem('role');
+    } catch {
+      // Storage access restricted
+    }
+    setAuthToken(null);
+    setStoredUser(null);
     setCurrentUser(null);
+    setIsAuthenticated(false);
     setActiveTradingClient(null);
     setAppMode('admin');
     showToast('Signed out of TradeMatrix. Session ended.', 'info');
@@ -1046,7 +1070,7 @@ export default function App() {
   }, [handleOpenTradingPlatform]);
 
   // If no user is logged in, show the TradeMatrix Login & Sign Up screen
-  if (!currentUser) {
+  if (!currentUser || !isAuthenticated) {
     return (
       <>
         <AuthScreen onLogin={handleLogin} tenants={tenants} />
@@ -1109,6 +1133,7 @@ export default function App() {
         onCloseMobile={() => setMobileSidebarOpen(false)}
         collapsed={sidebarCollapsed}
         onToggleCollapse={() => setSidebarCollapsed(prev => !prev)}
+        onLogout={handleLogout}
         currentUser={currentUser}
         badgeCounts={{
           kycPending: Number(dashboardData?.kpis?.pending_kyc?.value) || 0,

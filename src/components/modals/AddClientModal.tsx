@@ -31,19 +31,25 @@ export const AddClientModal: React.FC<AddClientModalProps> = ({
     const activeSubBrokerId = subBrokerId || subBrokers[0]?.id || '';
     const selectedSub = subBrokers.find(sb => sb.id === activeSubBrokerId);
     const brokerId = selectedSub?.broker_id || (selectedSub as any)?.brokerId || '';
+    const masterId = (selectedSub as any)?.master_id || (selectedSub as any)?.masterId || '';
+    const cleanDeposit = parseFloat(initialDeposit) || 0;
     try {
       await onSubmit({
         sub_broker_id: activeSubBrokerId,
         subBrokerId: activeSubBrokerId,
         broker_id: brokerId,
         brokerId: brokerId,
+        master_id: masterId,
+        masterId: masterId,
         sub_broker_name: selectedSub?.name || 'Sub-Broker Admin',
-        name,
-        email,
-        phone,
+        name: name.trim(),
+        email: email.trim().toLowerCase(),
+        phone: phone.trim(),
         password: 'Password@123',
-        wallet_balance: parseFloat(initialDeposit) || 0,
-        available_margin: (parseFloat(initialDeposit) || 0) * (parseInt(marginMultiplier) || 4)
+        initialBalance: cleanDeposit,
+        initial_balance: cleanDeposit,
+        wallet_balance: cleanDeposit,
+        available_margin: cleanDeposit * (parseInt(marginMultiplier) || 4)
       });
       onClose();
     } catch (err) {
