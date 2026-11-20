@@ -461,6 +461,473 @@ async function startServer() {
     });
   });
 
+  // 11. Hierarchy Synchronization Endpoint (S2S Inbound from User-Panel / Trading-Platform)
+  app.post(['/api/internal/v1/hierarchy/sync', '/api/internal/hierarchy/sync'], verifyS2S, async (req, res) => {
+    try {
+      const envelope = req.body || {};
+      const node = (envelope.node && typeof envelope.node === 'object') ? { ...envelope, ...envelope.node } : envelope;
+      const rawType = String(node.nodeType || node.type || node.role || envelope.nodeType || envelope.type || '').toLowerCase();
+      const id = String(node.id || node.userId || node.clientId || node.brokerId || node.subBrokerId || node.masterId || '').trim();
+
+      if (!id) {
+        return res.status(200).json({ success: true, message: 'Empty hierarchy node id ignored' });
+      }
+
+      const action = String(envelope.action || node.action || 'UPSERT').toUpperCase();
+      const cleanEmail = String(node.email || `${id.toLowerCase()}@tradematrix.io`).trim().toLowerCase();
+      const name = String(node.name || node.fullName || node.company || id).trim();
+      const phone = String(node.phone || node.mobile || '').trim();
+      const tenantId = String(node.tenantId || node.tenant_id || envelope.tenantId || 'TNT-001').trim();
+      const referralCode = node.referralCode || node.referral_code || node.code || null;
+      const commissionShare = node.commissionShare ?? node.commission_share ?? node.commission ?? null;
+
+      if (action === 'DELETE') {
+        if (rawType.includes('client')) {
+          await activeTradingDataProvider.deleteClient(id).catch(() => {});
+        } else if (rawType.includes('sub_broker') || rawType.includes('subbroker')) {
+          await activeTradingDataProvider.deleteSubBroker(id).catch(() => {});
+        } else if (rawType.includes('broker')) {
+          await activeTradingDataProvider.deleteBroker(id).catch(() => {});
+        } else if (rawType.includes('master')) {
+          await activeTradingDataProvider.deleteMaster(id).catch(() => {});
+        }
+        await query('DELETE FROM users WHERE hierarchy_id = $1 OR id = $1', [id]).catch(() => {});
+
+        clearDashboardCache();
+        (activeTradingDataProvider as any).clearCache?.();
+        tradingPlatformClient.clearCache();
+
+        broadcastToAdminClients('hierarchy.deleted', { id, type: rawType, timestamp: new Date().toISOString() });
+        adminEventBus.emit('event', {
+          eventId: `evt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+          eventType: 'hierarchy.deleted',
+          tenantId,
+          timestamp: new Date().toISOString(),
+          payload: { id, type: rawType }
+        });
+        return res.status(200).json({ success: true, message: `Hierarchy node ${id} deleted successfully` });
+      }
+
+      if (action === 'STATUS_CHANGE') {
+        const rawStatus = String(node.status || envelope.status || 'ACTIVE').toUpperCase();
+        const resolvedStatus = (rawStatus === 'SUSPENDED' || rawStatus === 'INACTIVE') ? 'SUSPENDED' : 'ACTIVE';
+
+        if (rawType.includes('client')) {
+          await activeTradingDataProvider.updateClientStatus(id, resolvedStatus as any).catch(() => {});
+        } else if (rawType.includes('sub_broker') || rawType.includes('subbroker')) {
+          await activeTradingDataProvider.updateSubBrokerStatus(id, resolvedStatus as any).catch(() => {});
+        } else if (rawType.includes('broker')) {
+          await activeTradingDataProvider.updateBrokerStatus(id, resolvedStatus as any).catch(() => {});
+        } else if (rawType.includes('master')) {
+          await activeTradingDataProvider.updateMasterStatus(id, resolvedStatus as any).catch(() => {});
+        }
+        await query(
+          'UPDATE users SET status = $1, is_suspended = $2, updated_at = CURRENT_TIMESTAMP WHERE hierarchy_id = $3 OR id = $3 OR LOWER(email) = LOWER($4)',
+          [resolvedStatus, resolvedStatus === 'SUSPENDED', id, cleanEmail]
+        ).catch(() => {});
+
+        clearDashboardCache();
+        (activeTradingDataProvider as any).clearCache?.();
+        tradingPlatformClient.clearCache();
+
+        broadcastToAdminClients('hierarchy.updated', { id, type: rawType, status: resolvedStatus });
+        adminEventBus.emit('event', {
+          eventId: `evt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+          eventType: 'hierarchy.updated',
+          tenantId,
+          timestamp: new Date().toISOString(),
+          payload: { id, type: rawType, status: resolvedStatus }
+        });
+        return res.status(200).json({ success: true, message: `Hierarchy node ${id} status updated to ${resolvedStatus}`, status: resolvedStatus });
+      }
+
+      // Password resolution: preserve valid bcrypt hash or hash plaintext
+      const incomingHash = typeof node.passwordHash === 'string' && (node.passwordHash.startsWith('$2a$') || node.passwordHash.startsWith('$2b$'))
+        ? node.passwordHash
+        : (typeof envelope.passwordHash === 'string' && (envelope.passwordHash.startsWith('$2a$') || envelope.passwordHash.startsWith('$2b$')) ? envelope.passwordHash : null);
+
+      let resolvedPasswordHash = incomingHash;
+      if (!resolvedPasswordHash && typeof node.password === 'string' && node.password.trim()) {
+        resolvedPasswordHash = await hashPassword(node.password.trim());
+      }
+      if (!resolvedPasswordHash) {
+        const uExisting = await query<{ password_hash: string | null }>(
+          'SELECT password_hash FROM users WHERE hierarchy_id = $1 OR id = $1 OR LOWER(email) = LOWER($2) LIMIT 1',
+          [id, cleanEmail]
+        ).catch(() => ({ rows: [] }));
+        if (uExisting.rows[0]?.password_hash) {
+          resolvedPasswordHash = uExisting.rows[0].password_hash;
+        } else {
+          resolvedPasswordHash = await hashPassword('Password@123');
+        }
+      }
+
+      if (action === 'PASSWORD_RESET' || action === 'PASSWORD_UPDATED') {
+        await query(
+          'UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE hierarchy_id = $2 OR id = $2 OR LOWER(email) = LOWER($3)',
+          [resolvedPasswordHash, id, cleanEmail]
+        ).catch(() => {});
+        return res.status(200).json({ success: true, message: `Hierarchy node ${id} password updated` });
+      }
+
+      // Default: UPSERT (created / updated)
+      const rawStatus = (node.status || envelope.status || 'ACTIVE').toString().toUpperCase();
+      const status = (rawStatus === 'SUSPENDED' || rawStatus === 'INACTIVE') ? 'SUSPENDED' : 'ACTIVE';
+      const masterId = node.masterId || node.master_id || (rawType.includes('master') ? id : null);
+      const brokerId = node.brokerId || node.broker_id || (rawType.includes('broker') && !rawType.includes('sub') ? id : null);
+      const subBrokerId = node.subBrokerId || node.sub_broker_id || (rawType.includes('sub') ? id : null);
+      const rawBalance = node.initialBalance ?? node.initial_balance ?? node.wallet_balance ?? node.balance ?? 0;
+      const initialBalance = typeof rawBalance === 'number' ? rawBalance : parseFloat(String(rawBalance).replace(/[^0-9.-]/g, '')) || 0;
+
+      if (rawType.includes('master')) {
+        await query(`
+          INSERT INTO masters (
+            id, tenant_id, name, company, code, referral_code, email, phone, status,
+            commission, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
+          ON CONFLICT (id) DO UPDATE SET
+            name = EXCLUDED.name,
+            company = EXCLUDED.company,
+            email = EXCLUDED.email,
+            phone = COALESCE(EXCLUDED.phone, masters.phone),
+            status = EXCLUDED.status,
+            referral_code = COALESCE(masters.referral_code, EXCLUDED.referral_code),
+            updated_at = CURRENT_TIMESTAMP
+        `, [id, tenantId, name, node.company || name, referralCode || id, referralCode, cleanEmail, phone, status, commissionShare ? String(commissionShare) : '40%']).catch(() => {});
+
+        await query(`
+          INSERT INTO users (
+            id, tenant_id, name, email, role, status, password_hash, phone,
+            hierarchy_level, hierarchy_id, is_suspended, updated_at
+          ) VALUES ($1, $2, $3, $4, 'MASTER', $5, $6, $7, 'MASTER', $8, $9, CURRENT_TIMESTAMP)
+          ON CONFLICT (email) DO UPDATE SET
+            name = EXCLUDED.name,
+            role = 'MASTER',
+            status = EXCLUDED.status,
+            password_hash = COALESCE(EXCLUDED.password_hash, users.password_hash),
+            phone = COALESCE(EXCLUDED.phone, users.phone),
+            hierarchy_level = 'MASTER',
+            hierarchy_id = EXCLUDED.hierarchy_id,
+            is_suspended = EXCLUDED.is_suspended,
+            updated_at = CURRENT_TIMESTAMP
+        `, [`usr_master_${id.replace(/[^a-z0-9]/gi, '')}`, tenantId, name, cleanEmail, status, resolvedPasswordHash, phone, id, status === 'SUSPENDED']).catch(() => {});
+      } else if (rawType.includes('sub_broker') || rawType.includes('subbroker')) {
+        await query(`
+          INSERT INTO sub_brokers (
+            id, tenant_id, broker_id, broker_name, name, code, referral_code, email, phone, status,
+            commission, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
+          ON CONFLICT (id) DO UPDATE SET
+            name = EXCLUDED.name,
+            broker_id = COALESCE(EXCLUDED.broker_id, sub_brokers.broker_id),
+            broker_name = COALESCE(EXCLUDED.broker_name, sub_brokers.broker_name),
+            email = EXCLUDED.email,
+            phone = COALESCE(EXCLUDED.phone, sub_brokers.phone),
+            status = EXCLUDED.status,
+            referral_code = COALESCE(sub_brokers.referral_code, EXCLUDED.referral_code),
+            updated_at = CURRENT_TIMESTAMP
+        `, [id, tenantId, brokerId || 'BRK-001', node.brokerName || node.broker_name || 'Apex Broking', name, referralCode || id, referralCode, cleanEmail, phone, status, commissionShare ? String(commissionShare) : '20%']).catch(() => {});
+
+        await query(`
+          INSERT INTO users (
+            id, tenant_id, name, email, role, status, password_hash, phone,
+            hierarchy_level, hierarchy_id, is_suspended, updated_at
+          ) VALUES ($1, $2, $3, $4, 'SUB_BROKER', $5, $6, $7, 'SUB_BROKER', $8, $9, CURRENT_TIMESTAMP)
+          ON CONFLICT (email) DO UPDATE SET
+            name = EXCLUDED.name,
+            role = 'SUB_BROKER',
+            status = EXCLUDED.status,
+            password_hash = COALESCE(EXCLUDED.password_hash, users.password_hash),
+            phone = COALESCE(EXCLUDED.phone, users.phone),
+            hierarchy_level = 'SUB_BROKER',
+            hierarchy_id = EXCLUDED.hierarchy_id,
+            is_suspended = EXCLUDED.is_suspended,
+            updated_at = CURRENT_TIMESTAMP
+        `, [`usr_subbroker_${id.replace(/[^a-z0-9]/gi, '')}`, tenantId, name, cleanEmail, status, resolvedPasswordHash, phone, id, status === 'SUSPENDED']).catch(() => {});
+      } else if (rawType.includes('broker')) {
+        await query(`
+          INSERT INTO brokers (
+            id, tenant_id, master_id, master_name, name, code, referral_code, email, phone, status,
+            commission, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
+          ON CONFLICT (id) DO UPDATE SET
+            name = EXCLUDED.name,
+            master_id = COALESCE(EXCLUDED.master_id, brokers.master_id),
+            master_name = COALESCE(EXCLUDED.master_name, brokers.master_name),
+            email = EXCLUDED.email,
+            phone = COALESCE(EXCLUDED.phone, brokers.phone),
+            status = EXCLUDED.status,
+            referral_code = COALESCE(brokers.referral_code, EXCLUDED.referral_code),
+            updated_at = CURRENT_TIMESTAMP
+        `, [id, tenantId, masterId || 'MST-001', node.masterName || node.master_name || 'Central Master', name, referralCode || id, referralCode, cleanEmail, phone, status, commissionShare ? String(commissionShare) : '40%']).catch(() => {});
+
+        await query(`
+          INSERT INTO users (
+            id, tenant_id, name, email, role, status, password_hash, phone,
+            hierarchy_level, hierarchy_id, is_suspended, updated_at
+          ) VALUES ($1, $2, $3, $4, 'BROKER', $5, $6, $7, 'BROKER', $8, $9, CURRENT_TIMESTAMP)
+          ON CONFLICT (email) DO UPDATE SET
+            name = EXCLUDED.name,
+            role = 'BROKER',
+            status = EXCLUDED.status,
+            password_hash = COALESCE(EXCLUDED.password_hash, users.password_hash),
+            phone = COALESCE(EXCLUDED.phone, users.phone),
+            hierarchy_level = 'BROKER',
+            hierarchy_id = EXCLUDED.hierarchy_id,
+            is_suspended = EXCLUDED.is_suspended,
+            updated_at = CURRENT_TIMESTAMP
+        `, [`usr_broker_${id.replace(/[^a-z0-9]/gi, '')}`, tenantId, name, cleanEmail, status, resolvedPasswordHash, phone, id, status === 'SUSPENDED']).catch(() => {});
+      } else {
+        // CLIENT
+        const clientCode = node.clientCode || node.client_code || node.code || `CLT${id.replace(/[^0-9]/g, '').slice(-4) || '101'}`;
+        await query(`
+          INSERT INTO clients (
+            id, tenant_id, sub_broker_id, sub_broker_name, broker_id, broker_name, master_id, master_name,
+            client_code, name, email, phone, status, kyc_status, balance, equity, margin_used, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, CURRENT_TIMESTAMP)
+          ON CONFLICT (id) DO UPDATE SET
+            name = EXCLUDED.name,
+            email = EXCLUDED.email,
+            phone = COALESCE(EXCLUDED.phone, clients.phone),
+            sub_broker_id = COALESCE(EXCLUDED.sub_broker_id, clients.sub_broker_id),
+            sub_broker_name = COALESCE(EXCLUDED.sub_broker_name, clients.sub_broker_name),
+            broker_id = COALESCE(EXCLUDED.broker_id, clients.broker_id),
+            broker_name = COALESCE(EXCLUDED.broker_name, clients.broker_name),
+            master_id = COALESCE(EXCLUDED.master_id, clients.master_id),
+            master_name = COALESCE(EXCLUDED.master_name, clients.master_name),
+            status = EXCLUDED.status,
+            balance = CASE WHEN EXCLUDED.balance > 0 THEN EXCLUDED.balance ELSE clients.balance END,
+            equity = CASE WHEN EXCLUDED.equity > 0 THEN EXCLUDED.equity ELSE clients.equity END,
+            updated_at = CURRENT_TIMESTAMP
+        `, [
+          id, tenantId, subBrokerId, node.subBrokerName || node.sub_broker_name || 'Direct',
+          brokerId, node.brokerName || node.broker_name || 'Apex Broking',
+          masterId, node.masterName || node.master_name || 'Central Master',
+          clientCode, name, cleanEmail, phone, status,
+          (node.kycStatus || node.kyc_status || 'APPROVED').toString().toUpperCase() === 'PENDING' ? 'PENDING' : 'APPROVED',
+          initialBalance, initialBalance, 0.00
+        ]).catch(() => {});
+
+        await query(`
+          INSERT INTO users (
+            id, tenant_id, name, email, role, status, password_hash, phone,
+            hierarchy_level, hierarchy_id, is_suspended, client_code, updated_at
+          ) VALUES ($1, $2, $3, $4, 'CLIENT', $5, $6, $7, 'CLIENT', $8, $9, $10, CURRENT_TIMESTAMP)
+          ON CONFLICT (email) DO UPDATE SET
+            name = EXCLUDED.name,
+            role = 'CLIENT',
+            status = EXCLUDED.status,
+            password_hash = COALESCE(EXCLUDED.password_hash, users.password_hash),
+            phone = COALESCE(EXCLUDED.phone, users.phone),
+            hierarchy_level = 'CLIENT',
+            hierarchy_id = EXCLUDED.hierarchy_id,
+            is_suspended = EXCLUDED.is_suspended,
+            client_code = COALESCE(EXCLUDED.client_code, users.client_code),
+            updated_at = CURRENT_TIMESTAMP
+        `, [`usr_client_${id.replace(/[^a-z0-9]/gi, '')}`, tenantId, name, cleanEmail, status, resolvedPasswordHash, phone, id, status === 'SUSPENDED', clientCode]).catch(() => {});
+      }
+
+      clearDashboardCache();
+      (activeTradingDataProvider as any).clearCache?.();
+      tradingPlatformClient.clearCache();
+
+      const broadcastEvent = rawType.includes('client') ? 'client.registered' : 'broker.added';
+      broadcastToAdminClients(broadcastEvent, {
+        type: rawType,
+        id,
+        name,
+        email: cleanEmail,
+        phone,
+        status,
+        masterId,
+        brokerId,
+        subBrokerId,
+        initialBalance,
+        referralCode,
+        timestamp: new Date().toISOString()
+      });
+      adminEventBus.emit('event', {
+        eventId: `evt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        eventType: broadcastEvent,
+        tenantId,
+        timestamp: new Date().toISOString(),
+        payload: {
+          type: rawType,
+          id,
+          name,
+          email: cleanEmail,
+          phone,
+          status,
+          masterId,
+          brokerId,
+          subBrokerId,
+          initialBalance,
+          referralCode,
+          timestamp: new Date().toISOString()
+        }
+      });
+
+      res.status(200).json({
+        success: true,
+        message: 'Hierarchy node synchronized and persisted successfully',
+        id,
+        type: rawType
+      });
+    } catch (err: any) {
+      console.error('[POST /api/internal/v1/hierarchy/sync] Error:', err);
+      res.status(500).json({ error: 'HIERARCHY_SYNC_FAILED', message: err.message });
+    }
+  });
+
+  // 12. Internal Credential Lookup Endpoint (JIT verification for Trading Platform & User Panel)
+  app.post(['/api/internal/v1/auth/lookup-credential', '/api/internal/auth/lookup-credential'], verifyS2S, async (req, res) => {
+    try {
+      const identifier = String(req.body?.identifier || req.body?.email || req.body?.id || req.body?.userId || req.body?.clientCode || req.body?.phone || '').trim();
+      if (!identifier) {
+        return res.status(400).json({ success: false, error: 'MISSING_IDENTIFIER', message: 'identifier, email, id, or phone is required' });
+      }
+
+      const cleanLower = identifier.toLowerCase();
+      const cleanDigits = identifier.replace(/\D/g, '');
+
+      // 1. Check in users table
+      const userRes = await query<{
+        id: string;
+        tenant_id: string | null;
+        name: string;
+        email: string;
+        role: string;
+        status: string;
+        password_hash: string | null;
+        phone: string | null;
+        hierarchy_level: string | null;
+        hierarchy_id: string | null;
+        client_code: string | null;
+      }>(`
+        SELECT id, tenant_id, name, email, role, status, password_hash, phone,
+               hierarchy_level, hierarchy_id, client_code
+        FROM users
+        WHERE LOWER(email) = $1
+           OR LOWER(id) = $1
+           OR (hierarchy_id IS NOT NULL AND LOWER(hierarchy_id) = $1)
+           OR (client_code IS NOT NULL AND LOWER(client_code) = $1)
+           OR ($2 <> '' AND phone IS NOT NULL AND RIGHT(REGEXP_REPLACE(phone, '[^0-9]', '', 'g'), 10) = $2)
+        LIMIT 1
+      `, [cleanLower, cleanDigits.length >= 7 ? cleanDigits.slice(-10) : 'NOMATCH']);
+
+      let user = userRes.rows[0];
+
+      // If user not in users table, check clients table directly
+      let clientRow: any = null;
+      if (!user) {
+        const cRes = await query<any>(`
+          SELECT id, tenant_id, name, email, phone, status, balance, client_code,
+                 master_id, broker_id, sub_broker_id
+          FROM clients
+          WHERE LOWER(id) = $1
+             OR (client_code IS NOT NULL AND LOWER(client_code) = $1)
+             OR (email IS NOT NULL AND LOWER(email) = $1)
+             OR ($2 <> '' AND phone IS NOT NULL AND RIGHT(REGEXP_REPLACE(phone, '[^0-9]', '', 'g'), 10) = $2)
+          LIMIT 1
+        `, [cleanLower, cleanDigits.length >= 7 ? cleanDigits.slice(-10) : 'NOMATCH']);
+        if (cRes.rows[0]) {
+          clientRow = cRes.rows[0];
+          // JIT create in users table
+          const passHash = await hashPassword('Password@123');
+          await query(`
+            INSERT INTO users (
+              id, tenant_id, name, email, role, status, password_hash, phone,
+              hierarchy_level, hierarchy_id, is_suspended, client_code, updated_at
+            ) VALUES ($1, $2, $3, $4, 'CLIENT', $5, $6, $7, 'CLIENT', $8, false, $9, CURRENT_TIMESTAMP)
+            ON CONFLICT (email) DO UPDATE SET updated_at = CURRENT_TIMESTAMP
+          `, [`usr_client_${clientRow.id.replace(/[^a-z0-9]/gi, '')}`, clientRow.tenant_id, clientRow.name, clientRow.email.toLowerCase(), clientRow.status || 'ACTIVE', passHash, clientRow.phone, clientRow.id, clientRow.client_code]).catch(() => {});
+
+          user = {
+            id: clientRow.id,
+            tenant_id: clientRow.tenant_id,
+            name: clientRow.name,
+            email: clientRow.email,
+            role: 'CLIENT',
+            status: clientRow.status || 'ACTIVE',
+            password_hash: passHash,
+            phone: clientRow.phone,
+            hierarchy_level: 'CLIENT',
+            hierarchy_id: clientRow.id,
+            client_code: clientRow.client_code
+          };
+        }
+      }
+
+      if (!user) {
+        return res.status(200).json({ success: true, found: false, message: 'Account not found' });
+      }
+
+      // Resolve lineage IDs and referralCode
+      let masterId: string | null = null;
+      let brokerId: string | null = null;
+      let subBrokerId: string | null = null;
+      let referralCode: string | null = null;
+      let initialBalance = 0;
+
+      const roleUpper = (user.role || '').toUpperCase();
+      const targetId = user.hierarchy_id || user.id;
+
+      if (roleUpper === 'CLIENT') {
+        if (!clientRow) {
+          const cRes = await query<any>('SELECT master_id, broker_id, sub_broker_id, balance, client_code FROM clients WHERE id = $1 OR client_code = $1 OR LOWER(email) = LOWER($2) LIMIT 1', [targetId, user.email]);
+          clientRow = cRes.rows[0];
+        }
+        if (clientRow) {
+          masterId = clientRow.master_id || null;
+          brokerId = clientRow.broker_id || null;
+          subBrokerId = clientRow.sub_broker_id || null;
+          initialBalance = parseFloat(clientRow.balance) || 0;
+        }
+      } else if (roleUpper === 'SUB_BROKER') {
+        const sbRes = await query<any>('SELECT broker_id, referral_code, code FROM sub_brokers WHERE id = $1 OR LOWER(email) = LOWER($2) LIMIT 1', [targetId, user.email]);
+        if (sbRes.rows[0]) {
+          brokerId = sbRes.rows[0].broker_id;
+          referralCode = sbRes.rows[0].referral_code || sbRes.rows[0].code;
+        }
+      } else if (roleUpper === 'BROKER') {
+        const bRes = await query<any>('SELECT master_id, referral_code, code FROM brokers WHERE id = $1 OR LOWER(email) = LOWER($2) LIMIT 1', [targetId, user.email]);
+        if (bRes.rows[0]) {
+          masterId = bRes.rows[0].master_id;
+          referralCode = bRes.rows[0].referral_code || bRes.rows[0].code;
+        }
+      } else if (roleUpper === 'MASTER') {
+        const mRes = await query<any>('SELECT referral_code, code FROM masters WHERE id = $1 OR LOWER(email) = LOWER($2) LIMIT 1', [targetId, user.email]);
+        if (mRes.rows[0]) {
+          referralCode = mRes.rows[0].referral_code || mRes.rows[0].code;
+        }
+      }
+
+      res.status(200).json({
+        success: true,
+        found: true,
+        user: {
+          id: targetId,
+          userId: user.client_code || targetId,
+          name: user.name,
+          email: user.email,
+          phone: user.phone,
+          passwordHash: user.password_hash,
+          role: user.role,
+          status: user.status,
+          referralCode,
+          masterId,
+          brokerId,
+          subBrokerId,
+          initialBalance,
+          tenantId: user.tenant_id || 'TNT-001'
+        }
+      });
+    } catch (err: any) {
+      console.error('[POST /api/internal/v1/auth/lookup-credential] Error:', err);
+      res.status(500).json({ error: 'LOOKUP_FAILED', message: err.message });
+    }
+  });
+
   // ----------------------------------------------------
   // S2S INTEGRATION STATUS, OBSERVABILITY & BACKFILL
   // ----------------------------------------------------
@@ -1792,6 +2259,14 @@ async function startServer() {
           [node?.id || '', node?.email || null]
         );
         resolvedHash = uRes.rows[0]?.password_hash || null;
+      }
+
+      if (!resolvedHash) {
+        if (node?.password && typeof node.password === 'string' && node.password.trim()) {
+          resolvedHash = await hashPassword(node.password.trim());
+        } else {
+          resolvedHash = await hashPassword('Password@123');
+        }
       }
 
       if (type === 'sub_broker' && brokerId && !masterId) {

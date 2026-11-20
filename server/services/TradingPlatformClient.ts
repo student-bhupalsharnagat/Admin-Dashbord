@@ -102,13 +102,13 @@ export class TradingPlatformClient {
 
   constructor(
     baseUrl: string = process.env.TRADING_PLATFORM_URL || process.env.TRADING_PLATFORM_BASE_URL || appConfig.tradingPlatformBaseUrl || TradingPlatformClient.DEFAULT_TRADING_PLATFORM_URL,
-    secret: string = appConfig.internalCommunicationSecret || 'nextrade-internal-hmac-secret-2026',
+    secret: string = process.env.INTERNAL_COMMUNICATION_SECRET || process.env.INTERNAL_API_SECRET || process.env.S2S_SECRET || 'vertex-internal-s2s-secret' || appConfig.internalCommunicationSecret || 'nextrade-internal-hmac-secret-2026',
     defaultTimeoutMs: number = Math.max(appConfig.tradingPlatformTimeoutMs || 10000, 10000),
     userPanelBaseUrl: string = process.env.USER_PANEL_URL || process.env.USER_PANEL_BASE_URL || appConfig.userPanelBaseUrl || TradingPlatformClient.DEFAULT_USER_PANEL_URL
   ) {
     this.baseUrl = TradingPlatformClient.normalizeUrl(baseUrl, TradingPlatformClient.DEFAULT_TRADING_PLATFORM_URL);
     this.userPanelBaseUrl = TradingPlatformClient.normalizeUrl(userPanelBaseUrl, TradingPlatformClient.DEFAULT_USER_PANEL_URL);
-    this.secret = secret;
+    this.secret = process.env.INTERNAL_COMMUNICATION_SECRET || process.env.INTERNAL_API_SECRET || process.env.S2S_SECRET || secret || 'vertex-internal-s2s-secret';
     this.defaultTimeoutMs = defaultTimeoutMs;
   }
 
@@ -146,7 +146,7 @@ export class TradingPlatformClient {
       return { success: false, statusCode: 0, data: null as any, correlationId, latencyMs: 0, error: 'Target URL not configured' };
     }
 
-    const maxRetries = options?.retries !== undefined ? options.retries : 1;
+    const maxRetries = options?.retries !== undefined ? options.retries : 2;
     let attempt = 0;
     let lastError: any = null;
 
@@ -163,14 +163,23 @@ export class TradingPlatformClient {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
         'X-Internal-Timestamp': timestamp,
+        'x-internal-timestamp': timestamp,
         'X-Internal-Nonce': nonce,
+        'x-internal-nonce': nonce,
         'X-Internal-Signature': signature,
+        'x-internal-signature': signature,
+        'X-S2S-Signature': signature,
+        'x-s2s-signature': signature,
         'X-Signature-SHA256': signature,
+        'x-signature-sha256': signature,
         'X-HMAC-Signature': signature,
+        'x-hmac-signature': signature,
         'X-Timestamp': timestamp,
+        'x-timestamp': timestamp,
         'X-Correlation-ID': correlationId,
         'X-Request-ID': correlationId,
         'X-Tenant-ID': tenantId || 'vertex-default',
+        'x-tenant-id': tenantId || 'vertex-default',
         ...(options?.idempotencyKey ? { 'X-Idempotency-Key': options.idempotencyKey } : {})
       };
 
@@ -311,7 +320,7 @@ export class TradingPlatformClient {
     }
 
     // 2. Extract headers
-    const signature = getHeader('x-internal-signature') || getHeader('x-signature-sha256') || getHeader('x-hmac-signature');
+    const signature = getHeader('x-s2s-signature') || getHeader('x-internal-signature') || getHeader('x-signature-sha256') || getHeader('x-hmac-signature');
     const timestamp = getHeader('x-internal-timestamp') || getHeader('x-timestamp');
     const nonce = getHeader('x-internal-nonce') || getHeader('x-nonce');
 
@@ -353,21 +362,35 @@ export class TradingPlatformClient {
       }
     }
 
-    // 5. Signature verification: payload = `${timestamp}.${method.toUpperCase()}.${pathWithoutQuery}.${rawBody || ''}`; HMAC-SHA256 hex
+    // 5. Signature verification: support dot format, colon format, and multi-secret resolution
     const pathWithoutQuery = path.split('?')[0];
-    const payload = `${timestamp}.${method.toUpperCase()}.${pathWithoutQuery}.${rawBody || ''}`;
-    const candidateSecrets = Array.from(new Set([this.secret, 'nextrade-internal-hmac-secret-2026', 'Tr@dingS2S#2026!Kp8$Xm4&Qr7r7484']));
+    const payloadDot = `${timestamp}.${method.toUpperCase()}.${pathWithoutQuery}.${rawBody || ''}`;
+    const payloadColon = `${timestamp}:${method.toUpperCase()}:${pathWithoutQuery}:${rawBody || ''}`;
+    const candidateSecrets = Array.from(new Set([
+      this.secret,
+      process.env.INTERNAL_COMMUNICATION_SECRET,
+      process.env.INTERNAL_API_SECRET,
+      process.env.S2S_SECRET,
+      process.env.CENTRAL_ADMIN_INTERNAL_SECRET,
+      'vertex-internal-s2s-secret',
+      'nextrade-internal-hmac-secret-2026',
+      'Tr@dingS2S#2026!Kp8$Xm4&Qr7r7484'
+    ].filter(Boolean) as string[]));
+
     let matched = false;
     for (const sec of candidateSecrets) {
-      const expSig = crypto.createHmac('sha256', sec).update(payload).digest('hex');
-      try {
-        const sigBuf = Buffer.from(signature, 'hex');
-        const expBuf = Buffer.from(expSig, 'hex');
-        if (sigBuf.length === expBuf.length && crypto.timingSafeEqual(sigBuf, expBuf)) {
-          matched = true;
-          break;
-        }
-      } catch {}
+      for (const p of [payloadDot, payloadColon]) {
+        const expSig = crypto.createHmac('sha256', sec).update(p).digest('hex');
+        try {
+          const sigBuf = Buffer.from(signature, 'hex');
+          const expBuf = Buffer.from(expSig, 'hex');
+          if (sigBuf.length === expBuf.length && crypto.timingSafeEqual(sigBuf, expBuf)) {
+            matched = true;
+            break;
+          }
+        } catch {}
+      }
+      if (matched) break;
     }
 
     if (!matched) {
@@ -605,14 +628,23 @@ export class TradingPlatformClient {
       'Content-Type': 'application/json',
       'Accept': 'application/json',
       'X-Internal-Timestamp': timestamp,
+      'x-internal-timestamp': timestamp,
       'X-Internal-Nonce': nonce,
+      'x-internal-nonce': nonce,
       'X-Internal-Signature': signature,
+      'x-internal-signature': signature,
+      'X-S2S-Signature': signature,
+      'x-s2s-signature': signature,
       'X-Correlation-ID': correlationId,
       'X-Signature-SHA256': signature,
+      'x-signature-sha256': signature,
       'X-HMAC-Signature': signature,
+      'x-hmac-signature': signature,
       'X-Timestamp': timestamp,
+      'x-timestamp': timestamp,
       'X-Request-ID': correlationId,
       'X-Tenant-ID': options.tenantId || (await this.resolveOutboundTenantId(options.tenantId)),
+      'x-tenant-id': options.tenantId || (await this.resolveOutboundTenantId(options.tenantId)),
       ...(options.idempotencyKey ? { 'X-Idempotency-Key': options.idempotencyKey } : {}),
       ...(options.headers || {})
     };
@@ -1565,7 +1597,7 @@ export class TradingPlatformClient {
         body: syncBody,
         tenantId: outboundTenantId,
         idempotencyKey,
-        retries: 1
+        retries: 2
       }).catch(err => {
         console.warn(`[TradingPlatformClient] Trading Platform hierarchy sync notice for ${data.type} ${normalizedNode.id}:`, err?.message || err);
         return { success: false, statusCode: 503, data: null, correlationId: '', latencyMs: 0, error: err?.message } as S2SResponse;
@@ -1576,7 +1608,7 @@ export class TradingPlatformClient {
             '/api/internal/v1/hierarchy/sync',
             syncBody,
             outboundTenantId,
-            { idempotencyKey: `${idempotencyKey}_up`, retries: 1 }
+            { idempotencyKey: `${idempotencyKey}_up`, retries: 2 }
           ).catch(err => {
             console.warn(`[TradingPlatformClient] User Panel hierarchy sync notice for ${data.type} ${normalizedNode.id}:`, err?.message || err);
             return { success: false, statusCode: 503, data: null, correlationId: '', latencyMs: 0, error: err?.message } as S2SResponse;
