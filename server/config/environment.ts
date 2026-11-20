@@ -18,14 +18,15 @@ export interface AppConfig {
   port: number;
 }
 
+export const DEFAULT_TRADING_PLATFORM_URL = 'https://trading-platform-2t6r.onrender.com';
+export const DEFAULT_USER_PANEL_URL = 'https://user-panel-dashbord-ofrt.onrender.com';
+
 export function validateAndLoadConfig(): AppConfig {
   const isProduction = process.env.NODE_ENV === 'production';
   const isTest = process.env.NODE_ENV === 'test';
 
   const jwtSecret = process.env.JWT_SECRET || 'Jt9#vQ7!mX2akL8SzP4&nR6*fhgjg8eerrnm';
   const internalSecret = process.env.INTERNAL_COMMUNICATION_SECRET || process.env.INTERNAL_API_SECRET || process.env.CENTRAL_ADMIN_INTERNAL_SECRET || 'nextrade-internal-hmac-secret-2026';
-  const DEFAULT_TRADING_PLATFORM_URL = 'https://trading-platform-2t6r.onrender.com';
-  const DEFAULT_USER_PANEL_URL = 'https://user-panel-dashbord-ofrt.onrender.com';
 
   const rawTradingPlatformUrl = process.env.TRADING_PLATFORM_URL || process.env.TRADING_PLATFORM_BASE_URL || DEFAULT_TRADING_PLATFORM_URL;
   const tradingPlatformBaseUrl = (rawTradingPlatformUrl.trim() || DEFAULT_TRADING_PLATFORM_URL).replace(/\/+$/, '');

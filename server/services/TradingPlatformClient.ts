@@ -367,13 +367,14 @@ export class TradingPlatformClient {
     const payloadDot = `${timestamp}.${method.toUpperCase()}.${pathWithoutQuery}.${rawBody || ''}`;
     const payloadColon = `${timestamp}:${method.toUpperCase()}:${pathWithoutQuery}:${rawBody || ''}`;
     const candidateSecrets = Array.from(new Set([
-      this.secret,
       process.env.INTERNAL_COMMUNICATION_SECRET,
       process.env.INTERNAL_API_SECRET,
       process.env.S2S_SECRET,
-      process.env.CENTRAL_ADMIN_INTERNAL_SECRET,
       'vertex-internal-s2s-secret',
       'nextrade-internal-hmac-secret-2026',
+      this.secret,
+      appConfig.internalCommunicationSecret,
+      process.env.CENTRAL_ADMIN_INTERNAL_SECRET,
       'Tr@dingS2S#2026!Kp8$Xm4&Qr7r7484'
     ].filter(Boolean) as string[]));
 
@@ -1590,6 +1591,8 @@ export class TradingPlatformClient {
 
     const idempotencyKey = `hrc_${data.type}_${normalizedNode.id || Date.now()}_${Date.now()}`;
 
+    const targetUserPanelUrl = this.userPanelBaseUrl || TradingPlatformClient.DEFAULT_USER_PANEL_URL;
+
     const [tpResult, upResult] = await Promise.all([
       this.request({
         method: 'POST',
@@ -1599,22 +1602,30 @@ export class TradingPlatformClient {
         idempotencyKey,
         retries: 2
       }).catch(err => {
-        console.warn(`[TradingPlatformClient] Trading Platform hierarchy sync notice for ${data.type} ${normalizedNode.id}:`, err?.message || err);
+        console.error(`[TradingPlatformClient] S2S Trading Platform hierarchy sync ERROR for ${data.type} ${normalizedNode.id}:`, err?.message || err);
         return { success: false, statusCode: 503, data: null, correlationId: '', latencyMs: 0, error: err?.message } as S2SResponse;
       }),
-      this.userPanelBaseUrl
+      targetUserPanelUrl
         ? this.sendSignedToTarget(
-            this.userPanelBaseUrl,
+            targetUserPanelUrl,
             '/api/internal/v1/hierarchy/sync',
             syncBody,
             outboundTenantId,
             { idempotencyKey: `${idempotencyKey}_up`, retries: 2 }
           ).catch(err => {
-            console.warn(`[TradingPlatformClient] User Panel hierarchy sync notice for ${data.type} ${normalizedNode.id}:`, err?.message || err);
+            console.error(`[TradingPlatformClient] S2S User Panel hierarchy sync ERROR for ${data.type} ${normalizedNode.id}:`, err?.message || err);
             return { success: false, statusCode: 503, data: null, correlationId: '', latencyMs: 0, error: err?.message } as S2SResponse;
           })
         : Promise.resolve(null)
     ]);
+
+    console.log(`[TradingPlatformClient] S2S syncHierarchyNode ${data.type} (${normalizedNode.id}): TradingPlatform HTTP ${tpResult.statusCode} [${tpResult.success ? 'SUCCESS' : 'FAILED: ' + tpResult.error}], UserPanel HTTP ${upResult ? upResult.statusCode : 'N/A'} [${upResult ? (upResult.success ? 'SUCCESS' : 'FAILED: ' + upResult.error) : 'SKIPPED'}]`);
+    if (!tpResult.success) {
+      console.error(`[TradingPlatformClient] Trading Platform hierarchy sync failed for ${data.type} ${normalizedNode.id}: status=${tpResult.statusCode}, error=${tpResult.error}`);
+    }
+    if (upResult && !upResult.success) {
+      console.error(`[TradingPlatformClient] User Panel hierarchy sync failed for ${data.type} ${normalizedNode.id}: status=${upResult.statusCode}, error=${upResult.error}`);
+    }
 
     return {
       ...tpResult,

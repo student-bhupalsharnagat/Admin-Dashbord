@@ -26,7 +26,9 @@ import {
   ExternalLink,
   Key,
   Trash2,
-  Power
+  Power,
+  Network,
+  ArrowRight
 } from 'lucide-react';
 import { Master, Broker, SubBroker, Client, Tenant } from '../types';
 import { ClientDetailView } from '../components/clients/ClientDetailView';
@@ -416,6 +418,8 @@ const normalizeMaster = (m: any) => {
     clients: typeof m.clients === 'number' ? m.clients : (m.clients_count ?? 0),
     turnover: m.turnover || '₹0',
     commission: m.commission || m.commission_earned || '₹0',
+    commissionShare: m.commissionShare !== undefined ? Number(m.commissionShare) : (m.commission_share !== undefined ? Number(m.commission_share) : (parseFloat(String(m.commission || '').replace(/[^0-9.]/g, '')) || 0)),
+    commission_share: m.commission_share !== undefined ? Number(m.commission_share) : (m.commissionShare !== undefined ? Number(m.commissionShare) : (parseFloat(String(m.commission || '').replace(/[^0-9.]/g, '')) || 0)),
     status: (m.status || 'ACTIVE').toUpperCase(),
     created: m.created || m.created_at || m.createdDate || new Date().toISOString().split('T')[0],
     region: m.region || 'North India',
@@ -443,6 +447,8 @@ const normalizeBroker = (b: any) => {
     clients: typeof b.clients === 'number' ? b.clients : (b.clients_count ?? 0),
     turnover: b.turnover || '₹0',
     commission: b.commission || b.commission_earned || '₹0',
+    commissionShare: b.commissionShare !== undefined ? Number(b.commissionShare) : (b.commission_share !== undefined ? Number(b.commission_share) : (parseFloat(String(b.commission || '').replace(/[^0-9.]/g, '')) || 0)),
+    commission_share: b.commission_share !== undefined ? Number(b.commission_share) : (b.commissionShare !== undefined ? Number(b.commissionShare) : (parseFloat(String(b.commission || '').replace(/[^0-9.]/g, '')) || 0)),
     status: (b.status || 'ACTIVE').toUpperCase(),
     created: b.created || b.created_at || b.createdDate || new Date().toISOString().split('T')[0],
     phone: b.phone || '+91 98000 00000',
@@ -463,10 +469,14 @@ const normalizeSubBroker = (sb: any) => {
     parentBroker: sb.parentBroker || sb.brokerName || sb.broker_name || sb.parent_broker_name || 'Broker Admin',
     brokerId: sb.brokerId || sb.broker_id,
     broker_id: sb.brokerId || sb.broker_id,
+    masterId: sb.masterId || sb.master_id,
+    master_id: sb.masterId || sb.master_id,
     email: sb.email || 'subbroker@tradematrix.io',
     clients: typeof sb.clients === 'number' ? sb.clients : (sb.clients_count ?? 0),
     turnover: sb.turnover || '₹0',
     commission: sb.commission || sb.commission_earned || '₹0',
+    commissionShare: sb.commissionShare !== undefined ? Number(sb.commissionShare) : (sb.commission_share !== undefined ? Number(sb.commission_share) : (parseFloat(String(sb.commission || '').replace(/[^0-9.]/g, '')) || 0)),
+    commission_share: sb.commission_share !== undefined ? Number(sb.commission_share) : (sb.commissionShare !== undefined ? Number(sb.commissionShare) : (parseFloat(String(sb.commission || '').replace(/[^0-9.]/g, '')) || 0)),
     status: (sb.status || 'ACTIVE').toUpperCase(),
     created: sb.created || sb.created_at || sb.createdDate || new Date().toISOString().split('T')[0],
     phone: sb.phone || '+91 98000 00000',
@@ -623,12 +633,17 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
   // Interactive Modals State
   const [selectedEntity, setSelectedEntity] = useState<any | null>(null);
   const [modalType, setModalType] = useState<
-    'view' | 'edit' | 'create' | 'link' | 'stats' | 'wallet' | 'kyc' | 'reset-password' | 'delete' | 'assign-hierarchy' | null
+    'view' | 'edit' | 'create' | 'link' | 'stats' | 'wallet' | 'kyc' | 'reset-password' | 'delete' | 'assign-hierarchy' | 'reassign-master' | 'reassign-broker' | null
   >(null);
 
   // Delete Entity Modal State (top-level hooks)
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState('');
+
+  // Reassignment Modal State (top-level hooks)
+  const [isReassigning, setIsReassigning] = useState(false);
+  const [reassignTargetId, setReassignTargetId] = useState('');
+  const [reassignError, setReassignError] = useState('');
 
   // Reset Password Modal State (top-level hooks)
   const [resetPasswordValue, setResetPasswordValue] = useState('');
@@ -1099,38 +1114,131 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
     e.preventDefault();
     if (!selectedEntity) return;
 
+    const commShare = formData.commissionShare !== undefined && formData.commissionShare !== ''
+      ? Number(formData.commissionShare)
+      : (formData.commission_share !== undefined && formData.commission_share !== '' ? Number(formData.commission_share) : undefined);
+
+    const payload = {
+      ...formData,
+      ...(commShare !== undefined ? {
+        commissionShare: commShare,
+        commission_share: commShare,
+        commission: `${commShare}%`
+      } : {})
+    };
+
     try {
-      await fetch(`/api/admin/${level}/${selectedEntity.id}`, {
+      const res = await fetch(`/api/admin/${level}/${selectedEntity.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData)
+        body: JSON.stringify(payload)
       });
-    } catch {}
+      const data = res.ok ? await res.json().catch(() => payload) : payload;
 
-    if (level === 'masters') {
-      setMastersList(prev =>
-        prev.map(m => (m.id === selectedEntity.id ? { ...m, ...formData } : m))
-      );
-      notify(`Updated master ${formData.name || selectedEntity.name}`, 'success');
-    } else if (level === 'brokers') {
-      setBrokersList(prev =>
-        prev.map(b => (b.id === selectedEntity.id ? { ...b, ...formData } : b))
-      );
-      notify(`Updated broker ${formData.name || selectedEntity.name}`, 'success');
-    } else if (level === 'sub-brokers') {
-      setSubBrokersList(prev =>
-        prev.map(s => (s.id === selectedEntity.id ? { ...s, ...formData } : s))
-      );
-      notify(`Updated sub-broker ${formData.name || selectedEntity.name}`, 'success');
-    } else if (level === 'clients') {
-      setClientsList(prev =>
-        prev.map(c => (c.id === selectedEntity.id ? { ...c, ...formData } : c))
-      );
-      notify(`Updated client ${formData.name || selectedEntity.name}`, 'success');
+      if (level === 'masters') {
+        setMastersList(prev =>
+          prev.map(m => (m.id === selectedEntity.id ? { ...m, ...data, ...payload } : m))
+        );
+        notify(`Updated master ${data.name || selectedEntity.name}`, 'success');
+      } else if (level === 'brokers') {
+        setBrokersList(prev =>
+          prev.map(b => (b.id === selectedEntity.id ? { ...b, ...data, ...payload } : b))
+        );
+        notify(`Updated broker ${data.name || selectedEntity.name}`, 'success');
+      } else if (level === 'sub-brokers') {
+        setSubBrokersList(prev =>
+          prev.map(s => (s.id === selectedEntity.id ? { ...s, ...data, ...payload } : s))
+        );
+        notify(`Updated sub-broker ${data.name || selectedEntity.name}`, 'success');
+      } else if (level === 'clients') {
+        setClientsList(prev =>
+          prev.map(c => (c.id === selectedEntity.id ? { ...c, ...data, ...payload } : c))
+        );
+        notify(`Updated client ${data.name || selectedEntity.name}`, 'success');
+      }
+      onRefresh?.();
+    } catch {
+      notify(`Failed to update ${level} entity`, 'warning');
     }
 
     setModalType(null);
     setSelectedEntity(null);
+  };
+
+  const handleExecuteReassignMaster = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedEntity || !reassignTargetId) return;
+    setIsReassigning(true);
+    setReassignError('');
+    try {
+      const res = await fetch(`/api/admin/brokers/${selectedEntity.id}/reassign`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ masterId: reassignTargetId })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || data.error || 'Failed to reassign broker');
+
+      const targetMaster = mastersList.find(m => m.id === reassignTargetId);
+      const masterName = targetMaster?.name || reassignTargetId;
+      setBrokersList(prev =>
+        prev.map(b => b.id === selectedEntity.id ? {
+          ...b,
+          master_id: reassignTargetId,
+          masterId: reassignTargetId,
+          master_name: masterName,
+          masterName: masterName,
+          parentMaster: masterName
+        } : b)
+      );
+      notify(`Broker ${selectedEntity.name} reassigned to Master ${masterName}`, 'success');
+      setModalType(null);
+      setSelectedEntity(null);
+      onRefresh?.();
+    } catch (err: any) {
+      setReassignError(err.message || 'Error reassigning broker');
+      notify(err.message || 'Error reassigning broker', 'warning');
+    } finally {
+      setIsReassigning(false);
+    }
+  };
+
+  const handleExecuteReassignBroker = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedEntity || !reassignTargetId) return;
+    setIsReassigning(true);
+    setReassignError('');
+    try {
+      const res = await fetch(`/api/admin/sub-brokers/${selectedEntity.id}/reassign`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ brokerId: reassignTargetId })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || data.error || 'Failed to reassign sub-broker');
+
+      const targetBroker = brokersList.find(b => b.id === reassignTargetId);
+      const brokerName = targetBroker?.name || reassignTargetId;
+      setSubBrokersList(prev =>
+        prev.map(sb => sb.id === selectedEntity.id ? {
+          ...sb,
+          broker_id: reassignTargetId,
+          brokerId: reassignTargetId,
+          broker_name: brokerName,
+          brokerName: brokerName,
+          parentBroker: brokerName
+        } : sb)
+      );
+      notify(`Sub-Broker ${selectedEntity.name} reassigned to Broker ${brokerName}`, 'success');
+      setModalType(null);
+      setSelectedEntity(null);
+      onRefresh?.();
+    } catch (err: any) {
+      setReassignError(err.message || 'Error reassigning sub-broker');
+      notify(err.message || 'Error reassigning sub-broker', 'warning');
+    } finally {
+      setIsReassigning(false);
+    }
   };
 
   // Quick Action Buttons
@@ -1143,8 +1251,30 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
       }
       setModalType('view');
     } else if (action === 'edit') {
-      setFormData({ ...entity });
+      const commShare = entity.commissionShare !== undefined
+        ? entity.commissionShare
+        : (entity.commission_share !== undefined
+          ? entity.commission_share
+          : (parseFloat(String(entity.commission || '').replace(/[^0-9.]/g, '')) || 0));
+
+      setFormData({
+        ...entity,
+        commissionShare: commShare,
+        commission_share: commShare,
+        masterId: entity.masterId || entity.master_id || '',
+        brokerId: entity.brokerId || entity.broker_id || ''
+      });
       setModalType('edit');
+    } else if (action === 'reassign-master') {
+      setSelectedEntity(entity);
+      setReassignTargetId(entity.masterId || entity.master_id || (mastersList[0]?.id || ''));
+      setReassignError('');
+      setModalType('reassign-master');
+    } else if (action === 'reassign-broker') {
+      setSelectedEntity(entity);
+      setReassignTargetId(entity.brokerId || entity.broker_id || (brokersList[0]?.id || ''));
+      setReassignError('');
+      setModalType('reassign-broker');
     } else if (action === 'link') {
       setModalType('link');
     } else if (action === 'stats') {
@@ -1655,6 +1785,13 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
                           <Pencil size={13} />
                         </button>
                         <button
+                          onClick={() => handleQuickAction('reassign-master', broker)}
+                          title="Reassign Master"
+                          className="hover:text-purple-400 transition-colors p-1 rounded hover:bg-slate-800/50 cursor-pointer"
+                        >
+                          <Network size={13} />
+                        </button>
+                        <button
                           onClick={() => handleQuickAction('userplus', broker)}
                           title="Add Sub-Broker"
                           className="hover:text-emerald-400 transition-colors p-1 rounded hover:bg-slate-800/50 cursor-pointer"
@@ -1802,6 +1939,13 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
                           className="hover:text-blue-400 transition-colors p-1 rounded hover:bg-slate-800/50 cursor-pointer"
                         >
                           <Pencil size={13} />
+                        </button>
+                        <button
+                          onClick={() => handleQuickAction('reassign-broker', sub)}
+                          title="Reassign Broker"
+                          className="hover:text-purple-400 transition-colors p-1 rounded hover:bg-slate-800/50 cursor-pointer"
+                        >
+                          <Network size={13} />
                         </button>
                         {canResetPassword && (
                           <button
@@ -2587,6 +2731,87 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
                 />
               </div>
 
+              {(level === 'masters' || level === 'brokers' || level === 'sub-brokers') && (
+                <div>
+                  <label className="block text-slate-400 text-[11px] mb-1 font-medium">
+                    Commission Share (%)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.5"
+                    value={formData.commissionShare !== undefined ? formData.commissionShare : (formData.commission_share !== undefined ? formData.commission_share : 0)}
+                    onChange={e => {
+                      const val = e.target.value === '' ? '' : parseFloat(e.target.value);
+                      setFormData({
+                        ...formData,
+                        commissionShare: val,
+                        commission_share: val,
+                        commission: `${val}%`
+                      });
+                    }}
+                    className="w-full px-3 py-1.5 bg-[#080e1c] border border-[#152342] rounded-lg text-slate-200 focus:outline-none focus:border-blue-500 font-mono"
+                  />
+                </div>
+              )}
+
+              {level === 'brokers' && (
+                <div>
+                  <label className="block text-slate-400 text-[11px] mb-1 font-medium">Parent Master</label>
+                  <select
+                    value={formData.masterId || formData.master_id || ''}
+                    onChange={e => {
+                      const m = mastersList.find(item => item.id === e.target.value);
+                      setFormData({
+                        ...formData,
+                        masterId: e.target.value,
+                        master_id: e.target.value,
+                        masterName: m?.name || formData.masterName,
+                        master_name: m?.name || formData.master_name,
+                        parentMaster: m?.name || formData.parentMaster
+                      });
+                    }}
+                    className="w-full px-2.5 py-1.5 bg-[#080e1c] border border-[#152342] rounded-lg text-slate-200 focus:outline-none focus:border-blue-500"
+                  >
+                    <option value="">-- Select Master --</option>
+                    {mastersList.map(m => (
+                      <option key={m.id} value={m.id}>
+                        {m.name} ({m.id})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {level === 'sub-brokers' && (
+                <div>
+                  <label className="block text-slate-400 text-[11px] mb-1 font-medium">Parent Broker</label>
+                  <select
+                    value={formData.brokerId || formData.broker_id || ''}
+                    onChange={e => {
+                      const b = brokersList.find(item => item.id === e.target.value);
+                      setFormData({
+                        ...formData,
+                        brokerId: e.target.value,
+                        broker_id: e.target.value,
+                        brokerName: b?.name || formData.brokerName,
+                        broker_name: b?.name || formData.broker_name,
+                        parentBroker: b?.name || formData.parentBroker
+                      });
+                    }}
+                    className="w-full px-2.5 py-1.5 bg-[#080e1c] border border-[#152342] rounded-lg text-slate-200 focus:outline-none focus:border-blue-500"
+                  >
+                    <option value="">-- Select Broker --</option>
+                    {brokersList.map(b => (
+                      <option key={b.id} value={b.id}>
+                        {b.name} ({b.id})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="block text-slate-400 text-[11px] mb-1 font-medium">Status</label>
@@ -3159,6 +3384,190 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
           }}
           onNotify={notify}
         />
+      )}
+
+      {/* REASSIGN MASTER MODAL */}
+      {modalType === 'reassign-master' && selectedEntity && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-xs">
+          <div className="bg-[#0b1426] border border-[#172647] rounded-2xl w-full max-w-md overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between p-4 border-b border-[#142340]">
+              <div className="flex items-center gap-2">
+                <Network size={16} className="text-purple-400" />
+                <h3 className="font-bold text-white text-sm">
+                  Reassign Master — {selectedEntity.name}
+                </h3>
+              </div>
+              <button
+                onClick={() => setModalType(null)}
+                className="p-1 rounded text-slate-400 hover:text-white hover:bg-[#121f3b] transition-colors cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <form onSubmit={handleExecuteReassignMaster} className="p-4 space-y-4 text-xs">
+              {reassignError && (
+                <div className="p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-300">
+                  {reassignError}
+                </div>
+              )}
+
+              <div className="p-3 rounded-lg bg-[#070e1b] border border-[#121d33] flex items-center justify-between">
+                <div>
+                  <div className="text-[10px] text-slate-400">Current Parent Master</div>
+                  <div className="font-semibold text-slate-200">
+                    {selectedEntity.parentMaster || selectedEntity.masterName || selectedEntity.master_name || selectedEntity.master || 'Unassigned'}
+                  </div>
+                </div>
+                <span className="font-mono text-slate-400 text-[11px]">{selectedEntity.id}</span>
+              </div>
+
+              <div>
+                <label className="block text-slate-400 text-[11px] mb-1.5 font-medium">
+                  Select New Parent Master
+                </label>
+                <select
+                  value={reassignTargetId}
+                  onChange={e => setReassignTargetId(e.target.value)}
+                  className="w-full px-3 py-2 bg-[#080e1c] border border-[#152342] rounded-lg text-slate-200 focus:outline-none focus:border-blue-500"
+                >
+                  {mastersList.map(m => (
+                    <option key={m.id} value={m.id}>
+                      {m.name} ({m.id})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="p-3 rounded-lg bg-purple-500/5 border border-purple-500/20 text-slate-300 text-[11px] space-y-1">
+                <div className="font-semibold text-purple-400 flex items-center gap-1.5">
+                  <Network size={13} />
+                  <span>Downline Cascade & S2S Sync Notice</span>
+                </div>
+                <p className="text-slate-400 text-[10px] leading-relaxed">
+                  Moving this Broker will immediately update its master reference in PostgreSQL, cascade the new master to all child sub-brokers and clients, and dispatch S2S UPSERT sync to Trading Platform and User Panel.
+                </p>
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-2 border-t border-[#142340]">
+                <button
+                  type="button"
+                  onClick={() => setModalType(null)}
+                  disabled={isReassigning}
+                  className="px-3.5 py-1.5 rounded-lg bg-[#14213d] hover:bg-[#1a2c52] text-slate-300 font-semibold cursor-pointer disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isReassigning || !reassignTargetId}
+                  className="px-4 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-semibold cursor-pointer flex items-center gap-1.5 disabled:opacity-50 shadow-md shadow-purple-600/20"
+                >
+                  {isReassigning ? (
+                    <span>Reassigning...</span>
+                  ) : (
+                    <>
+                      <Check size={13} />
+                      <span>Confirm Reassignment</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* REASSIGN BROKER MODAL */}
+      {modalType === 'reassign-broker' && selectedEntity && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-xs">
+          <div className="bg-[#0b1426] border border-[#172647] rounded-2xl w-full max-w-md overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between p-4 border-b border-[#142340]">
+              <div className="flex items-center gap-2">
+                <Network size={16} className="text-purple-400" />
+                <h3 className="font-bold text-white text-sm">
+                  Reassign Broker — {selectedEntity.name}
+                </h3>
+              </div>
+              <button
+                onClick={() => setModalType(null)}
+                className="p-1 rounded text-slate-400 hover:text-white hover:bg-[#121f3b] transition-colors cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <form onSubmit={handleExecuteReassignBroker} className="p-4 space-y-4 text-xs">
+              {reassignError && (
+                <div className="p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-300">
+                  {reassignError}
+                </div>
+              )}
+
+              <div className="p-3 rounded-lg bg-[#070e1b] border border-[#121d33] flex items-center justify-between">
+                <div>
+                  <div className="text-[10px] text-slate-400">Current Parent Broker</div>
+                  <div className="font-semibold text-slate-200">
+                    {selectedEntity.parentBroker || selectedEntity.brokerName || selectedEntity.broker_name || 'Unassigned'}
+                  </div>
+                </div>
+                <span className="font-mono text-slate-400 text-[11px]">{selectedEntity.id}</span>
+              </div>
+
+              <div>
+                <label className="block text-slate-400 text-[11px] mb-1.5 font-medium">
+                  Select New Parent Broker
+                </label>
+                <select
+                  value={reassignTargetId}
+                  onChange={e => setReassignTargetId(e.target.value)}
+                  className="w-full px-3 py-2 bg-[#080e1c] border border-[#152342] rounded-lg text-slate-200 focus:outline-none focus:border-blue-500"
+                >
+                  {brokersList.map(b => (
+                    <option key={b.id} value={b.id}>
+                      {b.name} ({b.id}) {b.master_name ? `under ${b.master_name}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="p-3 rounded-lg bg-purple-500/5 border border-purple-500/20 text-slate-300 text-[11px] space-y-1">
+                <div className="font-semibold text-purple-400 flex items-center gap-1.5">
+                  <Network size={13} />
+                  <span>Downline Cascade & S2S Sync Notice</span>
+                </div>
+                <p className="text-slate-400 text-[10px] leading-relaxed">
+                  Moving this Sub-Broker will update its broker and master reference in PostgreSQL, cascade the new lineage to all child clients, and dispatch S2S UPSERT sync to Trading Platform and User Panel.
+                </p>
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-2 border-t border-[#142340]">
+                <button
+                  type="button"
+                  onClick={() => setModalType(null)}
+                  disabled={isReassigning}
+                  className="px-3.5 py-1.5 rounded-lg bg-[#14213d] hover:bg-[#1a2c52] text-slate-300 font-semibold cursor-pointer disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isReassigning || !reassignTargetId}
+                  className="px-4 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-semibold cursor-pointer flex items-center gap-1.5 disabled:opacity-50 shadow-md shadow-purple-600/20"
+                >
+                  {isReassigning ? (
+                    <span>Reassigning...</span>
+                  ) : (
+                    <>
+                      <Check size={13} />
+                      <span>Confirm Reassignment</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -286,14 +286,19 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       // Hierarchy optional columns
       `ALTER TABLE masters ADD COLUMN IF NOT EXISTS phone VARCHAR(64)`,
       `ALTER TABLE masters ADD COLUMN IF NOT EXISTS commission_share NUMERIC(8, 2) DEFAULT 40.00`,
+      `ALTER TABLE masters ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255)`,
       `ALTER TABLE brokers ADD COLUMN IF NOT EXISTS master_id VARCHAR(64)`,
       `ALTER TABLE brokers ADD COLUMN IF NOT EXISTS master_name VARCHAR(255)`,
       `ALTER TABLE brokers ADD COLUMN IF NOT EXISTS phone VARCHAR(64)`,
       `ALTER TABLE brokers ADD COLUMN IF NOT EXISTS commission_share NUMERIC(8, 2) DEFAULT 40.00`,
+      `ALTER TABLE brokers ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255)`,
       `ALTER TABLE sub_brokers ADD COLUMN IF NOT EXISTS broker_id VARCHAR(64)`,
       `ALTER TABLE sub_brokers ADD COLUMN IF NOT EXISTS broker_name VARCHAR(255)`,
+      `ALTER TABLE sub_brokers ADD COLUMN IF NOT EXISTS master_id VARCHAR(64)`,
       `ALTER TABLE sub_brokers ADD COLUMN IF NOT EXISTS phone VARCHAR(64)`,
       `ALTER TABLE sub_brokers ADD COLUMN IF NOT EXISTS commission_share NUMERIC(8, 2) DEFAULT 20.00`,
+      `ALTER TABLE sub_brokers ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255)`,
+      `ALTER TABLE clients ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255)`,
       `ALTER TABLE clients ADD COLUMN IF NOT EXISTS sub_broker_id VARCHAR(64)`,
       `ALTER TABLE clients ADD COLUMN IF NOT EXISTS sub_broker_name VARCHAR(255)`,
       `ALTER TABLE clients ADD COLUMN IF NOT EXISTS broker_id VARCHAR(64)`,
@@ -1169,6 +1174,9 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
 
     const list: Master[] = res.rows.map(r => {
       const refCode = r.referral_code || generateReferralCode('MST', r.id);
+      const commShare = r.commission_share !== null && r.commission_share !== undefined
+        ? Number(r.commission_share)
+        : (parseFloat(String(r.commission || '').replace(/[^0-9.]/g, '')) || 0);
       return {
         id: r.id,
         tenant_id: r.tenant_id,
@@ -1184,7 +1192,10 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         brokers_count: r.brokers_count || 0,
         clients_count: r.clients_count || 0,
         turnover: r.turnover || '₹0',
-        commission_earned: r.commission || '₹0',
+        commission: r.commission || `${commShare}%`,
+        commission_earned: r.commission || `${commShare}%`,
+        commissionShare: commShare,
+        commission_share: commShare,
         region: 'North India',
         created_at: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : new Date().toISOString().split('T')[0]
       };
@@ -1279,8 +1290,14 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     if (data.email) { params.push(data.email); fields.push(`email = $${params.length}`); }
     if (data.phone) { params.push(data.phone); fields.push(`phone = $${params.length}`); }
     if (data.status) { params.push(data.status); fields.push(`status = $${params.length}`); }
-    const comm = (data as any).commissionShare || data.commission || (data as any).commission_earned;
-    if (comm !== undefined) { params.push(String(comm)); fields.push(`commission = $${params.length}`); }
+    const comm = (data as any).commissionShare ?? (data as any).commission_share ?? data.commission ?? (data as any).commission_earned;
+    if (comm !== undefined) {
+      const numComm = Math.min(100, Math.max(0, parseFloat(String(comm).replace(/[^0-9.]/g, '')) || 0));
+      params.push(String(comm).includes('%') ? String(comm) : `${numComm}%`);
+      fields.push(`commission = $${params.length}`);
+      params.push(numComm);
+      fields.push(`commission_share = $${params.length}`);
+    }
 
     if (fields.length > 0) {
       params.push(id);
@@ -1383,6 +1400,9 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
 
     const list: Broker[] = res.rows.map(r => {
       const refCode = r.referral_code || generateReferralCode('BRK', r.id);
+      const commShare = r.commission_share !== null && r.commission_share !== undefined
+        ? Number(r.commission_share)
+        : (parseFloat(String(r.commission || '').replace(/[^0-9.]/g, '')) || 0);
       return {
         id: r.id,
         master_id: r.master_id,
@@ -1404,7 +1424,10 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         sub_brokers_count: r.sub_brokers_count || 0,
         clients_count: r.clients_count || 0,
         turnover: r.turnover || '₹0',
-        commission_earned: r.commission || '₹0',
+        commission: r.commission || `${commShare}%`,
+        commission_earned: r.commission || `${commShare}%`,
+        commissionShare: commShare,
+        commission_share: commShare,
         created_at: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : new Date().toISOString().split('T')[0]
       };
     });
@@ -1549,8 +1572,14 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       const mName = (data as any).master_name || (data as any).masterName;
       if (mName) { params.push(mName); fields.push(`master_name = $${params.length}`); }
     }
-    const comm = (data as any).commissionShare || data.commission || (data as any).commission_earned;
-    if (comm !== undefined) { params.push(String(comm)); fields.push(`commission = $${params.length}`); }
+    const comm = (data as any).commissionShare ?? (data as any).commission_share ?? data.commission ?? (data as any).commission_earned;
+    if (comm !== undefined) {
+      const numComm = Math.min(100, Math.max(0, parseFloat(String(comm).replace(/[^0-9.]/g, '')) || 0));
+      params.push(String(comm).includes('%') ? String(comm) : `${numComm}%`);
+      fields.push(`commission = $${params.length}`);
+      params.push(numComm);
+      fields.push(`commission_share = $${params.length}`);
+    }
 
     if (fields.length > 0) {
       params.push(id);
@@ -1653,6 +1682,9 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
 
     const list: SubBroker[] = res.rows.map(r => {
       const refCode = r.referral_code || generateReferralCode('SUB', r.id);
+      const commShare = r.commission_share !== null && r.commission_share !== undefined
+        ? Number(r.commission_share)
+        : (parseFloat(String(r.commission || '').replace(/[^0-9.]/g, '')) || 0);
       return {
         id: r.id,
         broker_id: r.broker_id,
@@ -1660,6 +1692,8 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         broker_name: r.parent_broker_name || r.broker_name || 'Broker Admin',
         brokerName: r.parent_broker_name || r.broker_name || 'Broker Admin',
         parentBroker: r.parent_broker_name || r.broker_name || 'Broker Admin',
+        master_id: r.master_id,
+        masterId: r.master_id,
         tenant_id: r.tenant_id,
         tenant_name: r.tenant_name || 'Alpha Prime Capital',
         name: r.name,
@@ -1671,7 +1705,10 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         status: r.status as 'ACTIVE' | 'SUSPENDED',
         clients_count: r.clients_count || 0,
         turnover: r.turnover || '₹0',
-        commission_earned: r.commission || '₹0',
+        commission: r.commission || `${commShare}%`,
+        commission_earned: r.commission || `${commShare}%`,
+        commissionShare: commShare,
+        commission_share: commShare,
         created_at: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : new Date().toISOString().split('T')[0]
       };
     });
@@ -1810,8 +1847,18 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       const bName = (data as any).broker_name || (data as any).brokerName;
       if (bName) { params.push(bName); fields.push(`broker_name = $${params.length}`); }
     }
-    const comm = (data as any).commissionShare || data.commission || (data as any).commission_earned;
-    if (comm !== undefined) { params.push(String(comm)); fields.push(`commission = $${params.length}`); }
+    const masterId = (data as any).master_id || (data as any).masterId;
+    if (masterId) {
+      params.push(masterId); fields.push(`master_id = $${params.length}`);
+    }
+    const comm = (data as any).commissionShare ?? (data as any).commission_share ?? data.commission ?? (data as any).commission_earned;
+    if (comm !== undefined) {
+      const numComm = Math.min(100, Math.max(0, parseFloat(String(comm).replace(/[^0-9.]/g, '')) || 0));
+      params.push(String(comm).includes('%') ? String(comm) : `${numComm}%`);
+      fields.push(`commission = $${params.length}`);
+      params.push(numComm);
+      fields.push(`commission_share = $${params.length}`);
+    }
 
     if (fields.length > 0) {
       params.push(id);

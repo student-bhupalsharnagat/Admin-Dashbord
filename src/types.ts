@@ -100,6 +100,8 @@ export interface Master {
   turnover: string;
   commission?: string;
   commission_earned: string;
+  commissionShare?: number;
+  commission_share?: number;
   status: EntityStatus;
   region: string;
   created_at: string;
@@ -109,6 +111,10 @@ export interface Broker {
   id: string;
   master_id: string;
   master_name: string;
+  masterId?: string;
+  masterName?: string;
+  parentMaster?: string;
+  master?: string;
   tenant_id: string;
   tenant_name: string;
   name: string;
@@ -124,6 +130,8 @@ export interface Broker {
   turnover: string;
   commission?: string;
   commission_earned: string;
+  commissionShare?: number;
+  commission_share?: number;
   status: EntityStatus;
   created_at: string;
 }
@@ -132,6 +140,11 @@ export interface SubBroker {
   id: string;
   broker_id: string;
   broker_name: string;
+  brokerId?: string;
+  brokerName?: string;
+  parentBroker?: string;
+  master_id?: string;
+  masterId?: string;
   master_name?: string;
   tenant_id: string;
   tenant_name: string;
@@ -146,6 +159,8 @@ export interface SubBroker {
   turnover: string;
   commission?: string;
   commission_earned: string;
+  commissionShare?: number;
+  commission_share?: number;
   status: EntityStatus;
   created_at: string;
 }

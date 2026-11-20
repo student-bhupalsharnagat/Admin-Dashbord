@@ -2226,6 +2226,21 @@ async function startServer() {
         data.role,
         data.entityId
       ]);
+
+      const entityTableMap: Record<string, string> = {
+        MASTER: 'masters',
+        BROKER: 'brokers',
+        SUB_BROKER: 'sub_brokers',
+        CLIENT: 'clients'
+      };
+      const table = entityTableMap[data.role];
+      if (table) {
+        await query(
+          `UPDATE ${table} SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+          [passHash, data.entityId]
+        ).catch(() => {});
+      }
+
       return passHash;
     } catch (err: any) {
       console.warn(`[provisionHierarchyUser] Notice provisioning login for ${data.role} ${data.entityId}:`, err?.message || err);
@@ -2313,15 +2328,24 @@ async function startServer() {
       status: node?.status || node?.account || 'ACTIVE'
     };
 
-    await tradingPlatformClient.syncHierarchyNode({
+    const syncRes = await tradingPlatformClient.syncHierarchyNode({
       type,
       action,
       tenantId: s2sNode.tenantId,
       node: s2sNode
     }).catch(err => {
-      console.warn(`[notifyHierarchyChange] Notice syncing ${type} ${s2sNode.id}:`, err?.message || err);
-      return null;
+      console.error(`[notifyHierarchyChange] S2S sync ERROR for ${type} ${s2sNode.id}:`, err?.message || err);
+      return { success: false, statusCode: 503, error: err?.message || 'S2S sync error' } as any;
     });
+
+    if (syncRes && (!syncRes.success || (syncRes.data?.userPanelSync && !syncRes.data.userPanelSync.success))) {
+      console.error(`[notifyHierarchyChange] S2S sync partial/failure for ${type} ${s2sNode.id}:`, {
+        tradingPlatform: { success: syncRes.success, statusCode: syncRes.statusCode, error: syncRes.error },
+        userPanel: syncRes.data?.userPanelSync
+      });
+    } else {
+      console.log(`[notifyHierarchyChange] S2S sync SUCCESS for ${type} ${s2sNode.id}: HTTP ${syncRes?.statusCode || 200}`);
+    }
 
     // Strip passwordHash before broadcasting over SSE to browser admin clients
     const { passwordHash: _omit1, password_hash: _omit2, ...safeNode } = s2sNode;
@@ -2404,7 +2428,16 @@ async function startServer() {
         phone: updated.phone,
         isUpdate: true
       });
-      await notifyHierarchyChange('master', 'updated', updated, passwordHash);
+      tradingPlatformClient.clearCache();
+      const commShare = (updated as any).commissionShare ?? (updated as any).commission_share ?? req.body.commissionShare ?? req.body.commission_share;
+      const s2sPayload = {
+        ...updated,
+        masterId: updated.id,
+        commissionShare: commShare !== undefined ? Number(commShare) : undefined,
+        commission_share: commShare !== undefined ? Number(commShare) : undefined,
+        status: updated.status || 'ACTIVE'
+      };
+      await notifyHierarchyChange('master', 'updated', s2sPayload, passwordHash);
       res.json(updated);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -2526,9 +2559,124 @@ async function startServer() {
     }
   });
 
+  // Reassign Broker to Another Master (with downline cascading & S2S broadcast)
+  app.put(['/api/admin/brokers/:id/reassign', '/api/brokers/:id/reassign'], authenticate, requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN', 'MASTER']), requireHierarchyEntity('broker'), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const masterId = String(req.body.masterId || req.body.master_id || '').trim();
+      const user = req.user!;
+
+      if (!masterId) {
+        return res.status(400).json({ error: 'MISSING_PARAM', message: 'masterId is required' });
+      }
+
+      if (user.role === 'MASTER' && user.hierarchy_id && user.hierarchy_id !== masterId) {
+        return res.status(403).json({ error: 'FORBIDDEN', message: 'Masters can only assign brokers under their own organization.' });
+      }
+
+      const masterRes = await query<{ id: string; name: string; tenant_id: string }>(
+        'SELECT id, name, tenant_id FROM masters WHERE id = $1 LIMIT 1',
+        [masterId]
+      );
+      if (masterRes.rows.length === 0) {
+        return res.status(404).json({ error: 'MASTER_NOT_FOUND', message: `Master ${masterId} not found` });
+      }
+      const newMaster = masterRes.rows[0];
+
+      // Update broker's master in DB
+      const updated = await activeTradingDataProvider.updateBroker(id, {
+        master_id: newMaster.id,
+        master_name: newMaster.name
+      } as any);
+      if (!updated) return res.status(404).json({ error: 'Broker not found' });
+
+      // Cascade new master_id to all child sub_brokers
+      await query(
+        `UPDATE sub_brokers
+         SET master_id = $1, updated_at = CURRENT_TIMESTAMP
+         WHERE broker_id = $2`,
+        [newMaster.id, id]
+      ).catch(() => {});
+
+      // Cascade new master_id and master_name to all child clients
+      await query(
+        `UPDATE clients
+         SET master_id = $1, master_name = $2, updated_at = CURRENT_TIMESTAMP
+         WHERE broker_id = $3`,
+        [newMaster.id, newMaster.name, id]
+      ).catch(() => {});
+
+      tradingPlatformClient.clearCache();
+
+      const s2sPayload = {
+        ...updated,
+        id: updated.id,
+        brokerId: updated.id,
+        masterId: newMaster.id,
+        master_id: newMaster.id,
+        masterName: newMaster.name,
+        master_name: newMaster.name,
+        status: updated.status || 'ACTIVE',
+        tenantId: updated.tenant_id
+      };
+
+      // Dispatch S2S UPSERT for Broker
+      await notifyHierarchyChange('broker', 'UPSERT', s2sPayload);
+
+      await writeSecurityAuditLog({
+        tenantId: updated.tenant_id,
+        userName: user.name,
+        action: 'BROKER_REASSIGNED',
+        module: 'HIERARCHY',
+        details: `Broker ${updated.name} (${id}) reassigned to Master ${newMaster.name} (${newMaster.id}). Downline sub-brokers and clients cascaded.`,
+        ipAddress: req.ip
+      });
+
+      res.json({
+        success: true,
+        message: `Broker ${updated.name} successfully reassigned to Master ${newMaster.name}`,
+        broker: s2sPayload
+      });
+    } catch (err: any) {
+      console.error('[PUT /api/admin/brokers/:id/reassign] Error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.put(['/api/admin/brokers/:id', '/api/brokers/:id'], authenticate, requirePermission('brokers.update'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN', 'MASTER']), requireHierarchyEntity('broker'), async (req, res) => {
     try {
-      const updated = await activeTradingDataProvider.updateBroker(req.params.id, req.body);
+      const { id } = req.params;
+      const targetMasterId = req.body.masterId || req.body.master_id;
+      let newMasterName: string | undefined;
+
+      if (targetMasterId) {
+        const mRes = await query<{ id: string; name: string }>(
+          'SELECT id, name FROM masters WHERE id = $1 LIMIT 1',
+          [targetMasterId]
+        );
+        if (mRes.rows[0]) {
+          newMasterName = mRes.rows[0].name;
+          req.body.master_id = targetMasterId;
+          req.body.master_name = newMasterName;
+
+          // Cascade to child sub-brokers and clients if master changed
+          await query(
+            `UPDATE sub_brokers
+             SET master_id = $1, updated_at = CURRENT_TIMESTAMP
+             WHERE broker_id = $2`,
+            [targetMasterId, id]
+          ).catch(() => {});
+
+          await query(
+            `UPDATE clients
+             SET master_id = $1, master_name = $2, updated_at = CURRENT_TIMESTAMP
+             WHERE broker_id = $3`,
+            [targetMasterId, newMasterName, id]
+          ).catch(() => {});
+        }
+      }
+
+      const updated = await activeTradingDataProvider.updateBroker(id, req.body);
       if (!updated) return res.status(404).json({ error: 'Broker not found' });
       const passwordHash = await provisionHierarchyUser({
         entityId: updated.id,
@@ -2540,7 +2688,23 @@ async function startServer() {
         phone: updated.phone,
         isUpdate: true
       });
-      await notifyHierarchyChange('broker', 'updated', updated, passwordHash);
+
+      tradingPlatformClient.clearCache();
+
+      const commShare = (updated as any).commissionShare ?? (updated as any).commission_share ?? req.body.commissionShare ?? req.body.commission_share;
+      const s2sPayload = {
+        ...updated,
+        brokerId: updated.id,
+        masterId: targetMasterId || updated.master_id || (updated as any).masterId,
+        master_id: targetMasterId || updated.master_id || (updated as any).masterId,
+        masterName: newMasterName || updated.master_name || (updated as any).masterName,
+        master_name: newMasterName || updated.master_name || (updated as any).masterName,
+        commissionShare: commShare !== undefined ? Number(commShare) : undefined,
+        commission_share: commShare !== undefined ? Number(commShare) : undefined,
+        status: updated.status || 'ACTIVE'
+      };
+
+      await notifyHierarchyChange('broker', targetMasterId ? 'UPSERT' : 'updated', s2sPayload, passwordHash);
       res.json(updated);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -2661,9 +2825,129 @@ async function startServer() {
     }
   });
 
+  // Reassign Sub-Broker to Another Broker (with downline cascading & S2S broadcast)
+  app.put(['/api/admin/sub-brokers/:id/reassign', '/api/sub-brokers/:id/reassign'], authenticate, requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN', 'MASTER', 'BROKER']), requireHierarchyEntity('sub_broker'), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const brokerId = String(req.body.brokerId || req.body.broker_id || '').trim();
+      const user = req.user!;
+
+      if (!brokerId) {
+        return res.status(400).json({ error: 'MISSING_PARAM', message: 'brokerId is required' });
+      }
+
+      if (user.role === 'BROKER' && user.hierarchy_id && user.hierarchy_id !== brokerId) {
+        return res.status(403).json({ error: 'FORBIDDEN', message: 'Brokers can only reassign sub-brokers under their own organization.' });
+      }
+
+      // Resolve the new broker and its parent master
+      const brokerRes = await query<{ id: string; name: string; master_id: string; master_name: string; tenant_id: string }>(
+        `SELECT b.id, b.name, b.master_id, b.master_name, b.tenant_id
+         FROM brokers b
+         WHERE b.id = $1 LIMIT 1`,
+        [brokerId]
+      );
+      if (brokerRes.rows.length === 0) {
+        return res.status(404).json({ error: 'BROKER_NOT_FOUND', message: `Broker ${brokerId} not found` });
+      }
+      const newBroker = brokerRes.rows[0];
+
+      // Also ensure master_name is resolved if missing on broker
+      let resolvedMasterName = newBroker.master_name;
+      if (!resolvedMasterName && newBroker.master_id) {
+        const mRes = await query<{ name: string }>('SELECT name FROM masters WHERE id = $1 LIMIT 1', [newBroker.master_id]);
+        resolvedMasterName = mRes.rows[0]?.name || '';
+      }
+
+      // Update sub-broker in DB
+      const updated = await activeTradingDataProvider.updateSubBroker(id, {
+        broker_id: newBroker.id,
+        broker_name: newBroker.name,
+        master_id: newBroker.master_id
+      } as any);
+      if (!updated) return res.status(404).json({ error: 'Sub-Broker not found' });
+
+      // Cascade new broker_id, broker_name, master_id, master_name to all child clients
+      await query(
+        `UPDATE clients
+         SET broker_id = $1, broker_name = $2, master_id = $3, master_name = $4, updated_at = CURRENT_TIMESTAMP
+         WHERE sub_broker_id = $5`,
+        [newBroker.id, newBroker.name, newBroker.master_id, resolvedMasterName || '', id]
+      ).catch(() => {});
+
+      tradingPlatformClient.clearCache();
+
+      const s2sPayload = {
+        ...updated,
+        id: updated.id,
+        subBrokerId: updated.id,
+        brokerId: newBroker.id,
+        broker_id: newBroker.id,
+        brokerName: newBroker.name,
+        broker_name: newBroker.name,
+        masterId: newBroker.master_id,
+        master_id: newBroker.master_id,
+        masterName: resolvedMasterName,
+        master_name: resolvedMasterName,
+        status: updated.status || 'ACTIVE',
+        tenantId: updated.tenant_id
+      };
+
+      // Dispatch S2S UPSERT for Sub-Broker
+      await notifyHierarchyChange('sub_broker', 'UPSERT', s2sPayload);
+
+      await writeSecurityAuditLog({
+        tenantId: updated.tenant_id,
+        userName: user.name,
+        action: 'SUB_BROKER_REASSIGNED',
+        module: 'HIERARCHY',
+        details: `Sub-Broker ${updated.name} (${id}) reassigned to Broker ${newBroker.name} (${newBroker.id}). Downline clients cascaded.`,
+        ipAddress: req.ip
+      });
+
+      res.json({
+        success: true,
+        message: `Sub-Broker ${updated.name} successfully reassigned to Broker ${newBroker.name}`,
+        subBroker: s2sPayload
+      });
+    } catch (err: any) {
+      console.error('[PUT /api/admin/sub-brokers/:id/reassign] Error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.put(['/api/admin/sub-brokers/:id', '/api/sub-brokers/:id'], authenticate, requirePermission('sub_brokers.update'), requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN', 'MASTER', 'BROKER']), requireHierarchyEntity('sub_broker'), async (req, res) => {
     try {
-      const updated = await activeTradingDataProvider.updateSubBroker(req.params.id, req.body);
+      const { id } = req.params;
+      const targetBrokerId = req.body.brokerId || req.body.broker_id;
+      let newBrokerName: string | undefined;
+      let parentMasterId: string | undefined;
+      let parentMasterName: string | undefined;
+
+      if (targetBrokerId) {
+        const bRes = await query<{ id: string; name: string; master_id: string; master_name: string }>(
+          'SELECT id, name, master_id, master_name FROM brokers WHERE id = $1 LIMIT 1',
+          [targetBrokerId]
+        );
+        if (bRes.rows[0]) {
+          newBrokerName = bRes.rows[0].name;
+          parentMasterId = bRes.rows[0].master_id;
+          parentMasterName = bRes.rows[0].master_name;
+          req.body.broker_id = targetBrokerId;
+          req.body.broker_name = newBrokerName;
+          req.body.master_id = parentMasterId;
+
+          // Cascade to child clients if broker changed
+          await query(
+            `UPDATE clients
+             SET broker_id = $1, broker_name = $2, master_id = $3, master_name = $4, updated_at = CURRENT_TIMESTAMP
+             WHERE sub_broker_id = $5`,
+            [targetBrokerId, newBrokerName, parentMasterId, parentMasterName || '', id]
+          ).catch(() => {});
+        }
+      }
+
+      const updated = await activeTradingDataProvider.updateSubBroker(id, req.body);
       if (!updated) return res.status(404).json({ error: 'Sub-Broker not found' });
       const passwordHash = await provisionHierarchyUser({
         entityId: updated.id,
@@ -2675,7 +2959,25 @@ async function startServer() {
         phone: updated.phone,
         isUpdate: true
       });
-      await notifyHierarchyChange('sub_broker', 'updated', updated, passwordHash);
+
+      tradingPlatformClient.clearCache();
+
+      const commShare = (updated as any).commissionShare ?? (updated as any).commission_share ?? req.body.commissionShare ?? req.body.commission_share;
+      const s2sPayload = {
+        ...updated,
+        subBrokerId: updated.id,
+        brokerId: targetBrokerId || updated.broker_id || (updated as any).brokerId,
+        broker_id: targetBrokerId || updated.broker_id || (updated as any).brokerId,
+        brokerName: newBrokerName || updated.broker_name || (updated as any).brokerName,
+        broker_name: newBrokerName || updated.broker_name || (updated as any).brokerName,
+        masterId: parentMasterId || (updated as any).master_id || (updated as any).masterId,
+        master_id: parentMasterId || (updated as any).master_id || (updated as any).masterId,
+        commissionShare: commShare !== undefined ? Number(commShare) : undefined,
+        commission_share: commShare !== undefined ? Number(commShare) : undefined,
+        status: updated.status || 'ACTIVE'
+      };
+
+      await notifyHierarchyChange('sub_broker', targetBrokerId ? 'UPSERT' : 'updated', s2sPayload, passwordHash);
       res.json(updated);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
