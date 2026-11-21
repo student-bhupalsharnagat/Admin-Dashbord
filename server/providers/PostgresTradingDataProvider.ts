@@ -323,6 +323,8 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       `ALTER TABLE clients ADD COLUMN IF NOT EXISTS master_name VARCHAR(255)`,
       `ALTER TABLE clients ADD COLUMN IF NOT EXISTS broker_code VARCHAR(64)`,
       `ALTER TABLE clients ADD COLUMN IF NOT EXISTS phone VARCHAR(64)`,
+      `ALTER TABLE clients ADD COLUMN IF NOT EXISTS pan VARCHAR(32)`,
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS pan VARCHAR(32)`,
       `ALTER TABLE clients ADD COLUMN IF NOT EXISTS user_id VARCHAR(64)`,
       `ALTER TABLE clients ADD COLUMN IF NOT EXISTS balance NUMERIC(16, 2) DEFAULT 0.00`,
       `ALTER TABLE clients ADD COLUMN IF NOT EXISTS equity NUMERIC(16, 2) DEFAULT 0.00`,

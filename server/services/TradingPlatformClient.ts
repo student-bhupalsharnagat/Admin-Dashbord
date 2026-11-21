@@ -1533,9 +1533,23 @@ export class TradingPlatformClient {
     };
     const normalizedRole = (n.role || roleMap[data.type] || 'CLIENT').toString().toUpperCase();
     const referralCode = n.referralCode || n.referral_code || n.code || null;
-    const masterId = n.masterId ?? n.master_id ?? (data.type === 'master' ? n.id : null);
-    const brokerId = n.brokerId ?? n.broker_id ?? (data.type === 'broker' ? n.id : null);
-    const subBrokerId = n.subBrokerId ?? n.sub_broker_id ?? (data.type === 'sub_broker' ? n.id : null);
+
+    // Canonical hierarchy IDs guarantee
+    let masterId = n.masterId ?? n.master_id ?? null;
+    let brokerId = n.brokerId ?? n.broker_id ?? null;
+    let subBrokerId = n.subBrokerId ?? n.sub_broker_id ?? null;
+
+    if (normalizedRole === 'MASTER' || data.type === 'master') {
+      masterId = masterId || n.id;
+    } else if (normalizedRole === 'BROKER' || data.type === 'broker') {
+      brokerId = brokerId || n.id;
+      masterId = masterId || n.masterId || n.master_id || null;
+    } else if (normalizedRole === 'SUB_BROKER' || data.type === 'sub_broker') {
+      subBrokerId = subBrokerId || n.id;
+      brokerId = brokerId || n.brokerId || n.broker_id || null;
+      masterId = masterId || n.masterId || n.master_id || null;
+    }
+
     const commissionShare = n.commissionShare ?? n.commission_share ?? n.commission_earned ?? n.commission ?? null;
 
     // Normalize S2S action to standardized enterprise enum
@@ -1563,6 +1577,7 @@ export class TradingPlatformClient {
       name: n.name,
       email: cleanEmail,
       phone: n.phone || null,
+      pan: n.pan || null,
       passwordHash: n.passwordHash || n.password_hash || null,
       initialBalance,
       role: normalizedRole,
@@ -1586,6 +1601,7 @@ export class TradingPlatformClient {
       name: normalizedNode.name,
       email: cleanEmail,
       phone: normalizedNode.phone,
+      pan: normalizedNode.pan,
       passwordHash: normalizedNode.passwordHash,
       initialBalance,
       role: normalizedRole,
