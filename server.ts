@@ -466,29 +466,44 @@ async function startServer() {
     try {
       const envelope = req.body || {};
       const node = (envelope.node && typeof envelope.node === 'object') ? { ...envelope, ...envelope.node } : envelope;
-      const rawType = String(node.nodeType || node.type || node.role || envelope.nodeType || envelope.type || '').toLowerCase();
+      const rawType = String(node.nodeType || node.type || node.role || envelope.nodeType || envelope.type || envelope.role || '').toLowerCase();
       const id = String(node.id || node.userId || node.clientId || node.brokerId || node.subBrokerId || node.masterId || '').trim();
 
       if (!id) {
         return res.status(200).json({ success: true, message: 'Empty hierarchy node id ignored' });
       }
 
+      // 1. Role normalization across all variations
+      let normalizedRole: 'MASTER' | 'BROKER' | 'SUB_BROKER' | 'CLIENT' = 'CLIENT';
+      if (rawType.includes('sub_broker') || rawType.includes('sub-broker') || rawType.includes('subbroker')) {
+        normalizedRole = 'SUB_BROKER';
+      } else if (rawType.includes('broker')) {
+        normalizedRole = 'BROKER';
+      } else if (rawType.includes('master')) {
+        normalizedRole = 'MASTER';
+      } else {
+        normalizedRole = 'CLIENT';
+      }
+
       const action = String(envelope.action || node.action || 'UPSERT').toUpperCase();
       const cleanEmail = String(node.email || `${id.toLowerCase()}@tradematrix.io`).trim().toLowerCase();
       const name = String(node.name || node.fullName || node.company || id).trim();
       const phone = String(node.phone || node.mobile || '').trim();
-      const tenantId = String(node.tenantId || node.tenant_id || envelope.tenantId || 'TNT-001').trim();
       const referralCode = node.referralCode || node.referral_code || node.code || null;
-      const commissionShare = node.commissionShare ?? node.commission_share ?? node.commission ?? null;
+      const rawComm = node.commissionShare ?? node.commission_share ?? node.commissionRate ?? node.commission ?? null;
+      const parsedCommShare = rawComm !== null && rawComm !== undefined
+        ? (typeof rawComm === 'number' ? rawComm : parseFloat(String(rawComm).replace(/[^0-9.]/g, '')) || null)
+        : (normalizedRole === 'SUB_BROKER' ? 20 : (normalizedRole === 'CLIENT' ? null : 40));
+      const commDisplay = parsedCommShare !== null ? `${parsedCommShare}%` : '40%';
 
       if (action === 'DELETE') {
-        if (rawType.includes('client')) {
+        if (normalizedRole === 'CLIENT') {
           await activeTradingDataProvider.deleteClient(id).catch(() => {});
-        } else if (rawType.includes('sub_broker') || rawType.includes('subbroker')) {
+        } else if (normalizedRole === 'SUB_BROKER') {
           await activeTradingDataProvider.deleteSubBroker(id).catch(() => {});
-        } else if (rawType.includes('broker')) {
+        } else if (normalizedRole === 'BROKER') {
           await activeTradingDataProvider.deleteBroker(id).catch(() => {});
-        } else if (rawType.includes('master')) {
+        } else if (normalizedRole === 'MASTER') {
           await activeTradingDataProvider.deleteMaster(id).catch(() => {});
         }
         await query('DELETE FROM users WHERE hierarchy_id = $1 OR id = $1', [id]).catch(() => {});
@@ -497,13 +512,13 @@ async function startServer() {
         (activeTradingDataProvider as any).clearCache?.();
         tradingPlatformClient.clearCache();
 
-        broadcastToAdminClients('hierarchy.deleted', { id, type: rawType, timestamp: new Date().toISOString() });
+        broadcastToAdminClients('hierarchy.deleted', { id, type: normalizedRole.toLowerCase(), timestamp: new Date().toISOString() });
         adminEventBus.emit('event', {
           eventId: `evt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
           eventType: 'hierarchy.deleted',
-          tenantId,
+          tenantId: node.tenantId || 'TNT-001',
           timestamp: new Date().toISOString(),
-          payload: { id, type: rawType }
+          payload: { id, type: normalizedRole.toLowerCase() }
         });
         return res.status(200).json({ success: true, message: `Hierarchy node ${id} deleted successfully` });
       }
@@ -512,13 +527,13 @@ async function startServer() {
         const rawStatus = String(node.status || envelope.status || 'ACTIVE').toUpperCase();
         const resolvedStatus = (rawStatus === 'SUSPENDED' || rawStatus === 'INACTIVE') ? 'SUSPENDED' : 'ACTIVE';
 
-        if (rawType.includes('client')) {
+        if (normalizedRole === 'CLIENT') {
           await activeTradingDataProvider.updateClientStatus(id, resolvedStatus as any).catch(() => {});
-        } else if (rawType.includes('sub_broker') || rawType.includes('subbroker')) {
+        } else if (normalizedRole === 'SUB_BROKER') {
           await activeTradingDataProvider.updateSubBrokerStatus(id, resolvedStatus as any).catch(() => {});
-        } else if (rawType.includes('broker')) {
+        } else if (normalizedRole === 'BROKER') {
           await activeTradingDataProvider.updateBrokerStatus(id, resolvedStatus as any).catch(() => {});
-        } else if (rawType.includes('master')) {
+        } else if (normalizedRole === 'MASTER') {
           await activeTradingDataProvider.updateMasterStatus(id, resolvedStatus as any).catch(() => {});
         }
         await query(
@@ -530,13 +545,13 @@ async function startServer() {
         (activeTradingDataProvider as any).clearCache?.();
         tradingPlatformClient.clearCache();
 
-        broadcastToAdminClients('hierarchy.updated', { id, type: rawType, status: resolvedStatus });
+        broadcastToAdminClients('hierarchy.updated', { id, type: normalizedRole.toLowerCase(), status: resolvedStatus });
         adminEventBus.emit('event', {
           eventId: `evt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
           eventType: 'hierarchy.updated',
-          tenantId,
+          tenantId: node.tenantId || 'TNT-001',
           timestamp: new Date().toISOString(),
-          payload: { id, type: rawType, status: resolvedStatus }
+          payload: { id, type: normalizedRole.toLowerCase(), status: resolvedStatus }
         });
         return res.status(200).json({ success: true, message: `Hierarchy node ${id} status updated to ${resolvedStatus}`, status: resolvedStatus });
       }
@@ -567,24 +582,54 @@ async function startServer() {
           'UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE hierarchy_id = $2 OR id = $2 OR LOWER(email) = LOWER($3)',
           [resolvedPasswordHash, id, cleanEmail]
         ).catch(() => {});
+        if (normalizedRole === 'MASTER') {
+          await query('UPDATE masters SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [resolvedPasswordHash, id]).catch(() => {});
+        } else if (normalizedRole === 'BROKER') {
+          await query('UPDATE brokers SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [resolvedPasswordHash, id]).catch(() => {});
+        } else if (normalizedRole === 'SUB_BROKER') {
+          await query('UPDATE sub_brokers SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [resolvedPasswordHash, id]).catch(() => {});
+        } else if (normalizedRole === 'CLIENT') {
+          await query('UPDATE clients SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [resolvedPasswordHash, id]).catch(() => {});
+        }
         return res.status(200).json({ success: true, message: `Hierarchy node ${id} password updated` });
       }
 
       // Default: UPSERT (created / updated)
       const rawStatus = (node.status || envelope.status || 'ACTIVE').toString().toUpperCase();
       const status = (rawStatus === 'SUSPENDED' || rawStatus === 'INACTIVE') ? 'SUSPENDED' : 'ACTIVE';
-      const masterId = node.masterId || node.master_id || (rawType.includes('master') ? id : null);
-      const brokerId = node.brokerId || node.broker_id || (rawType.includes('broker') && !rawType.includes('sub') ? id : null);
-      const subBrokerId = node.subBrokerId || node.sub_broker_id || (rawType.includes('sub') ? id : null);
       const rawBalance = node.initialBalance ?? node.initial_balance ?? node.wallet_balance ?? node.balance ?? 0;
       const initialBalance = typeof rawBalance === 'number' ? rawBalance : parseFloat(String(rawBalance).replace(/[^0-9.-]/g, '')) || 0;
 
-      if (rawType.includes('master')) {
+      // Safe fallback resolution for tenant_id to guarantee FK integrity
+      let tenantId = String(node.tenantId || node.tenant_id || envelope.tenantId || 'TNT-001').trim();
+      const tenantCheck = await query<{ id: string }>('SELECT id FROM tenants WHERE id = $1 LIMIT 1', [tenantId]).catch(() => ({ rows: [] }));
+      if (tenantCheck.rows.length === 0) {
+        const firstTenant = await query<{ id: string }>('SELECT id FROM tenants ORDER BY created_at ASC LIMIT 1').catch(() => ({ rows: [] }));
+        if (firstTenant.rows.length > 0) {
+          tenantId = firstTenant.rows[0].id;
+        } else {
+          await query(`
+            INSERT INTO tenants (id, name, slug, domain, status, plan, created_at, updated_at)
+            VALUES ('TNT-001', 'Default Enterprise Tenant', 'default', 'app.tradematrix.io', 'ACTIVE', 'ENTERPRISE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT (id) DO NOTHING
+          `).catch(() => {});
+          tenantId = 'TNT-001';
+        }
+      }
+
+      let masterId = node.masterId || node.master_id || (normalizedRole === 'MASTER' ? id : null);
+      let masterName = node.masterName || node.master_name || (normalizedRole === 'MASTER' ? name : null);
+      let brokerId = node.brokerId || node.broker_id || (normalizedRole === 'BROKER' ? id : null);
+      let brokerName = node.brokerName || node.broker_name || (normalizedRole === 'BROKER' ? name : null);
+      let subBrokerId = node.subBrokerId || node.sub_broker_id || (normalizedRole === 'SUB_BROKER' ? id : null);
+      let subBrokerName = node.subBrokerName || node.sub_broker_name || (normalizedRole === 'SUB_BROKER' ? name : null);
+
+      if (normalizedRole === 'MASTER') {
         await query(`
           INSERT INTO masters (
             id, tenant_id, name, company, code, referral_code, email, phone, status,
-            commission, updated_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
+            commission_share, commission, password_hash, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP)
           ON CONFLICT (id) DO UPDATE SET
             name = EXCLUDED.name,
             company = EXCLUDED.company,
@@ -592,8 +637,11 @@ async function startServer() {
             phone = COALESCE(EXCLUDED.phone, masters.phone),
             status = EXCLUDED.status,
             referral_code = COALESCE(masters.referral_code, EXCLUDED.referral_code),
+            commission_share = COALESCE(EXCLUDED.commission_share, masters.commission_share),
+            commission = COALESCE(EXCLUDED.commission, masters.commission),
+            password_hash = COALESCE(EXCLUDED.password_hash, masters.password_hash),
             updated_at = CURRENT_TIMESTAMP
-        `, [id, tenantId, name, node.company || name, referralCode || id, referralCode, cleanEmail, phone, status, commissionShare ? String(commissionShare) : '40%']).catch(() => {});
+        `, [id, tenantId, name, node.company || name, referralCode || id, referralCode || id, cleanEmail, phone, status, parsedCommShare, commDisplay, resolvedPasswordHash]).catch(e => console.warn('[Hierarchy Sync] Master entity insert warning:', e.message));
 
         await query(`
           INSERT INTO users (
@@ -610,56 +658,57 @@ async function startServer() {
             hierarchy_id = EXCLUDED.hierarchy_id,
             is_suspended = EXCLUDED.is_suspended,
             updated_at = CURRENT_TIMESTAMP
-        `, [`usr_master_${id.replace(/[^a-z0-9]/gi, '')}`, tenantId, name, cleanEmail, status, resolvedPasswordHash, phone, id, status === 'SUSPENDED']).catch(() => {});
-      } else if (rawType.includes('sub_broker') || rawType.includes('subbroker')) {
-        await query(`
-          INSERT INTO sub_brokers (
-            id, tenant_id, broker_id, broker_name, name, code, referral_code, email, phone, status,
-            commission, updated_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
-          ON CONFLICT (id) DO UPDATE SET
-            name = EXCLUDED.name,
-            broker_id = COALESCE(EXCLUDED.broker_id, sub_brokers.broker_id),
-            broker_name = COALESCE(EXCLUDED.broker_name, sub_brokers.broker_name),
-            email = EXCLUDED.email,
-            phone = COALESCE(EXCLUDED.phone, sub_brokers.phone),
-            status = EXCLUDED.status,
-            referral_code = COALESCE(sub_brokers.referral_code, EXCLUDED.referral_code),
-            updated_at = CURRENT_TIMESTAMP
-        `, [id, tenantId, brokerId || 'BRK-001', node.brokerName || node.broker_name || 'Apex Broking', name, referralCode || id, referralCode, cleanEmail, phone, status, commissionShare ? String(commissionShare) : '20%']).catch(() => {});
+        `, [`usr_master_${id.replace(/[^a-z0-9]/gi, '')}`, tenantId, name, cleanEmail, status, resolvedPasswordHash, phone, id, status === 'SUSPENDED']).catch(e => console.warn('[Hierarchy Sync] Master user insert warning:', e.message));
+
+        (activeTradingDataProvider as any).syncHierarchyEntity?.('master', {
+          id, tenant_id: tenantId, name, company: node.company || name, code: referralCode || id, referralCode: referralCode || id, referral_code: referralCode || id, email: cleanEmail, phone, status, commissionShare: parsedCommShare, commission: commDisplay
+        });
+      } else if (normalizedRole === 'BROKER') {
+        // Resolve valid master_id to prevent FK constraint failure
+        if (masterId) {
+          const mCheck = await query<{ id: string; name: string }>('SELECT id, name FROM masters WHERE id = $1 LIMIT 1', [masterId]).catch(() => ({ rows: [] }));
+          if (mCheck.rows.length > 0) {
+            masterId = mCheck.rows[0].id;
+            masterName = masterName || mCheck.rows[0].name;
+          } else {
+            masterId = null;
+          }
+        }
+        if (!masterId) {
+          const firstM = await query<{ id: string; name: string }>('SELECT id, name FROM masters ORDER BY created_at ASC LIMIT 1').catch(() => ({ rows: [] }));
+          if (firstM.rows.length > 0) {
+            masterId = firstM.rows[0].id;
+            masterName = masterName || firstM.rows[0].name;
+          } else {
+            masterId = 'MST-001';
+            masterName = 'Central Master';
+            await query(`
+              INSERT INTO masters (id, tenant_id, name, company, code, referral_code, email, phone, status, commission_share, commission, password_hash, updated_at)
+              VALUES ('MST-001', $1, 'Central Master', 'Central Master Org', 'MST-001', 'MST-001', 'master@tradematrix.io', '+919999999991', 'ACTIVE', 40.00, '40%', $2, CURRENT_TIMESTAMP)
+              ON CONFLICT (id) DO NOTHING
+            `, [tenantId, resolvedPasswordHash]).catch(() => {});
+          }
+        }
 
         await query(`
-          INSERT INTO users (
-            id, tenant_id, name, email, role, status, password_hash, phone,
-            hierarchy_level, hierarchy_id, is_suspended, updated_at
-          ) VALUES ($1, $2, $3, $4, 'SUB_BROKER', $5, $6, $7, 'SUB_BROKER', $8, $9, CURRENT_TIMESTAMP)
-          ON CONFLICT (email) DO UPDATE SET
-            name = EXCLUDED.name,
-            role = 'SUB_BROKER',
-            status = EXCLUDED.status,
-            password_hash = COALESCE(EXCLUDED.password_hash, users.password_hash),
-            phone = COALESCE(EXCLUDED.phone, users.phone),
-            hierarchy_level = 'SUB_BROKER',
-            hierarchy_id = EXCLUDED.hierarchy_id,
-            is_suspended = EXCLUDED.is_suspended,
-            updated_at = CURRENT_TIMESTAMP
-        `, [`usr_subbroker_${id.replace(/[^a-z0-9]/gi, '')}`, tenantId, name, cleanEmail, status, resolvedPasswordHash, phone, id, status === 'SUSPENDED']).catch(() => {});
-      } else if (rawType.includes('broker')) {
-        await query(`
           INSERT INTO brokers (
-            id, tenant_id, master_id, master_name, name, code, referral_code, email, phone, status,
-            commission, updated_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
+            id, tenant_id, master_id, master_name, name, company, code, referral_code, email, phone, status,
+            commission_share, commission, password_hash, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, CURRENT_TIMESTAMP)
           ON CONFLICT (id) DO UPDATE SET
             name = EXCLUDED.name,
+            company = EXCLUDED.company,
             master_id = COALESCE(EXCLUDED.master_id, brokers.master_id),
             master_name = COALESCE(EXCLUDED.master_name, brokers.master_name),
             email = EXCLUDED.email,
             phone = COALESCE(EXCLUDED.phone, brokers.phone),
             status = EXCLUDED.status,
             referral_code = COALESCE(brokers.referral_code, EXCLUDED.referral_code),
+            commission_share = COALESCE(EXCLUDED.commission_share, brokers.commission_share),
+            commission = COALESCE(EXCLUDED.commission, brokers.commission),
+            password_hash = COALESCE(EXCLUDED.password_hash, brokers.password_hash),
             updated_at = CURRENT_TIMESTAMP
-        `, [id, tenantId, masterId || 'MST-001', node.masterName || node.master_name || 'Central Master', name, referralCode || id, referralCode, cleanEmail, phone, status, commissionShare ? String(commissionShare) : '40%']).catch(() => {});
+        `, [id, tenantId, masterId, masterName || 'Central Master', name, node.company || `${name} Securities`, referralCode || id, referralCode || id, cleanEmail, phone, status, parsedCommShare, commDisplay, resolvedPasswordHash]).catch(e => console.warn('[Hierarchy Sync] Broker entity insert warning:', e.message));
 
         await query(`
           INSERT INTO users (
@@ -676,15 +725,112 @@ async function startServer() {
             hierarchy_id = EXCLUDED.hierarchy_id,
             is_suspended = EXCLUDED.is_suspended,
             updated_at = CURRENT_TIMESTAMP
-        `, [`usr_broker_${id.replace(/[^a-z0-9]/gi, '')}`, tenantId, name, cleanEmail, status, resolvedPasswordHash, phone, id, status === 'SUSPENDED']).catch(() => {});
+        `, [`usr_broker_${id.replace(/[^a-z0-9]/gi, '')}`, tenantId, name, cleanEmail, status, resolvedPasswordHash, phone, id, status === 'SUSPENDED']).catch(e => console.warn('[Hierarchy Sync] Broker user insert warning:', e.message));
+
+        (activeTradingDataProvider as any).syncHierarchyEntity?.('broker', {
+          id, tenant_id: tenantId, master_id: masterId, master_name: masterName || 'Central Master', name, company: node.company || `${name} Securities`, code: referralCode || id, referralCode: referralCode || id, referral_code: referralCode || id, email: cleanEmail, phone, status, commissionShare: parsedCommShare, commission: commDisplay
+        });
+      } else if (normalizedRole === 'SUB_BROKER') {
+        // Resolve valid broker_id and master_id to prevent FK constraint failure
+        if (brokerId) {
+          const bCheck = await query<{ id: string; name: string; master_id: string }>('SELECT id, name, master_id FROM brokers WHERE id = $1 LIMIT 1', [brokerId]).catch(() => ({ rows: [] }));
+          if (bCheck.rows.length > 0) {
+            brokerId = bCheck.rows[0].id;
+            brokerName = brokerName || bCheck.rows[0].name;
+            if (!masterId) masterId = bCheck.rows[0].master_id;
+          } else {
+            brokerId = null;
+          }
+        }
+        if (!brokerId) {
+          const firstB = await query<{ id: string; name: string; master_id: string }>('SELECT id, name, master_id FROM brokers ORDER BY created_at ASC LIMIT 1').catch(() => ({ rows: [] }));
+          if (firstB.rows.length > 0) {
+            brokerId = firstB.rows[0].id;
+            brokerName = brokerName || firstB.rows[0].name;
+            if (!masterId) masterId = firstB.rows[0].master_id;
+          } else {
+            brokerId = 'BRK-001';
+            brokerName = 'Apex Broking';
+            if (!masterId) masterId = 'MST-001';
+            await query(`
+              INSERT INTO brokers (id, tenant_id, master_id, master_name, name, company, code, referral_code, email, phone, status, commission_share, commission, password_hash, updated_at)
+              VALUES ('BRK-001', $1, $2, 'Central Master', 'Apex Broking', 'Apex Broking Org', 'BRK-001', 'BRK-001', 'broker@tradematrix.io', '+919999999992', 'ACTIVE', 40.00, '40%', $3, CURRENT_TIMESTAMP)
+              ON CONFLICT (id) DO NOTHING
+            `, [tenantId, masterId, resolvedPasswordHash]).catch(() => {});
+          }
+        }
+
+        await query(`
+          INSERT INTO sub_brokers (
+            id, tenant_id, broker_id, broker_name, master_id, name, code, referral_code, email, phone, status,
+            commission_share, commission, password_hash, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, CURRENT_TIMESTAMP)
+          ON CONFLICT (id) DO UPDATE SET
+            name = EXCLUDED.name,
+            broker_id = COALESCE(EXCLUDED.broker_id, sub_brokers.broker_id),
+            broker_name = COALESCE(EXCLUDED.broker_name, sub_brokers.broker_name),
+            master_id = COALESCE(EXCLUDED.master_id, sub_brokers.master_id),
+            email = EXCLUDED.email,
+            phone = COALESCE(EXCLUDED.phone, sub_brokers.phone),
+            status = EXCLUDED.status,
+            referral_code = COALESCE(sub_brokers.referral_code, EXCLUDED.referral_code),
+            commission_share = COALESCE(EXCLUDED.commission_share, sub_brokers.commission_share),
+            commission = COALESCE(EXCLUDED.commission, sub_brokers.commission),
+            password_hash = COALESCE(EXCLUDED.password_hash, sub_brokers.password_hash),
+            updated_at = CURRENT_TIMESTAMP
+        `, [id, tenantId, brokerId, brokerName || 'Apex Broking', masterId, name, referralCode || id, referralCode || id, cleanEmail, phone, status, parsedCommShare, commDisplay, resolvedPasswordHash]).catch(e => console.warn('[Hierarchy Sync] SubBroker entity insert warning:', e.message));
+
+        await query(`
+          INSERT INTO users (
+            id, tenant_id, name, email, role, status, password_hash, phone,
+            hierarchy_level, hierarchy_id, is_suspended, updated_at
+          ) VALUES ($1, $2, $3, $4, 'SUB_BROKER', $5, $6, $7, 'SUB_BROKER', $8, $9, CURRENT_TIMESTAMP)
+          ON CONFLICT (email) DO UPDATE SET
+            name = EXCLUDED.name,
+            role = 'SUB_BROKER',
+            status = EXCLUDED.status,
+            password_hash = COALESCE(EXCLUDED.password_hash, users.password_hash),
+            phone = COALESCE(EXCLUDED.phone, users.phone),
+            hierarchy_level = 'SUB_BROKER',
+            hierarchy_id = EXCLUDED.hierarchy_id,
+            is_suspended = EXCLUDED.is_suspended,
+            updated_at = CURRENT_TIMESTAMP
+        `, [`usr_subbroker_${id.replace(/[^a-z0-9]/gi, '')}`, tenantId, name, cleanEmail, status, resolvedPasswordHash, phone, id, status === 'SUSPENDED']).catch(e => console.warn('[Hierarchy Sync] SubBroker user insert warning:', e.message));
+
+        (activeTradingDataProvider as any).syncHierarchyEntity?.('sub_broker', {
+          id, tenant_id: tenantId, broker_id: brokerId, broker_name: brokerName || 'Apex Broking', master_id: masterId, name, code: referralCode || id, referralCode: referralCode || id, referral_code: referralCode || id, email: cleanEmail, phone, status, commissionShare: parsedCommShare, commission: commDisplay
+        });
       } else {
         // CLIENT
         const clientCode = node.clientCode || node.client_code || node.code || `CLT${id.replace(/[^0-9]/g, '').slice(-4) || '101'}`;
+
+        // Ensure sub_broker_id exists if foreign key applies
+        if (subBrokerId) {
+          const sbCheck = await query<{ id: string; name: string; broker_id: string; master_id: string }>('SELECT id, name, broker_id, master_id FROM sub_brokers WHERE id = $1 LIMIT 1', [subBrokerId]).catch(() => ({ rows: [] }));
+          if (sbCheck.rows.length > 0) {
+            subBrokerId = sbCheck.rows[0].id;
+            subBrokerName = subBrokerName || sbCheck.rows[0].name;
+            if (!brokerId) brokerId = sbCheck.rows[0].broker_id;
+            if (!masterId) masterId = sbCheck.rows[0].master_id;
+          } else {
+            subBrokerId = null;
+          }
+        }
+        if (!subBrokerId) {
+          const firstSb = await query<{ id: string; name: string; broker_id: string; master_id: string }>('SELECT id, name, broker_id, master_id FROM sub_brokers ORDER BY created_at ASC LIMIT 1').catch(() => ({ rows: [] }));
+          if (firstSb.rows.length > 0) {
+            subBrokerId = firstSb.rows[0].id;
+            subBrokerName = subBrokerName || firstSb.rows[0].name;
+            if (!brokerId) brokerId = firstSb.rows[0].broker_id;
+            if (!masterId) masterId = firstSb.rows[0].master_id;
+          }
+        }
+
         await query(`
           INSERT INTO clients (
             id, tenant_id, sub_broker_id, sub_broker_name, broker_id, broker_name, master_id, master_name,
-            client_code, name, email, phone, status, kyc_status, balance, equity, margin_used, updated_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, CURRENT_TIMESTAMP)
+            client_code, name, email, phone, status, kyc_status, balance, equity, margin_used, password_hash, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, CURRENT_TIMESTAMP)
           ON CONFLICT (id) DO UPDATE SET
             name = EXCLUDED.name,
             email = EXCLUDED.email,
@@ -698,15 +844,16 @@ async function startServer() {
             status = EXCLUDED.status,
             balance = CASE WHEN EXCLUDED.balance > 0 THEN EXCLUDED.balance ELSE clients.balance END,
             equity = CASE WHEN EXCLUDED.equity > 0 THEN EXCLUDED.equity ELSE clients.equity END,
+            password_hash = COALESCE(EXCLUDED.password_hash, clients.password_hash),
             updated_at = CURRENT_TIMESTAMP
         `, [
-          id, tenantId, subBrokerId, node.subBrokerName || node.sub_broker_name || 'Direct',
-          brokerId, node.brokerName || node.broker_name || 'Apex Broking',
-          masterId, node.masterName || node.master_name || 'Central Master',
+          id, tenantId, subBrokerId, subBrokerName || node.subBrokerName || node.sub_broker_name || 'Direct',
+          brokerId, brokerName || node.brokerName || node.broker_name || 'Apex Broking',
+          masterId, masterName || node.masterName || node.master_name || 'Central Master',
           clientCode, name, cleanEmail, phone, status,
           (node.kycStatus || node.kyc_status || 'APPROVED').toString().toUpperCase() === 'PENDING' ? 'PENDING' : 'APPROVED',
-          initialBalance, initialBalance, 0.00
-        ]).catch(() => {});
+          initialBalance, initialBalance, 0.00, resolvedPasswordHash
+        ]).catch(e => console.warn('[Hierarchy Sync] Client entity insert warning:', e.message));
 
         await query(`
           INSERT INTO users (
@@ -724,16 +871,17 @@ async function startServer() {
             is_suspended = EXCLUDED.is_suspended,
             client_code = COALESCE(EXCLUDED.client_code, users.client_code),
             updated_at = CURRENT_TIMESTAMP
-        `, [`usr_client_${id.replace(/[^a-z0-9]/gi, '')}`, tenantId, name, cleanEmail, status, resolvedPasswordHash, phone, id, status === 'SUSPENDED', clientCode]).catch(() => {});
+        `, [`usr_client_${id.replace(/[^a-z0-9]/gi, '')}`, tenantId, name, cleanEmail, status, resolvedPasswordHash, phone, id, status === 'SUSPENDED', clientCode]).catch(e => console.warn('[Hierarchy Sync] Client user insert warning:', e.message));
       }
 
       clearDashboardCache();
       (activeTradingDataProvider as any).clearCache?.();
       tradingPlatformClient.clearCache();
 
-      const broadcastEvent = rawType.includes('client') ? 'client.registered' : 'broker.added';
-      broadcastToAdminClients(broadcastEvent, {
-        type: rawType,
+      const broadcastEvent = normalizedRole === 'CLIENT' ? 'client.registered' : (normalizedRole === 'MASTER' ? 'master.added' : 'broker.added');
+      const broadcastPayload = {
+        type: normalizedRole.toLowerCase(),
+        role: normalizedRole,
         id,
         name,
         email: cleanEmail,
@@ -744,34 +892,30 @@ async function startServer() {
         subBrokerId,
         initialBalance,
         referralCode,
+        commissionShare: parsedCommShare,
         timestamp: new Date().toISOString()
-      });
+      };
+
+      broadcastToAdminClients(broadcastEvent, broadcastPayload);
+      broadcastToAdminClients('hierarchy.updated', broadcastPayload);
+      if (normalizedRole === 'BROKER' || normalizedRole === 'SUB_BROKER') {
+        broadcastToAdminClients('broker.added', broadcastPayload);
+      }
+
       adminEventBus.emit('event', {
         eventId: `evt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
         eventType: broadcastEvent,
         tenantId,
         timestamp: new Date().toISOString(),
-        payload: {
-          type: rawType,
-          id,
-          name,
-          email: cleanEmail,
-          phone,
-          status,
-          masterId,
-          brokerId,
-          subBrokerId,
-          initialBalance,
-          referralCode,
-          timestamp: new Date().toISOString()
-        }
+        payload: broadcastPayload
       });
 
       res.status(200).json({
         success: true,
         message: 'Hierarchy node synchronized and persisted successfully',
         id,
-        type: rawType
+        type: normalizedRole.toLowerCase(),
+        role: normalizedRole
       });
     } catch (err: any) {
       console.error('[POST /api/internal/v1/hierarchy/sync] Error:', err);
@@ -789,8 +933,9 @@ async function startServer() {
 
       const cleanLower = identifier.toLowerCase();
       const cleanDigits = identifier.replace(/\D/g, '');
+      const phoneParam = cleanDigits.length >= 7 ? cleanDigits.slice(-10) : 'NOMATCH';
 
-      // 1. Check in users table
+      // 1. Query users table
       const userRes = await query<{
         id: string;
         tenant_id: string | null;
@@ -813,68 +958,126 @@ async function startServer() {
            OR (client_code IS NOT NULL AND LOWER(client_code) = $1)
            OR ($2 <> '' AND phone IS NOT NULL AND RIGHT(REGEXP_REPLACE(phone, '[^0-9]', '', 'g'), 10) = $2)
         LIMIT 1
-      `, [cleanLower, cleanDigits.length >= 7 ? cleanDigits.slice(-10) : 'NOMATCH']);
+      `, [cleanLower, phoneParam]).catch(() => ({ rows: [] }));
 
       let user = userRes.rows[0];
 
-      // If user not in users table, check clients table directly
-      let clientRow: any = null;
-      if (!user) {
-        const cRes = await query<any>(`
-          SELECT id, tenant_id, name, email, phone, status, balance, client_code,
-                 master_id, broker_id, sub_broker_id
-          FROM clients
-          WHERE LOWER(id) = $1
-             OR (client_code IS NOT NULL AND LOWER(client_code) = $1)
-             OR (email IS NOT NULL AND LOWER(email) = $1)
-             OR ($2 <> '' AND phone IS NOT NULL AND RIGHT(REGEXP_REPLACE(phone, '[^0-9]', '', 'g'), 10) = $2)
-          LIMIT 1
-        `, [cleanLower, cleanDigits.length >= 7 ? cleanDigits.slice(-10) : 'NOMATCH']);
-        if (cRes.rows[0]) {
-          clientRow = cRes.rows[0];
-          // JIT create in users table
-          const passHash = await hashPassword('Password@123');
-          await query(`
-            INSERT INTO users (
-              id, tenant_id, name, email, role, status, password_hash, phone,
-              hierarchy_level, hierarchy_id, is_suspended, client_code, updated_at
-            ) VALUES ($1, $2, $3, $4, 'CLIENT', $5, $6, $7, 'CLIENT', $8, false, $9, CURRENT_TIMESTAMP)
-            ON CONFLICT (email) DO UPDATE SET updated_at = CURRENT_TIMESTAMP
-          `, [`usr_client_${clientRow.id.replace(/[^a-z0-9]/gi, '')}`, clientRow.tenant_id, clientRow.name, clientRow.email.toLowerCase(), clientRow.status || 'ACTIVE', passHash, clientRow.phone, clientRow.id, clientRow.client_code]).catch(() => {});
+      // 2. Query masters table
+      const masterRes = await query<any>(`
+        SELECT id, tenant_id, name, company, code, referral_code, email, phone, status,
+               password_hash, commission_share, commission
+        FROM masters
+        WHERE LOWER(email) = $1
+           OR LOWER(id) = $1
+           OR LOWER(code) = $1
+           OR (referral_code IS NOT NULL AND LOWER(referral_code) = $1)
+           OR ($2 <> '' AND phone IS NOT NULL AND RIGHT(REGEXP_REPLACE(phone, '[^0-9]', '', 'g'), 10) = $2)
+        LIMIT 1
+      `, [cleanLower, phoneParam]).catch(() => ({ rows: [] }));
+      const masterRow = masterRes.rows[0];
 
-          user = {
-            id: clientRow.id,
-            tenant_id: clientRow.tenant_id,
-            name: clientRow.name,
-            email: clientRow.email,
-            role: 'CLIENT',
-            status: clientRow.status || 'ACTIVE',
-            password_hash: passHash,
-            phone: clientRow.phone,
-            hierarchy_level: 'CLIENT',
-            hierarchy_id: clientRow.id,
-            client_code: clientRow.client_code
-          };
-        }
-      }
+      // 3. Query brokers table
+      const brokerRes = await query<any>(`
+        SELECT id, tenant_id, master_id, master_name, name, company, code, referral_code, email, phone, status,
+               password_hash, commission_share, commission
+        FROM brokers
+        WHERE LOWER(email) = $1
+           OR LOWER(id) = $1
+           OR LOWER(code) = $1
+           OR (referral_code IS NOT NULL AND LOWER(referral_code) = $1)
+           OR ($2 <> '' AND phone IS NOT NULL AND RIGHT(REGEXP_REPLACE(phone, '[^0-9]', '', 'g'), 10) = $2)
+        LIMIT 1
+      `, [cleanLower, phoneParam]).catch(() => ({ rows: [] }));
+      const brokerRow = brokerRes.rows[0];
 
-      if (!user) {
+      // 4. Query sub_brokers table
+      const subBrokerRes = await query<any>(`
+        SELECT id, tenant_id, broker_id, broker_name, master_id, name, code, referral_code, email, phone, status,
+               password_hash, commission_share, commission
+        FROM sub_brokers
+        WHERE LOWER(email) = $1
+           OR LOWER(id) = $1
+           OR LOWER(code) = $1
+           OR (referral_code IS NOT NULL AND LOWER(referral_code) = $1)
+           OR ($2 <> '' AND phone IS NOT NULL AND RIGHT(REGEXP_REPLACE(phone, '[^0-9]', '', 'g'), 10) = $2)
+        LIMIT 1
+      `, [cleanLower, phoneParam]).catch(() => ({ rows: [] }));
+      const subBrokerRow = subBrokerRes.rows[0];
+
+      // 5. Query clients table
+      const clientRes = await query<any>(`
+        SELECT id, tenant_id, sub_broker_id, sub_broker_name, broker_id, broker_name, master_id, master_name,
+               client_code, name, email, phone, status, balance, password_hash
+        FROM clients
+        WHERE LOWER(email) = $1
+           OR LOWER(id) = $1
+           OR (client_code IS NOT NULL AND LOWER(client_code) = $1)
+           OR ($2 <> '' AND phone IS NOT NULL AND RIGHT(REGEXP_REPLACE(phone, '[^0-9]', '', 'g'), 10) = $2)
+        LIMIT 1
+      `, [cleanLower, phoneParam]).catch(() => ({ rows: [] }));
+      let clientRow = clientRes.rows[0];
+
+      if (!user && !masterRow && !brokerRow && !subBrokerRow && !clientRow) {
         return res.status(200).json({ success: true, found: false, message: 'Account not found' });
       }
 
-      // Resolve lineage IDs and referralCode
+      // Determine entity identity and role
+      const entity = masterRow || brokerRow || subBrokerRow || clientRow;
+      const targetId = entity ? entity.id : (user?.hierarchy_id || user?.id);
+
+      let resolvedRole = user?.role || '';
+      if (masterRow) resolvedRole = 'MASTER';
+      else if (subBrokerRow) resolvedRole = 'SUB_BROKER';
+      else if (brokerRow) resolvedRole = 'BROKER';
+      else if (clientRow) resolvedRole = 'CLIENT';
+      else if (!resolvedRole) resolvedRole = 'CLIENT';
+      resolvedRole = resolvedRole.toUpperCase();
+
+      const resolvedName = entity?.name || user?.name || targetId;
+      const resolvedEmail = (entity?.email || user?.email || `${targetId.toLowerCase()}@tradematrix.io`).toLowerCase();
+      const resolvedPhone = entity?.phone || user?.phone || '';
+      const resolvedStatus = entity?.status || user?.status || 'ACTIVE';
+      const resolvedTenantId = entity?.tenant_id || user?.tenant_id || 'TNT-001';
+
+      // Password hash fallback
+      let resolvedPasswordHash = entity?.password_hash || user?.password_hash;
+      if (!resolvedPasswordHash) {
+        resolvedPasswordHash = await hashPassword('Password@123');
+      }
+
+      // Referral code resolution
+      const referralCode = entity?.referral_code || entity?.code || entity?.client_code || user?.client_code || null;
+
+      // Lineage resolution
       let masterId: string | null = null;
       let brokerId: string | null = null;
       let subBrokerId: string | null = null;
-      let referralCode: string | null = null;
       let initialBalance = 0;
+      let commissionShare: number | null = null;
 
-      const roleUpper = (user.role || '').toUpperCase();
-      const targetId = user.hierarchy_id || user.id;
-
-      if (roleUpper === 'CLIENT') {
+      if (resolvedRole === 'MASTER' || masterRow) {
+        masterId = targetId;
+        const commVal = masterRow?.commission_share ?? masterRow?.commission;
+        commissionShare = commVal !== null && commVal !== undefined ? (typeof commVal === 'number' ? commVal : parseFloat(String(commVal).replace(/[^0-9.]/g, '')) || 40) : 40;
+      } else if (resolvedRole === 'BROKER' || brokerRow) {
+        masterId = brokerRow?.master_id || null;
+        brokerId = targetId;
+        const commVal = brokerRow?.commission_share ?? brokerRow?.commission;
+        commissionShare = commVal !== null && commVal !== undefined ? (typeof commVal === 'number' ? commVal : parseFloat(String(commVal).replace(/[^0-9.]/g, '')) || 40) : 40;
+      } else if (resolvedRole === 'SUB_BROKER' || subBrokerRow) {
+        brokerId = subBrokerRow?.broker_id || null;
+        subBrokerId = targetId;
+        masterId = subBrokerRow?.master_id || null;
+        if (!masterId && brokerId) {
+          const parentB = await query<any>('SELECT master_id FROM brokers WHERE id = $1 LIMIT 1', [brokerId]).catch(() => ({ rows: [] }));
+          if (parentB.rows[0]?.master_id) masterId = parentB.rows[0].master_id;
+        }
+        const commVal = subBrokerRow?.commission_share ?? subBrokerRow?.commission;
+        commissionShare = commVal !== null && commVal !== undefined ? (typeof commVal === 'number' ? commVal : parseFloat(String(commVal).replace(/[^0-9.]/g, '')) || 20) : 20;
+      } else {
+        // CLIENT
         if (!clientRow) {
-          const cRes = await query<any>('SELECT master_id, broker_id, sub_broker_id, balance, client_code FROM clients WHERE id = $1 OR client_code = $1 OR LOWER(email) = LOWER($2) LIMIT 1', [targetId, user.email]);
+          const cRes = await query<any>('SELECT master_id, broker_id, sub_broker_id, balance, client_code FROM clients WHERE id = $1 OR client_code = $1 OR LOWER(email) = LOWER($2) LIMIT 1', [targetId, resolvedEmail]).catch(() => ({ rows: [] }));
           clientRow = cRes.rows[0];
         }
         if (clientRow) {
@@ -883,23 +1086,43 @@ async function startServer() {
           subBrokerId = clientRow.sub_broker_id || null;
           initialBalance = parseFloat(clientRow.balance) || 0;
         }
-      } else if (roleUpper === 'SUB_BROKER') {
-        const sbRes = await query<any>('SELECT broker_id, referral_code, code FROM sub_brokers WHERE id = $1 OR LOWER(email) = LOWER($2) LIMIT 1', [targetId, user.email]);
-        if (sbRes.rows[0]) {
-          brokerId = sbRes.rows[0].broker_id;
-          referralCode = sbRes.rows[0].referral_code || sbRes.rows[0].code;
-        }
-      } else if (roleUpper === 'BROKER') {
-        const bRes = await query<any>('SELECT master_id, referral_code, code FROM brokers WHERE id = $1 OR LOWER(email) = LOWER($2) LIMIT 1', [targetId, user.email]);
-        if (bRes.rows[0]) {
-          masterId = bRes.rows[0].master_id;
-          referralCode = bRes.rows[0].referral_code || bRes.rows[0].code;
-        }
-      } else if (roleUpper === 'MASTER') {
-        const mRes = await query<any>('SELECT referral_code, code FROM masters WHERE id = $1 OR LOWER(email) = LOWER($2) LIMIT 1', [targetId, user.email]);
-        if (mRes.rows[0]) {
-          referralCode = mRes.rows[0].referral_code || mRes.rows[0].code;
-        }
+      }
+
+      // Ensure users table row exists with current credentials
+      await query(`
+        INSERT INTO users (
+          id, tenant_id, name, email, role, status, password_hash, phone,
+          hierarchy_level, hierarchy_id, is_suspended, client_code, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP)
+        ON CONFLICT (email) DO UPDATE SET
+          role = EXCLUDED.role,
+          name = EXCLUDED.name,
+          password_hash = COALESCE(users.password_hash, EXCLUDED.password_hash),
+          status = EXCLUDED.status,
+          phone = COALESCE(EXCLUDED.phone, users.phone),
+          hierarchy_id = COALESCE(users.hierarchy_id, EXCLUDED.hierarchy_id),
+          updated_at = CURRENT_TIMESTAMP
+      `, [
+        user?.id || `usr_${resolvedRole.toLowerCase()}_${targetId.replace(/[^a-z0-9]/gi, '')}`,
+        resolvedTenantId,
+        resolvedName,
+        resolvedEmail,
+        resolvedRole,
+        resolvedStatus,
+        resolvedPasswordHash,
+        resolvedPhone,
+        resolvedRole,
+        targetId,
+        resolvedStatus === 'SUSPENDED',
+        entity?.client_code || user?.client_code || null
+      ]).catch(() => {});
+
+      // If entity password_hash was missing, backfill it
+      if (entity && !entity.password_hash && resolvedPasswordHash) {
+        if (masterRow) await query('UPDATE masters SET password_hash = $1 WHERE id = $2', [resolvedPasswordHash, targetId]).catch(() => {});
+        else if (brokerRow) await query('UPDATE brokers SET password_hash = $1 WHERE id = $2', [resolvedPasswordHash, targetId]).catch(() => {});
+        else if (subBrokerRow) await query('UPDATE sub_brokers SET password_hash = $1 WHERE id = $2', [resolvedPasswordHash, targetId]).catch(() => {});
+        else if (clientRow) await query('UPDATE clients SET password_hash = $1 WHERE id = $2', [resolvedPasswordHash, targetId]).catch(() => {});
       }
 
       res.status(200).json({
@@ -907,19 +1130,20 @@ async function startServer() {
         found: true,
         user: {
           id: targetId,
-          userId: user.client_code || targetId,
-          name: user.name,
-          email: user.email,
-          phone: user.phone,
-          passwordHash: user.password_hash,
-          role: user.role,
-          status: user.status,
+          userId: entity?.client_code || user?.client_code || targetId,
+          name: resolvedName,
+          email: resolvedEmail,
+          phone: resolvedPhone,
+          passwordHash: resolvedPasswordHash,
+          role: resolvedRole,
+          status: resolvedStatus,
           referralCode,
+          tenantId: resolvedTenantId,
           masterId,
           brokerId,
           subBrokerId,
-          initialBalance,
-          tenantId: user.tenant_id || 'TNT-001'
+          commissionShare,
+          initialBalance
         }
       });
     } catch (err: any) {

@@ -95,6 +95,22 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     this.pool = customPool;
   }
 
+  public clearCache(): void {
+    this.lastGoodCache.clear();
+  }
+
+  public syncHierarchyEntity(type: string, entity: any): void {
+    const t = String(type).toLowerCase();
+    if (t.includes('sub')) {
+      this.createdSubBrokersMap.set(entity.id, entity);
+    } else if (t.includes('broker')) {
+      this.createdBrokersMap.set(entity.id, entity);
+    } else if (t.includes('master')) {
+      this.createdMastersMap.set(entity.id, entity);
+    }
+    this.clearCache();
+  }
+
   private async executeQuery<T = any>(text: string, params?: any[]): Promise<pg.QueryResult<T>> {
     return query<T>(text, params, this.pool);
   }
