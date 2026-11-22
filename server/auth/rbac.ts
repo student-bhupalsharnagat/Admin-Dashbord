@@ -189,6 +189,8 @@ export const DEFAULT_ROLE_PERMISSIONS_MAP: Record<UserRole, Permission[]> = {
     'sub_brokers.create',
     'sub_brokers.update',
     'clients.view',
+    'clients.create',
+    'clients.update',
     'kyc.view',
     'kyc.review',
     'funds.view',

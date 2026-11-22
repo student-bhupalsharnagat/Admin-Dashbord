@@ -22,12 +22,14 @@ export const AddClientModal: React.FC<AddClientModalProps> = ({
   const [initialDeposit, setInitialDeposit] = useState('250000');
   const [marginMultiplier, setMarginMultiplier] = useState('4x');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
+    setError(null);
     const activeSubBrokerId = subBrokerId || subBrokers[0]?.id || '';
     const selectedSub = subBrokers.find(sb => sb.id === activeSubBrokerId);
     const brokerId = selectedSub?.broker_id || (selectedSub as any)?.brokerId || '';
@@ -52,8 +54,9 @@ export const AddClientModal: React.FC<AddClientModalProps> = ({
         available_margin: cleanDeposit * (parseInt(marginMultiplier) || 4)
       });
       onClose();
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      setError(err?.message || 'Failed to onboard client. Please check input and permissions.');
     } finally {
       setLoading(false);
     }
@@ -79,6 +82,15 @@ export const AddClientModal: React.FC<AddClientModalProps> = ({
             <X size={18} />
           </button>
         </div>
+
+        {error && (
+          <div className="mx-5 sm:mx-6 mt-4 p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-xs flex items-center justify-between">
+            <span>{error}</span>
+            <button type="button" onClick={() => setError(null)} className="text-red-400 hover:text-red-300">
+              <X size={14} />
+            </button>
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="p-5 sm:p-6 space-y-4 text-xs">
           <div>

@@ -329,6 +329,12 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       `ALTER TABLE clients ADD COLUMN IF NOT EXISTS balance NUMERIC(16, 2) DEFAULT 0.00`,
       `ALTER TABLE clients ADD COLUMN IF NOT EXISTS equity NUMERIC(16, 2) DEFAULT 0.00`,
       `ALTER TABLE clients ADD COLUMN IF NOT EXISTS margin_used NUMERIC(16, 2) DEFAULT 0.00`,
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS master_id VARCHAR(64)`,
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS master_name VARCHAR(255)`,
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS broker_id VARCHAR(64)`,
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS broker_name VARCHAR(255)`,
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS sub_broker_id VARCHAR(64)`,
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS sub_broker_name VARCHAR(255)`,
       // Compliance & Funds
       `ALTER TABLE kyc_records ADD COLUMN IF NOT EXISTS document_type VARCHAR(64) DEFAULT 'PAN_CARD'`,
       `ALTER TABLE kyc_records ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP`,
@@ -2022,6 +2028,59 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
         : (Array.isArray(liveRes.data?.items) ? liveRes.data.items : (Array.isArray(liveRes.data) ? liveRes.data : []));
 
       if (liveRes.success && remoteClients && remoteClients.length > 0) {
+        // Build fast remote lookup map for authoritative live balance sync
+        const remoteClientMap = new Map<string, any>();
+        for (const rc of remoteClients) {
+          const keys = [
+            rc.id,
+            rc.userId,
+            rc.user_id,
+            rc.clientCode,
+            rc.client_code,
+            rc.email
+          ].filter(Boolean);
+          for (const k of keys) {
+            remoteClientMap.set(String(k).toLowerCase().trim(), rc);
+          }
+        }
+
+        // Authoritative Live Balance Sync for existing PostgreSQL clients:
+        // ALWAYS treat Trading Platform's live balance/availableBalance/walletBalance as the single source of truth
+        for (const c of dbClients) {
+          const cId = String(c.id || '').toLowerCase().trim();
+          const cCode = String(c.client_code || '').toLowerCase().trim();
+          const cEmail = String(c.email || '').toLowerCase().trim();
+          const rc = remoteClientMap.get(cId) || (cCode && remoteClientMap.get(cCode)) || (cEmail && remoteClientMap.get(cEmail));
+
+          if (rc) {
+            const rawLiveBal = rc.balance ?? rc.availableBalance ?? rc.available_balance ?? rc.walletBalance ?? rc.wallet_balance;
+            if (rawLiveBal !== undefined && rawLiveBal !== null && rawLiveBal !== '') {
+              const liveBal = parseCleanNumber(rawLiveBal);
+              const currentDbBal = parseFloat(String(c.wallet_balance || (c as any).balance || '0').replace(/[^0-9.-]/g, '')) || 0;
+
+              c.wallet_balance = liveBal;
+              c.balance = `₹${liveBal.toLocaleString('en-IN')}`;
+              if (rc.equity !== undefined || rc.available_margin !== undefined) {
+                c.available_margin = parseCleanNumber(rc.equity ?? rc.available_margin);
+              }
+
+              // Update clients.balance in PostgreSQL asynchronously when a live balance drift is detected
+              if (Math.abs(currentDbBal - liveBal) > 0.01 && c.id) {
+                this.executeQuery(
+                  'UPDATE clients SET balance = $1, equity = COALESCE($2, equity), updated_at = CURRENT_TIMESTAMP WHERE id = $3 OR client_code = $3',
+                  [liveBal, c.available_margin, c.id]
+                ).catch(() => {});
+                this.executeQuery(
+                  'UPDATE wallets SET balance = $1, available_margin = COALESCE($2, available_margin), updated_at = CURRENT_TIMESTAMP WHERE client_id = $3 OR client_code = $3',
+                  [liveBal, c.available_margin, c.id]
+                ).catch(() => {});
+              }
+            }
+            // CRITICAL: Local PostgreSQL hierarchy assignment (master_id, broker_id, sub_broker_id)
+            // MUST take priority over stale hierarchy fields from Trading Platform so reassigned clients NEVER revert to their old Master/Broker!
+          }
+        }
+
         const seenKeys = new Set<string>();
         for (const c of dbClients) {
           if (c.id) seenKeys.add(String(c.id).toLowerCase().trim());
@@ -2059,6 +2118,8 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
 
           const clientId = rc.id || rc.userId || `CLT-${rawCode}`;
           const clientCode = rawCode || clientId;
+          const liveRawBal = rc.balance ?? rc.availableBalance ?? rc.available_balance ?? rc.walletBalance ?? rc.wallet_balance ?? '100000';
+          const liveBalanceNum = parseCleanNumber(liveRawBal);
 
           dbClients.push({
             id: clientId,
@@ -2078,9 +2139,9 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
             account: (rc.status || rc.accountStatus || 'ACTIVE').toUpperCase() === 'ACTIVE' ? 'ACTIVE' : 'SUSPENDED',
             kyc_status: (rc.kycStatus === 'VERIFIED' || rc.kyc_status === 'VERIFIED' ? 'APPROVED' : (rc.kyc_status || 'APPROVED')) as KYCStatus,
             kyc: 'APPROVED',
-            balance: `₹${parseFloat(rc.balance || rc.wallet_balance || '100000').toLocaleString('en-IN')}`,
-            wallet_balance: parseFloat(rc.balance || rc.wallet_balance || '100000'),
-            available_margin: parseFloat(rc.equity || rc.available_margin || rc.balance || '100000'),
+            balance: `₹${liveBalanceNum.toLocaleString('en-IN')}`,
+            wallet_balance: liveBalanceNum,
+            available_margin: parseFloat(rc.equity || rc.available_margin || String(liveBalanceNum)),
             todays_pl: 0,
             pl: '+₹0',
             pnl: 0,
@@ -4375,7 +4436,12 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       sql += ` AND tenant_id = $${params.length}`;
     }
     sql += ' ORDER BY created_at DESC';
-    const res = await this.safeQuery(sql, params);
+    // Parallelize DB query and live trades query using Promise.all()
+    const [res, liveTrades] = await Promise.all([
+      this.safeQuery(sql, params),
+      this.getAllTrades(scope).catch(() => [])
+    ]);
+
     const txns: any[] = res.rows.map(r => {
       const amt = parseCleanNumber(r.amount);
       return {
@@ -4394,7 +4460,6 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
 
     // Derive live commission transactions from executed trades so Transactions tab updates as trades execute
     try {
-      const liveTrades = await this.getAllTrades(scope).catch(() => []);
       const currentPeriod = new Date().toLocaleString('en-US', { month: 'short', year: 'numeric' });
       for (const tr of liveTrades.slice(0, 30)) {
         const tradeId = tr.trade_id || tr.id;

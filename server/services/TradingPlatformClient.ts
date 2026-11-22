@@ -1336,7 +1336,8 @@ export class TradingPlatformClient {
     return this.request({
       method: 'GET',
       path: '/api/internal/v1/trading/trades',
-      tenantId: outboundTenantId
+      tenantId: outboundTenantId,
+      timeoutMs: 3500
     });
   }
 
@@ -1345,7 +1346,8 @@ export class TradingPlatformClient {
     return this.request({
       method: 'GET',
       path: '/api/internal/v1/trading/positions',
-      tenantId: outboundTenantId
+      tenantId: outboundTenantId,
+      timeoutMs: 3500
     });
   }
 
@@ -1354,7 +1356,8 @@ export class TradingPlatformClient {
     return this.request({
       method: 'GET',
       path: '/api/internal/v1/trading/snapshot',
-      tenantId: outboundTenantId
+      tenantId: outboundTenantId,
+      timeoutMs: 3500
     });
   }
 
@@ -1399,7 +1402,8 @@ export class TradingPlatformClient {
     return this.request({
       method: 'GET',
       path: '/api/internal/v1/trading/risk-summary',
-      tenantId: outboundTenantId
+      tenantId: outboundTenantId,
+      timeoutMs: 3500
     });
   }
 

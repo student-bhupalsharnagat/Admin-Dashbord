@@ -134,14 +134,14 @@ export async function getHierarchyFilter(
         } catch {}
       }
 
-      // 3. Clients under those Sub-Brokers or Brokers
+      // 3. Clients under those Sub-Brokers or Brokers or directly under Master
       try {
         const { rows: cRows } = await query<{ id: string; client_code: string; name: string }>(
           `SELECT c.id, c.client_code, c.name FROM clients c
            LEFT JOIN sub_brokers sb ON c.sub_broker_id = sb.id
            LEFT JOIN brokers b ON sb.broker_id = b.id
-           WHERE b.master_id = $1`,
-          [result.masterId]
+           WHERE b.master_id = $1 OR c.master_id = $1 OR ($2 <> '' AND c.master_name ILIKE $2)`,
+          [result.masterId, user.name || '']
         );
         for (const c of cRows) {
           if (c.id) allowedClientIds.add(c.id.toLowerCase());
@@ -276,7 +276,21 @@ export async function filterClientsForUser<T extends { id: string; sub_broker_id
   }
   const filter = await getHierarchyFilter(user);
   if (filter.isGlobal || !filter.allowedClientIds || !filter.allowedClientCodes || !filter.allowedSubBrokerIds) return clients;
-  if (filter.role === 'MASTER' || filter.role === 'BROKER') {
+  if (filter.role === 'MASTER') {
+    const userMasterId = (user.hierarchy_id || filter.masterId || user.id || '').toString().toLowerCase();
+    const userMasterName = (user.name || '').toString().toLowerCase();
+    return clients.filter((c: any) => {
+      const cMasterId = (c.master_id || c.masterId || '').toString().toLowerCase();
+      const cMasterName = (c.master_name || c.masterName || c.master || '').toString().toLowerCase();
+      if (userMasterId && (cMasterId === userMasterId || (user.id && cMasterId === user.id.toLowerCase()))) return true;
+      if (userMasterName && cMasterName === userMasterName) return true;
+      if (c.sub_broker_id && filter.allowedSubBrokerIds!.has(c.sub_broker_id)) return true;
+      if (c.id && filter.allowedClientIds!.has(c.id.toLowerCase())) return true;
+      if (c.client_code && filter.allowedClientCodes!.has(c.client_code.toLowerCase())) return true;
+      return false;
+    });
+  }
+  if (filter.role === 'BROKER') {
     return clients.filter(c =>
       (c.sub_broker_id && filter.allowedSubBrokerIds!.has(c.sub_broker_id)) ||
       (c.id && filter.allowedClientIds!.has(c.id.toLowerCase())) ||
@@ -318,6 +332,16 @@ export async function filterClientScopedItems<T extends Record<string, any>>(ite
       const iSubBroker = (i.sub_broker_id || i.subBrokerId || i.agent_id || i.recipient_id || '').toString().toLowerCase();
       if (iSubBroker === subBrokerTarget) return true;
       if (user.name && (i.agent_name || '').toString().toLowerCase() === user.name.toLowerCase()) return true;
+    }
+
+    // Direct master matching for MASTER role
+    if (filter.role === 'MASTER') {
+      const userMasterId = (user.hierarchy_id || filter.masterId || user.id || '').toString().toLowerCase();
+      const userMasterName = (user.name || '').toString().toLowerCase();
+      const iMasterId = (i.master_id || i.masterId || '').toString().toLowerCase();
+      const iMasterName = (i.master_name || i.masterName || i.master || '').toString().toLowerCase();
+      if (userMasterId && (iMasterId === userMasterId || (user.id && iMasterId === user.id.toLowerCase()))) return true;
+      if (userMasterName && iMasterName === userMasterName) return true;
     }
 
     // 2. Direct client identifiers

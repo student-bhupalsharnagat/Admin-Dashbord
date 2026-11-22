@@ -850,10 +850,18 @@ export default function App() {
         await loadHierarchyData();
         await loadDashboardData();
       } else {
-        showToast('Failed to onboard Client', 'warning');
+        const errData = await res.json().catch(() => ({}));
+        const errMsg = errData.message || errData.error || 'Failed to onboard Client';
+        showToast(errMsg, 'warning');
+        throw new Error(errMsg);
       }
-    } catch {
-      showToast('Error onboarding Client', 'warning');
+    } catch (err: any) {
+      if (err?.message && err.message !== 'Failed to onboard Client' && !err.message.includes('object Object')) {
+        // specific message already toasted
+      } else {
+        showToast('Error onboarding Client', 'warning');
+      }
+      throw err;
     }
   };
 

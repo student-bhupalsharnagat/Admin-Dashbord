@@ -313,8 +313,9 @@ export class EventHandler {
           break;
 
         case 'broker.added':
+          break;
         case 'ledger.updated':
-          // Broadcast via adminEventBus below so Admin panels immediately refresh hierarchy/KPI/ledger caches
+          await this.handleLedgerUpdated(eventData);
           break;
 
         case 'tenant.config.updated':
@@ -989,6 +990,44 @@ export class EventHandler {
   }
 
   /**
+   * Handle Ledger Updated S2S event - immediately syncs authoritative balance to PostgreSQL clients
+   */
+  private async handleLedgerUpdated(event: TradingPlatformEvent): Promise<void> {
+    const p = event.payload;
+    if (!p) return;
+    const clientId = String(p.clientId || p.client_id || p.id || p.clientCode || p.client_code || p.userId || p.user_id || '');
+    const rawBal = p.balance ?? p.balanceAfter ?? p.balance_after ?? p.walletBalance ?? p.wallet_balance ?? p.availableBalance;
+    if (clientId && rawBal !== undefined && rawBal !== null && rawBal !== '') {
+      const balance = Number(rawBal);
+      const equity = p.equity !== undefined ? Number(p.equity) : balance;
+      await query(
+        `UPDATE clients
+         SET balance = $1, equity = COALESCE($2, equity), updated_at = CURRENT_TIMESTAMP
+         WHERE (id = $3 OR client_code = $3) AND tenant_id = $4`,
+        [balance, equity, clientId, event.tenantId]
+      ).catch(() => {});
+      await query(
+        `UPDATE wallets
+         SET balance = $1, equity = COALESCE($2, equity), updated_at = CURRENT_TIMESTAMP
+         WHERE (client_id = $3 OR client_code = $3) AND tenant_id = $4`,
+        [balance, equity, clientId, event.tenantId]
+      ).catch(() => {});
+    } else if (clientId) {
+      try {
+        const liveAcct = await tradingPlatformClient.getClientTradingAccount(clientId, event.tenantId);
+        const balVal = liveAcct.data?.balance ?? liveAcct.data?.walletBalance ?? liveAcct.data?.availableBalance;
+        if (balVal !== undefined && balVal !== null) {
+          const liveBal = Number(balVal);
+          await query(
+            `UPDATE clients SET balance = $1, updated_at = CURRENT_TIMESTAMP WHERE (id = $2 OR client_code = $2) AND tenant_id = $3`,
+            [liveBal, clientId, event.tenantId]
+          ).catch(() => {});
+        }
+      } catch {}
+    }
+  }
+
+  /**
    * 3. Handle Trade Executed
    * Authoritative data only - never use fake fallback values
    */
@@ -1191,6 +1230,33 @@ export class EventHandler {
         `Trade ${tradeId} executed for ${clientName}: ${side} ${quantity} ${symbol} @ ₹${price}`
       ]
     );
+
+    // Immediate authoritative balance sync on trade.executed
+    try {
+      const rawBal = p.balance ?? p.balanceAfter ?? p.balance_after ?? p.walletBalance ?? p.wallet_balance ?? p.availableBalance;
+      if (rawBal !== undefined && rawBal !== null && rawBal !== '') {
+        const liveBal = Number(rawBal);
+        const liveEq = p.equity !== undefined ? Number(p.equity) : liveBal;
+        await query(
+          `UPDATE clients SET balance = $1, equity = COALESCE($2, equity), updated_at = CURRENT_TIMESTAMP WHERE id = $3 AND tenant_id = $4`,
+          [liveBal, liveEq, clientId, event.tenantId]
+        ).catch(() => {});
+        await query(
+          `UPDATE wallets SET balance = $1, equity = COALESCE($2, equity), updated_at = CURRENT_TIMESTAMP WHERE client_id = $3 AND tenant_id = $4`,
+          [liveBal, liveEq, clientId, event.tenantId]
+        ).catch(() => {});
+      } else {
+        tradingPlatformClient.getClientTradingAccount(clientId, event.tenantId).then(acct => {
+          const balVal = acct.data?.balance ?? acct.data?.walletBalance ?? acct.data?.availableBalance;
+          if (balVal !== undefined && balVal !== null) {
+            query(
+              `UPDATE clients SET balance = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND tenant_id = $3`,
+              [Number(balVal), clientId, event.tenantId]
+            ).catch(() => {});
+          }
+        }).catch(() => {});
+      }
+    } catch {}
   }
 
   /**
@@ -1600,6 +1666,34 @@ export class EventHandler {
     } else {
       await this.handleDepositEvent(event);
     }
+
+    // Immediate authoritative balance sync on fund.transaction_updated
+    try {
+      const clientId = String(p.clientId || p.client_id || p.id || p.clientCode || p.client_code || p.userId || p.user_id || '');
+      const rawBal = p.balance ?? p.balanceAfter ?? p.balance_after ?? p.walletBalance ?? p.wallet_balance ?? p.availableBalance;
+      if (clientId && rawBal !== undefined && rawBal !== null && rawBal !== '') {
+        const balance = Number(rawBal);
+        const equity = p.equity !== undefined ? Number(p.equity) : balance;
+        await query(
+          `UPDATE clients SET balance = $1, equity = COALESCE($2, equity), updated_at = CURRENT_TIMESTAMP WHERE (id = $3 OR client_code = $3) AND tenant_id = $4`,
+          [balance, equity, clientId, event.tenantId]
+        ).catch(() => {});
+        await query(
+          `UPDATE wallets SET balance = $1, equity = COALESCE($2, equity), updated_at = CURRENT_TIMESTAMP WHERE (client_id = $3 OR client_code = $3) AND tenant_id = $4`,
+          [balance, equity, clientId, event.tenantId]
+        ).catch(() => {});
+      } else if (clientId) {
+        tradingPlatformClient.getClientTradingAccount(clientId, event.tenantId).then(acct => {
+          const balVal = acct.data?.balance ?? acct.data?.walletBalance ?? acct.data?.availableBalance;
+          if (balVal !== undefined && balVal !== null) {
+            query(
+              `UPDATE clients SET balance = $1, updated_at = CURRENT_TIMESTAMP WHERE (id = $2 OR client_code = $2) AND tenant_id = $3`,
+              [Number(balVal), clientId, event.tenantId]
+            ).catch(() => {});
+          }
+        }).catch(() => {});
+      }
+    } catch {}
   }
 
   private async handleOrderEvent(event: TradingPlatformEvent): Promise<void> {

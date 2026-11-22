@@ -1097,7 +1097,13 @@ export const HierarchyViews: React.FC<HierarchyViewsProps> = ({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(newClient)
         });
-        const saved = res.ok ? await res.json() : newClient;
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          const errMsg = errData.message || errData.error || 'Failed to onboard client';
+          notify(errMsg, 'warning');
+          return;
+        }
+        const saved = await res.json();
         setClientsList([saved, ...clientsList]);
         notify(`Client ${saved.name} (${saved.id}) onboarded!`, 'success');
         onRefresh?.();

@@ -808,9 +808,47 @@ async function startServer() {
         // CLIENT
         const clientCode = node.clientCode || node.client_code || node.code || `CLT${id.replace(/[^0-9]/g, '').slice(-4) || '101'}`;
 
+        // Look up Master by id, email, or name in PostgreSQL masters and preserve exact master_id & master_name
+        const incomingMaster = node.masterId || node.master_id || envelope.masterId || envelope.master_id || null;
+        const incomingMasterName = node.masterName || node.master_name || envelope.masterName || envelope.master_name || null;
+        if (incomingMaster) {
+          const mRes = await query<{ id: string; name: string }>(
+            'SELECT id, name FROM masters WHERE id = $1 OR LOWER(email) = LOWER($1) OR name ILIKE $1 LIMIT 1',
+            [incomingMaster]
+          ).catch(() => ({ rows: [] }));
+          if (mRes.rows.length > 0) {
+            masterId = mRes.rows[0].id;
+            masterName = mRes.rows[0].name;
+          } else {
+            // Preserve exact incoming masterId, never overwrite with 'MST-001'
+            masterId = incomingMaster;
+            masterName = incomingMasterName || incomingMaster;
+          }
+        }
+
+        // Look up Broker by id, email, or name if provided
+        const incomingBroker = node.brokerId || node.broker_id || envelope.brokerId || envelope.broker_id || null;
+        if (incomingBroker) {
+          const bRes = await query<{ id: string; name: string; master_id: string; master_name: string }>(
+            'SELECT id, name, master_id, master_name FROM brokers WHERE id = $1 OR LOWER(email) = LOWER($1) OR name ILIKE $1 LIMIT 1',
+            [incomingBroker]
+          ).catch(() => ({ rows: [] }));
+          if (bRes.rows.length > 0) {
+            brokerId = bRes.rows[0].id;
+            brokerName = bRes.rows[0].name;
+            if (!masterId && bRes.rows[0].master_id) {
+              masterId = bRes.rows[0].master_id;
+              masterName = bRes.rows[0].master_name || masterName;
+            }
+          }
+        }
+
         // Ensure sub_broker_id exists if foreign key applies
         if (subBrokerId) {
-          const sbCheck = await query<{ id: string; name: string; broker_id: string; master_id: string }>('SELECT id, name, broker_id, master_id FROM sub_brokers WHERE id = $1 LIMIT 1', [subBrokerId]).catch(() => ({ rows: [] }));
+          const sbCheck = await query<{ id: string; name: string; broker_id: string; master_id: string }>(
+            'SELECT id, name, broker_id, master_id FROM sub_brokers WHERE id = $1 OR LOWER(email) = LOWER($1) OR name ILIKE $1 LIMIT 1',
+            [subBrokerId]
+          ).catch(() => ({ rows: [] }));
           if (sbCheck.rows.length > 0) {
             subBrokerId = sbCheck.rows[0].id;
             subBrokerName = subBrokerName || sbCheck.rows[0].name;
@@ -821,7 +859,18 @@ async function startServer() {
           }
         }
         if (!subBrokerId) {
-          const firstSb = await query<{ id: string; name: string; broker_id: string; master_id: string }>('SELECT id, name, broker_id, master_id FROM sub_brokers ORDER BY created_at ASC LIMIT 1').catch(() => ({ rows: [] }));
+          // If masterId or brokerId was explicitly provided, pick a sub-broker under that lineage
+          let sbQuery = 'SELECT id, name, broker_id, master_id FROM sub_brokers WHERE 1=1';
+          const sbParams: any[] = [];
+          if (brokerId) {
+            sbParams.push(brokerId);
+            sbQuery += ` AND broker_id = $${sbParams.length}`;
+          } else if (masterId) {
+            sbParams.push(masterId);
+            sbQuery += ` AND master_id = $${sbParams.length}`;
+          }
+          sbQuery += ' ORDER BY created_at ASC LIMIT 1';
+          const firstSb = await query<{ id: string; name: string; broker_id: string; master_id: string }>(sbQuery, sbParams).catch(() => ({ rows: [] }));
           if (firstSb.rows.length > 0) {
             subBrokerId = firstSb.rows[0].id;
             subBrokerName = subBrokerName || firstSb.rows[0].name;
@@ -2046,10 +2095,15 @@ async function startServer() {
   );
 
   // ----------------------------------------------------
-  // SHARED 2-SECOND SLIDING WINDOW CACHE + IN-FLIGHT DEDUP
-  // Prevents concurrent polling storms on /metrics, /funds, /risk from exhausting PostgreSQL
+  // SHARED STALE-WHILE-REVALIDATE IN-MEMORY CACHE + IN-FLIGHT DEDUP
+  // Keeps latency <300ms, caps S2S snapshot fetch at 3500ms
   // ----------------------------------------------------
-  const responseWindowCache = new Map<string, { payload: any; expiresAt: number }>();
+  interface CacheEntry<T> {
+    payload: T;
+    expiresAt: number;
+    staleUntil: number;
+  }
+  const responseWindowCache = new Map<string, CacheEntry<any>>();
   const inFlightResponseQueries = new Map<string, Promise<any>>();
 
   const clearDashboardCache = (prefix?: string) => {
@@ -2070,25 +2124,77 @@ async function startServer() {
     forceRefresh = false
   ): Promise<T> {
     const now = Date.now();
-    if (!forceRefresh) {
-      const cached = responseWindowCache.get(cacheKey);
-      if (cached && cached.expiresAt > now) {
+    const cached = responseWindowCache.get(cacheKey);
+
+    if (!forceRefresh && cached) {
+      // 1. Fresh hit: return immediately
+      if (cached.expiresAt > now) {
         return cached.payload as T;
       }
+      // 2. Stale-while-revalidate: return stale cached payload immediately (<300ms) and refresh in background
+      if (cached.staleUntil > now) {
+        if (!inFlightResponseQueries.has(cacheKey)) {
+          const bgRevalidate = (async () => {
+            try {
+              const freshPayload = await fetcher();
+              responseWindowCache.set(cacheKey, {
+                payload: freshPayload,
+                expiresAt: Date.now() + ttlMs,
+                staleUntil: Date.now() + 300000
+              });
+            } catch (err: any) {
+              console.warn(`[SWR Revalidation] Background revalidation warning for ${cacheKey}:`, err?.message || err);
+            }
+          })();
+          inFlightResponseQueries.set(cacheKey, bgRevalidate);
+          bgRevalidate.finally(() => {
+            inFlightResponseQueries.delete(cacheKey);
+          });
+        }
+        return cached.payload as T;
+      }
+    }
+
+    if (!forceRefresh) {
       const inFlight = inFlightResponseQueries.get(cacheKey);
       if (inFlight) {
         return inFlight as Promise<T>;
       }
     }
 
+    // Cold cache: execute fetcher capped with 3500ms timeout falling back to cached data if available
     const promise = (async () => {
-      const payload = await fetcher();
-      responseWindowCache.set(cacheKey, { payload, expiresAt: Date.now() + ttlMs });
-      if (responseWindowCache.size > 100) {
-        const firstKey = responseWindowCache.keys().next().value;
-        if (firstKey) responseWindowCache.delete(firstKey);
+      let timeoutHandle: any;
+      const timeoutPromise = new Promise<T>((resolve, reject) => {
+        timeoutHandle = setTimeout(() => {
+          if (cached) {
+            resolve(cached.payload as T);
+          } else {
+            reject(new Error('S2S query snapshot timeout'));
+          }
+        }, 3500);
+      });
+
+      try {
+        const payload = await Promise.race([fetcher(), timeoutPromise]);
+        clearTimeout(timeoutHandle);
+        responseWindowCache.set(cacheKey, {
+          payload,
+          expiresAt: Date.now() + ttlMs,
+          staleUntil: Date.now() + 300000
+        });
+        if (responseWindowCache.size > 100) {
+          const firstKey = responseWindowCache.keys().next().value;
+          if (firstKey) responseWindowCache.delete(firstKey);
+        }
+        return payload;
+      } catch (err) {
+        clearTimeout(timeoutHandle);
+        if (cached) {
+          return cached.payload as T;
+        }
+        throw err;
       }
-      return payload;
     })();
 
     inFlightResponseQueries.set(cacheKey, promise);
@@ -2445,6 +2551,12 @@ async function startServer() {
     password?: string;
     phone?: string;
     isUpdate?: boolean;
+    masterId?: string | null;
+    masterName?: string | null;
+    brokerId?: string | null;
+    brokerName?: string | null;
+    subBrokerId?: string | null;
+    subBrokerName?: string | null;
   }): Promise<string | null> {
     try {
       const hasExplicitPassword = typeof data.password === 'string' && data.password.trim().length >= 6;
@@ -2462,9 +2574,15 @@ async function startServer() {
              SET name = COALESCE(NULLIF($1, ''), name),
                  email = COALESCE(NULLIF($2, ''), email),
                  phone = COALESCE(NULLIF($3, ''), phone),
+                 master_id = COALESCE($5, master_id),
+                 master_name = COALESCE($6, master_name),
+                 broker_id = COALESCE($7, broker_id),
+                 broker_name = COALESCE($8, broker_name),
+                 sub_broker_id = COALESCE($9, sub_broker_id),
+                 sub_broker_name = COALESCE($10, sub_broker_name),
                  updated_at = CURRENT_TIMESTAMP
              WHERE id = $4`,
-            [data.name || '', userEmail, data.phone || '', existing.rows[0].id]
+            [data.name || '', userEmail, data.phone || '', existing.rows[0].id, data.masterId || null, data.masterName || null, data.brokerId || null, data.brokerName || null, data.subBrokerId || null, data.subBrokerName || null]
           ).catch(() => {});
           return existing.rows[0].password_hash || null;
         }
@@ -2475,8 +2593,8 @@ async function startServer() {
       await query(`
         INSERT INTO users (
           id, tenant_id, name, email, role, status, password_hash, phone,
-          hierarchy_level, hierarchy_id, is_suspended, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, 'ACTIVE', $6, $7, $8, $9, false, CURRENT_TIMESTAMP)
+          hierarchy_level, hierarchy_id, is_suspended, master_id, master_name, broker_id, broker_name, sub_broker_id, sub_broker_name, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, 'ACTIVE', $6, $7, $8, $9, false, $10, $11, $12, $13, $14, $15, CURRENT_TIMESTAMP)
         ON CONFLICT (email) DO UPDATE SET
           name = EXCLUDED.name,
           role = EXCLUDED.role,
@@ -2485,6 +2603,12 @@ async function startServer() {
           hierarchy_id = EXCLUDED.hierarchy_id,
           phone = COALESCE(EXCLUDED.phone, users.phone),
           password_hash = COALESCE(EXCLUDED.password_hash, users.password_hash),
+          master_id = COALESCE(EXCLUDED.master_id, users.master_id),
+          master_name = COALESCE(EXCLUDED.master_name, users.master_name),
+          broker_id = COALESCE(EXCLUDED.broker_id, users.broker_id),
+          broker_name = COALESCE(EXCLUDED.broker_name, users.broker_name),
+          sub_broker_id = COALESCE(EXCLUDED.sub_broker_id, users.sub_broker_id),
+          sub_broker_name = COALESCE(EXCLUDED.sub_broker_name, users.sub_broker_name),
           updated_at = CURRENT_TIMESTAMP
       `, [
         userId,
@@ -2495,7 +2619,13 @@ async function startServer() {
         passHash,
         data.phone || null,
         data.role,
-        data.entityId
+        data.entityId,
+        data.masterId || null,
+        data.masterName || null,
+        data.brokerId || null,
+        data.brokerName || null,
+        data.subBrokerId || null,
+        data.subBrokerName || null
       ]);
 
       const entityTableMap: Record<string, string> = {
@@ -3359,6 +3489,57 @@ async function startServer() {
       if (user.role !== 'SUPER_ADMIN' && user.role !== 'PLATFORM_OWNER') {
         data.tenant_id = user.tenant_id;
       }
+
+      // Automatically set masterId & brokerId for MASTER role
+      if (user.role === 'MASTER') {
+        const effectiveMasterId = user.hierarchy_id || (user as any).masterId || user.id;
+        data.master_id = effectiveMasterId;
+        data.masterId = effectiveMasterId;
+        data.master_name = user.name || data.master_name || 'Master Admin';
+        data.masterName = user.name || data.masterName || 'Master Admin';
+
+        // Resolve a valid brokerId under that Master (or default broker linked to that Master)
+        if (!data.broker_id && !data.brokerId) {
+          const bRes = await query<{ id: string; name: string }>(
+            'SELECT id, name FROM brokers WHERE master_id = $1 ORDER BY created_at ASC LIMIT 1',
+            [effectiveMasterId]
+          );
+          if (bRes.rows.length > 0) {
+            data.broker_id = bRes.rows[0].id;
+            data.brokerId = bRes.rows[0].id;
+            data.broker_name = bRes.rows[0].name;
+            data.brokerName = bRes.rows[0].name;
+          } else {
+            const defB = await query<{ id: string; name: string }>('SELECT id, name FROM brokers ORDER BY created_at ASC LIMIT 1');
+            if (defB.rows.length > 0) {
+              data.broker_id = defB.rows[0].id;
+              data.brokerId = defB.rows[0].id;
+              data.broker_name = defB.rows[0].name;
+              data.brokerName = defB.rows[0].name;
+            }
+          }
+        }
+
+        // If sub_broker_id is provided, verify it belongs under this Master
+        if (data.sub_broker_id) {
+          const hasAccess = await requireHierarchyAccess('sub_broker', data.sub_broker_id, user);
+          if (!hasAccess) {
+            return res.status(403).json({ error: 'FORBIDDEN', message: 'Assigned sub-broker does not belong to your organization.' });
+          }
+        } else if (data.broker_id) {
+          const sbRes = await query<{ id: string; name: string }>(
+            'SELECT id, name FROM sub_brokers WHERE broker_id = $1 ORDER BY created_at ASC LIMIT 1',
+            [data.broker_id]
+          );
+          if (sbRes.rows.length > 0) {
+            data.sub_broker_id = sbRes.rows[0].id;
+            data.subBrokerId = sbRes.rows[0].id;
+            data.sub_broker_name = sbRes.rows[0].name;
+            data.subBrokerName = sbRes.rows[0].name;
+          }
+        }
+      }
+
       if (user.role === 'BROKER' && user.hierarchy_id) {
         data.broker_id = user.hierarchy_id;
         if (data.sub_broker_id) {
@@ -3369,6 +3550,13 @@ async function startServer() {
         }
       }
       const client = await activeTradingDataProvider.createClient(data);
+      const masterId = data.masterId || data.master_id || (client as any).master_id || (client as any).masterId || null;
+      const masterName = data.masterName || data.master_name || (client as any).master_name || (client as any).masterName || null;
+      const brokerId = data.brokerId || data.broker_id || (client as any).broker_id || (client as any).brokerId || null;
+      const brokerName = data.brokerName || data.broker_name || (client as any).broker_name || (client as any).brokerName || null;
+      const subBrokerId = data.subBrokerId || data.sub_broker_id || client.sub_broker_id || null;
+      const subBrokerName = data.subBrokerName || data.sub_broker_name || client.sub_broker_name || null;
+
       const passwordHash = await provisionHierarchyUser({
         entityId: client.id,
         tenantId: client.tenant_id,
@@ -3376,8 +3564,33 @@ async function startServer() {
         email: client.email || data.email,
         role: 'CLIENT',
         password: req.body.password,
-        phone: client.phone || req.body.phone
+        phone: client.phone || req.body.phone,
+        masterId,
+        masterName,
+        brokerId,
+        brokerName,
+        subBrokerId,
+        subBrokerName
       });
+
+      // Persist hierarchy fields into PostgreSQL users table
+      await query(
+        `UPDATE users
+         SET master_id = COALESCE($1, master_id),
+             master_name = COALESCE($2, master_name),
+             broker_id = COALESCE($3, broker_id),
+             broker_name = COALESCE($4, broker_name),
+             sub_broker_id = COALESCE($5, sub_broker_id),
+             sub_broker_name = COALESCE($6, sub_broker_name),
+             updated_at = CURRENT_TIMESTAMP
+         WHERE hierarchy_id = $7 OR id = $7 OR LOWER(email) = LOWER($8)`,
+        [masterId, masterName, brokerId, brokerName, subBrokerId, subBrokerName, client.id, (client.email || data.email || '').trim().toLowerCase()]
+      ).catch(() => {});
+
+      // Clear all caches
+      clearDashboardCache();
+      tradingPlatformClient.clearCache();
+
       const initialBalance = Number(data.initialBalance ?? data.initial_balance ?? data.wallet_balance ?? data.balance ?? 0);
       await notifyHierarchyChange('client', 'UPSERT', {
         ...client,
@@ -3387,9 +3600,12 @@ async function startServer() {
         passwordHash,
         initialBalance,
         status: client.status || 'ACTIVE',
-        masterId: data.masterId || data.master_id || (client as any).master_id || (client as any).masterId || null,
-        brokerId: data.brokerId || data.broker_id || (client as any).broker_id || (client as any).brokerId || null,
-        subBrokerId: data.subBrokerId || data.sub_broker_id || client.sub_broker_id || null
+        masterId,
+        masterName,
+        brokerId,
+        brokerName,
+        subBrokerId,
+        subBrokerName
       }, passwordHash);
       await writeSecurityAuditLog({
         tenantId: client.tenant_id,
@@ -3490,6 +3706,24 @@ async function startServer() {
 
       const updated = await activeTradingDataProvider.updateClient(id, updateData);
 
+      // Persist the new master_id, master_name, broker_id, broker_name, sub_broker_id, and sub_broker_name into PostgreSQL clients AND users
+      await query(
+        `UPDATE clients
+         SET master_id = $1, master_name = $2, broker_id = $3, broker_name = $4, sub_broker_id = $5, sub_broker_name = $6, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $7 OR client_code = $7`,
+        [resolvedMasterId, masterName, resolvedBrokerId, brokerName, resolvedSubBrokerId, subBrokerName, id]
+      ).catch(() => {});
+
+      await query(
+        `UPDATE users
+         SET master_id = $1, master_name = $2, broker_id = $3, broker_name = $4, sub_broker_id = $5, sub_broker_name = $6, updated_at = CURRENT_TIMESTAMP
+         WHERE hierarchy_id = $7 OR id = $7 OR LOWER(email) = LOWER($8)`,
+        [resolvedMasterId, masterName, resolvedBrokerId, brokerName, resolvedSubBrokerId, subBrokerName, id, (client.email || '').trim().toLowerCase()]
+      ).catch(() => {});
+
+      clearDashboardCache();
+      tradingPlatformClient.clearCache();
+
       const s2sPayload = {
         ...(updated || client),
         id: client.id,
@@ -3506,7 +3740,11 @@ async function startServer() {
         tenantId: client.tenant_id
       };
 
+      // Await S2S UPSERT with updated lineage to BOTH Trading-Platform and User-Panel-Dashbord
       await notifyHierarchyChange('client', 'UPSERT', s2sPayload);
+
+      clearDashboardCache();
+      tradingPlatformClient.clearCache();
 
       await writeSecurityAuditLog({
         tenantId: client.tenant_id,
@@ -3532,6 +3770,46 @@ async function startServer() {
     try {
       const updated = await activeTradingDataProvider.updateClient(req.params.id, req.body);
       if (!updated) return res.status(404).json({ error: 'Client not found' });
+
+      // Persist hierarchy fields into PostgreSQL clients and users
+      const masterId = req.body.masterId || req.body.master_id || (updated as any).master_id || (updated as any).masterId;
+      const masterName = req.body.masterName || req.body.master_name || (updated as any).master_name || (updated as any).masterName;
+      const brokerId = req.body.brokerId || req.body.broker_id || (updated as any).broker_id || (updated as any).brokerId;
+      const brokerName = req.body.brokerName || req.body.broker_name || (updated as any).broker_name || (updated as any).brokerName;
+      const subBrokerId = req.body.subBrokerId || req.body.sub_broker_id || updated.sub_broker_id;
+      const subBrokerName = req.body.subBrokerName || req.body.sub_broker_name || updated.sub_broker_name;
+
+      if (masterId || brokerId || subBrokerId) {
+        await query(
+          `UPDATE clients
+           SET master_id = COALESCE($1, master_id),
+               master_name = COALESCE($2, master_name),
+               broker_id = COALESCE($3, broker_id),
+               broker_name = COALESCE($4, broker_name),
+               sub_broker_id = COALESCE($5, sub_broker_id),
+               sub_broker_name = COALESCE($6, sub_broker_name),
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = $7 OR client_code = $7`,
+          [masterId || null, masterName || null, brokerId || null, brokerName || null, subBrokerId || null, subBrokerName || null, req.params.id]
+        ).catch(() => {});
+
+        await query(
+          `UPDATE users
+           SET master_id = COALESCE($1, master_id),
+               master_name = COALESCE($2, master_name),
+               broker_id = COALESCE($3, broker_id),
+               broker_name = COALESCE($4, broker_name),
+               sub_broker_id = COALESCE($5, sub_broker_id),
+               sub_broker_name = COALESCE($6, sub_broker_name),
+               updated_at = CURRENT_TIMESTAMP
+           WHERE hierarchy_id = $7 OR id = $7 OR LOWER(email) = LOWER($8)`,
+          [masterId || null, masterName || null, brokerId || null, brokerName || null, subBrokerId || null, subBrokerName || null, req.params.id, (updated.email || '').trim().toLowerCase()]
+        ).catch(() => {});
+      }
+
+      clearDashboardCache();
+      tradingPlatformClient.clearCache();
+
       const passwordHash = await provisionHierarchyUser({
         entityId: updated.id,
         tenantId: updated.tenant_id,
@@ -3540,9 +3818,23 @@ async function startServer() {
         role: 'CLIENT',
         password: req.body.password || req.body.newPassword,
         phone: updated.phone,
-        isUpdate: true
+        isUpdate: true,
+        masterId,
+        masterName,
+        brokerId,
+        brokerName,
+        subBrokerId,
+        subBrokerName
       });
-      await notifyHierarchyChange('client', 'updated', updated, passwordHash);
+      await notifyHierarchyChange('client', 'UPSERT', {
+        ...updated,
+        masterId,
+        brokerId,
+        subBrokerId,
+        masterName,
+        brokerName,
+        subBrokerName
+      }, passwordHash);
       res.json(updated);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -4169,7 +4461,7 @@ async function startServer() {
       const forceRefresh = req.query.refresh === 'true' || req.query.nocache === '1';
       const scoped = await getCachedEndpointPayload(
         cacheKey,
-        2000,
+        3000,
         async () => {
           const positions = await activeTradingDataProvider.getPositions(tenantScope);
           return filterClientScopedItems(positions, req.user);
@@ -4240,7 +4532,7 @@ async function startServer() {
       const forceRefresh = req.query.refresh === 'true' || req.query.nocache === '1';
       const plans = await getCachedEndpointPayload(
         cacheKey,
-        2000,
+        3000,
         () => activeTradingDataProvider.getCommissionPlans(tenantScope),
         forceRefresh
       );
@@ -4259,7 +4551,7 @@ async function startServer() {
       const forceRefresh = req.query.refresh === 'true' || req.query.nocache === '1';
       const rules = await getCachedEndpointPayload(
         cacheKey,
-        2000,
+        3000,
         () => activeTradingDataProvider.getCommissionRules(tenantScope, planId),
         forceRefresh
       );
@@ -4331,7 +4623,7 @@ async function startServer() {
       const forceRefresh = req.query.refresh === 'true' || req.query.nocache === '1';
       const scoped = await getCachedEndpointPayload(
         cacheKey,
-        2000,
+        3000,
         async () => {
           const transactions = activeTradingDataProvider.getCommissionTransactions
             ? await activeTradingDataProvider.getCommissionTransactions(tenantScope)
@@ -4370,7 +4662,7 @@ async function startServer() {
       const forceRefresh = req.query.refresh === 'true' || req.query.nocache === '1';
       const payload = await getCachedEndpointPayload(
         cacheKey,
-        2000,
+        3000,
         async () => {
           const [profiles, events] = await Promise.all([
             activeTradingDataProvider.getRiskProfiles(tenantScope).catch(() => []),
@@ -4408,7 +4700,7 @@ async function startServer() {
       const forceRefresh = req.query.refresh === 'true' || req.query.nocache === '1';
       const profiles = await getCachedEndpointPayload(
         cacheKey,
-        2000,
+        3000,
         () => activeTradingDataProvider.getRiskProfiles(tenantScope),
         forceRefresh
       );
@@ -4426,7 +4718,7 @@ async function startServer() {
       const forceRefresh = req.query.refresh === 'true' || req.query.nocache === '1';
       const events = await getCachedEndpointPayload(
         cacheKey,
-        2000,
+        3000,
         () => activeTradingDataProvider.getRiskEvents(tenantScope),
         forceRefresh
       );
