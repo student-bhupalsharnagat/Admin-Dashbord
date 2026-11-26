@@ -69,6 +69,13 @@ export interface ITradingDataProvider {
   getBrokers(tenantId?: string, masterId?: string): Promise<Broker[]>;
   getSubBrokers(tenantId?: string, brokerId?: string): Promise<SubBroker[]>;
   getClients(tenantId?: string, subBrokerId?: string): Promise<Client[]>;
+  getHierarchyClients?(filters?: {
+    masterId?: string;
+    brokerId?: string;
+    subBrokerId?: string;
+    masterName?: string;
+    tenantId?: string;
+  }): Promise<any[]>;
   createMaster(data: Partial<Master>): Promise<Master>;
   createBroker(data: Partial<Broker>): Promise<Broker>;
   createSubBroker(data: Partial<SubBroker>): Promise<SubBroker>;
@@ -1461,6 +1468,37 @@ export class MockTradingDataProvider implements ITradingDataProvider {
     if (tenantId) result = result.filter(c => c.tenant_id === tenantId);
     if (subBrokerId) result = result.filter(c => c.sub_broker_id === subBrokerId);
     return result;
+  }
+
+  async getHierarchyClients(filters?: {
+    masterId?: string;
+    brokerId?: string;
+    subBrokerId?: string;
+    masterName?: string;
+    tenantId?: string;
+  }): Promise<any[]> {
+    let list = this.clients;
+    if (filters?.tenantId) list = list.filter(c => c.tenant_id === filters.tenantId);
+    if (filters?.masterId) list = list.filter(c => (c as any).master_id === filters.masterId || (c as any).masterId === filters.masterId);
+    if (filters?.masterName) list = list.filter(c => (c as any).master_name?.toLowerCase().includes(filters.masterName!.toLowerCase()) || (c as any).masterName?.toLowerCase().includes(filters.masterName!.toLowerCase()));
+    if (filters?.brokerId) list = list.filter(c => (c as any).broker_id === filters.brokerId || (c as any).brokerId === filters.brokerId);
+    if (filters?.subBrokerId) list = list.filter(c => c.sub_broker_id === filters.subBrokerId || (c as any).subBrokerId === filters.subBrokerId);
+    return list.map(c => ({
+      id: c.id,
+      userId: (c as any).userId || (c as any).user_id || c.id,
+      clientCode: c.client_code || c.id,
+      name: c.name,
+      email: c.email,
+      phone: c.phone || '',
+      status: c.status,
+      balance: c.wallet_balance || 0,
+      masterId: (c as any).master_id || (c as any).masterId || null,
+      masterName: (c as any).master_name || (c as any).masterName || null,
+      brokerId: (c as any).broker_id || (c as any).brokerId || null,
+      brokerName: (c as any).broker_name || (c as any).brokerName || null,
+      subBrokerId: c.sub_broker_id || (c as any).subBrokerId || null,
+      subBrokerName: c.sub_broker_name || (c as any).subBrokerName || null,
+    }));
   }
 
   async createMaster(data: Partial<Master>): Promise<Master> {

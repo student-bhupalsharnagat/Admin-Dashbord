@@ -324,6 +324,7 @@ async function startServer() {
     }
     next();
   };
+  const verifyInternalS2S = verifyS2S;
 
   // 1. Tenant Sync Route
   app.post(['/api/internal/v1/tenant/sync', '/api/internal/tenant/sync'], verifyS2S, (req, res) => {
@@ -460,6 +461,32 @@ async function startServer() {
       timestamp: new Date().toISOString()
     });
   });
+
+  // 10b. Authoritative S2S Hierarchy Clients Pull Endpoint
+  app.get(
+    ['/api/internal/v1/hierarchy/clients', '/api/internal/hierarchy/clients'],
+    verifyInternalS2S,
+    async (req: any, res: any) => {
+      try {
+        const { masterId, brokerId, subBrokerId, masterName, tenantId } = req.query as Record<string, string>;
+        const clients = await (activeTradingDataProvider as any).getHierarchyClients({
+          masterId,
+          brokerId,
+          subBrokerId,
+          masterName,
+          tenantId
+        });
+        res.status(200).json({
+          success: true,
+          clients,
+          total: clients.length
+        });
+      } catch (err: any) {
+        console.error('[GET /api/internal/v1/hierarchy/clients] Error:', err);
+        res.status(500).json({ success: false, error: err.message || 'Failed to retrieve hierarchy clients' });
+      }
+    }
+  );
 
   // 11. Hierarchy Synchronization Endpoint (S2S Inbound from User-Panel / Trading-Platform)
   app.post(['/api/internal/v1/hierarchy/sync', '/api/internal/hierarchy/sync'], verifyS2S, async (req, res) => {
@@ -3549,6 +3576,63 @@ async function startServer() {
           }
         }
       }
+
+      // Resolve hierarchy identifiers and names before client creation
+      let targetSubBrokerId = data.sub_broker_id || data.subBrokerId || null;
+      let targetSubBrokerName = data.sub_broker_name || data.subBrokerName || null;
+      let targetBrokerId = data.broker_id || data.brokerId || null;
+      let targetBrokerName = data.broker_name || data.brokerName || null;
+      let targetMasterId = data.master_id || data.masterId || null;
+      let targetMasterName = data.master_name || data.masterName || null;
+
+      if (targetSubBrokerId || targetSubBrokerName) {
+        const sbRes = await query<{ id: string; name: string; broker_id: string }>(
+          'SELECT id, name, broker_id FROM sub_brokers WHERE id = $1 OR name = $1 OR ($2::text IS NOT NULL AND (name ILIKE $2 OR id = $2)) LIMIT 1',
+          [targetSubBrokerId || '', targetSubBrokerName || null]
+        );
+        if (sbRes.rows[0]) {
+          targetSubBrokerId = sbRes.rows[0].id;
+          targetSubBrokerName = sbRes.rows[0].name;
+          if (!targetBrokerId) targetBrokerId = sbRes.rows[0].broker_id;
+        }
+      }
+
+      if (targetBrokerId || targetBrokerName) {
+        const bRes = await query<{ id: string; name: string; master_id: string }>(
+          'SELECT id, name, master_id FROM brokers WHERE id = $1 OR name = $1 OR ($2::text IS NOT NULL AND (name ILIKE $2 OR id = $2)) LIMIT 1',
+          [targetBrokerId || '', targetBrokerName || null]
+        );
+        if (bRes.rows[0]) {
+          targetBrokerId = bRes.rows[0].id;
+          targetBrokerName = bRes.rows[0].name;
+          if (!targetMasterId) targetMasterId = bRes.rows[0].master_id;
+        }
+      }
+
+      if (targetMasterId || targetMasterName) {
+        const mRes = await query<{ id: string; name: string }>(
+          'SELECT id, name FROM masters WHERE id = $1 OR name = $1 OR ($2::text IS NOT NULL AND (name ILIKE $2 OR id = $2)) LIMIT 1',
+          [targetMasterId || '', targetMasterName || null]
+        );
+        if (mRes.rows[0]) {
+          targetMasterId = mRes.rows[0].id;
+          targetMasterName = mRes.rows[0].name;
+        }
+      }
+
+      data.master_id = targetMasterId;
+      data.masterId = targetMasterId;
+      data.master_name = targetMasterName;
+      data.masterName = targetMasterName;
+      data.broker_id = targetBrokerId;
+      data.brokerId = targetBrokerId;
+      data.broker_name = targetBrokerName;
+      data.brokerName = targetBrokerName;
+      data.sub_broker_id = targetSubBrokerId;
+      data.subBrokerId = targetSubBrokerId;
+      data.sub_broker_name = targetSubBrokerName;
+      data.subBrokerName = targetSubBrokerName;
+
       const client = await activeTradingDataProvider.createClient(data);
       const masterId = data.masterId || data.master_id || (client as any).master_id || (client as any).masterId || null;
       const masterName = data.masterName || data.master_name || (client as any).master_name || (client as any).masterName || null;
@@ -3572,6 +3656,20 @@ async function startServer() {
         subBrokerId,
         subBrokerName
       });
+
+      // Persist hierarchy fields into PostgreSQL clients table
+      await query(
+        `UPDATE clients
+         SET master_id = COALESCE($1, master_id),
+             master_name = COALESCE($2, master_name),
+             broker_id = COALESCE($3, broker_id),
+             broker_name = COALESCE($4, broker_name),
+             sub_broker_id = COALESCE($5, sub_broker_id),
+             sub_broker_name = COALESCE($6, sub_broker_name),
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = $7 OR client_code = $7`,
+        [masterId, masterName, brokerId, brokerName, subBrokerId, subBrokerName, client.id]
+      ).catch(() => {});
 
       // Persist hierarchy fields into PostgreSQL users table
       await query(
@@ -3624,7 +3722,7 @@ async function startServer() {
   app.put(['/api/admin/clients/:id/hierarchy', '/api/clients/:id/hierarchy'], authenticate, requireRole(['SUPER_ADMIN', 'PLATFORM_OWNER', 'TENANT_ADMIN', 'MASTER', 'BROKER']), async (req, res) => {
     try {
       const { id } = req.params;
-      const { masterId, brokerId, subBrokerId } = req.body;
+      const { masterId, brokerId, subBrokerId, masterName: reqMasterName, brokerName: reqBrokerName, subBrokerName: reqSubBrokerName } = req.body;
       const user = req.user!;
 
       // Find the client
@@ -3645,20 +3743,20 @@ async function startServer() {
         }
       }
 
-      let resolvedMasterId = masterId || (client as any).master_id || (client as any).masterId || null;
+      let resolvedSubBrokerId = subBrokerId || (client as any).sub_broker_id || (client as any).subBrokerId || null;
+      let subBrokerName = reqSubBrokerName || (client as any).sub_broker_name || (client as any).subBrokerName || client.sub_broker_name || '';
       let resolvedBrokerId = brokerId || (client as any).broker_id || (client as any).brokerId || null;
-      let resolvedSubBrokerId = subBrokerId || client.sub_broker_id || null;
+      let brokerName = reqBrokerName || (client as any).broker_name || (client as any).brokerName || client.broker || '';
+      let resolvedMasterId = masterId || (client as any).master_id || (client as any).masterId || null;
+      let masterName = reqMasterName || (client as any).master_name || (client as any).masterName || client.master || '';
 
-      let masterName = (client as any).master_name || client.master || '';
-      let brokerName = (client as any).broker_name || client.broker || '';
-      let subBrokerName = client.sub_broker_name || (client as any).subBroker || '';
-
-      if (resolvedSubBrokerId) {
-        const sbRes = await query<{ name: string; broker_id: string }>(
-          'SELECT name, broker_id FROM sub_brokers WHERE id = $1 LIMIT 1',
-          [resolvedSubBrokerId]
+      if (resolvedSubBrokerId || subBrokerName) {
+        const sbRes = await query<{ id: string; name: string; broker_id: string }>(
+          'SELECT id, name, broker_id FROM sub_brokers WHERE id = $1 OR name = $1 OR ($2::text IS NOT NULL AND (name ILIKE $2 OR id = $2)) LIMIT 1',
+          [resolvedSubBrokerId || '', subBrokerName || null]
         );
         if (sbRes.rows[0]) {
+          resolvedSubBrokerId = sbRes.rows[0].id;
           subBrokerName = sbRes.rows[0].name;
           if (!resolvedBrokerId) {
             resolvedBrokerId = sbRes.rows[0].broker_id;
@@ -3666,12 +3764,13 @@ async function startServer() {
         }
       }
 
-      if (resolvedBrokerId) {
-        const bRes = await query<{ name: string; master_id: string }>(
-          'SELECT name, master_id FROM brokers WHERE id = $1 LIMIT 1',
-          [resolvedBrokerId]
+      if (resolvedBrokerId || brokerName) {
+        const bRes = await query<{ id: string; name: string; master_id: string }>(
+          'SELECT id, name, master_id FROM brokers WHERE id = $1 OR name = $1 OR ($2::text IS NOT NULL AND (name ILIKE $2 OR id = $2)) LIMIT 1',
+          [resolvedBrokerId || '', brokerName || null]
         );
         if (bRes.rows[0]) {
+          resolvedBrokerId = bRes.rows[0].id;
           brokerName = bRes.rows[0].name;
           if (!resolvedMasterId) {
             resolvedMasterId = bRes.rows[0].master_id;
@@ -3679,12 +3778,13 @@ async function startServer() {
         }
       }
 
-      if (resolvedMasterId) {
-        const mRes = await query<{ name: string }>(
-          'SELECT name FROM masters WHERE id = $1 LIMIT 1',
-          [resolvedMasterId]
+      if (resolvedMasterId || masterName) {
+        const mRes = await query<{ id: string; name: string }>(
+          'SELECT id, name FROM masters WHERE id = $1 OR name = $1 OR ($2::text IS NOT NULL AND (name ILIKE $2 OR id = $2)) LIMIT 1',
+          [resolvedMasterId || '', masterName || null]
         );
         if (mRes.rows[0]) {
+          resolvedMasterId = mRes.rows[0].id;
           masterName = mRes.rows[0].name;
         }
       }

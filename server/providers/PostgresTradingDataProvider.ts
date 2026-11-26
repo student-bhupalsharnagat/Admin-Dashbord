@@ -2263,35 +2263,80 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
 
   async createClient(data: Partial<Client>): Promise<Client> {
     const id = data.id || `CLT-${Date.now().toString().slice(-4)}`;
-    let subBrokerId: string | null = data.sub_broker_id === 'UNASSIGNED' || data.sub_broker_id === undefined ? null : data.sub_broker_id;
+    let subBrokerId: string | null = data.sub_broker_id === 'UNASSIGNED' || data.sub_broker_id === undefined
+      ? ((data as any).subBrokerId === 'UNASSIGNED' || (data as any).subBrokerId === undefined ? null : (data as any).subBrokerId)
+      : data.sub_broker_id;
     let tenantId = data.tenant_id;
-    let subBrokerName = data.sub_broker_name;
-    let parentBrokerName = (data as any).broker || (data as any).brokerName || (data as any).broker_name;
-    let parentMasterName = (data as any).master || (data as any).masterName || (data as any).master_name;
+    let subBrokerName = (data as any).sub_broker_name || (data as any).subBrokerName || (data as any).subBroker || null;
+    let brokerId: string | null = (data as any).broker_id || (data as any).brokerId || null;
+    let brokerName = (data as any).broker || (data as any).brokerName || (data as any).broker_name || null;
+    let masterId: string | null = (data as any).master_id || (data as any).masterId || null;
+    let masterName = (data as any).master || (data as any).masterName || (data as any).master_name || null;
 
-    if (subBrokerId) {
-      // Verify parent sub-broker and fetch hierarchy
+    // 1. Resolve parent hierarchy via sub-broker if provided (by ID or Name)
+    if (subBrokerId || subBrokerName) {
       const sbRes = await this.executeQuery(`
-        SELECT sb.tenant_id, sb.name, b.name as broker_name, m.name as master_name
+        SELECT sb.id, sb.tenant_id, sb.name, sb.broker_id, b.name as broker_name, b.master_id, m.name as master_name
         FROM sub_brokers sb
         LEFT JOIN brokers b ON sb.broker_id = b.id
         LEFT JOIN masters m ON b.master_id = m.id
-        WHERE sb.id = $1 OR sb.name = $1
-      `, [subBrokerId]);
+        WHERE sb.id = $1 OR sb.name = $1 OR ($2::text IS NOT NULL AND (sb.name ILIKE $2 OR sb.id = $2))
+        LIMIT 1
+      `, [subBrokerId || '', subBrokerName || null]);
       if (sbRes.rows.length > 0) {
-        tenantId = tenantId || sbRes.rows[0].tenant_id;
-        subBrokerName = sbRes.rows[0].name;
-        parentBrokerName = parentBrokerName || sbRes.rows[0].broker_name;
-        parentMasterName = parentMasterName || sbRes.rows[0].master_name;
+        const sb = sbRes.rows[0];
+        subBrokerId = sb.id;
+        subBrokerName = sb.name;
+        tenantId = tenantId || sb.tenant_id;
+        brokerId = brokerId || sb.broker_id;
+        brokerName = brokerName || sb.broker_name;
+        masterId = masterId || sb.master_id;
+        masterName = masterName || sb.master_name;
       } else {
-        subBrokerId = null;
-        subBrokerName = 'Unassigned';
-        tenantId = tenantId || 'TNT-001';
+        if (!subBrokerName) subBrokerName = subBrokerId ? 'Sub-Broker Admin' : 'Unassigned';
       }
-    } else {
-      tenantId = tenantId || 'TNT-001';
-      subBrokerName = 'Unassigned';
     }
+
+    // 2. Resolve parent hierarchy via broker if provided (by ID or Name)
+    if (brokerId || brokerName) {
+      const bRes = await this.executeQuery(`
+        SELECT b.id, b.tenant_id, b.name, b.master_id, m.name as master_name
+        FROM brokers b
+        LEFT JOIN masters m ON b.master_id = m.id
+        WHERE b.id = $1 OR b.name = $1 OR ($2::text IS NOT NULL AND (b.name ILIKE $2 OR b.id = $2))
+        LIMIT 1
+      `, [brokerId || '', brokerName || null]);
+      if (bRes.rows.length > 0) {
+        const b = bRes.rows[0];
+        brokerId = b.id;
+        brokerName = b.name;
+        tenantId = tenantId || b.tenant_id;
+        masterId = masterId || b.master_id;
+        masterName = masterName || b.master_name;
+      }
+    }
+
+    // 3. Resolve parent hierarchy via master if provided (by ID or Name)
+    if (masterId || masterName) {
+      const mRes = await this.executeQuery(`
+        SELECT m.id, m.tenant_id, m.name
+        FROM masters m
+        WHERE m.id = $1 OR m.name = $1 OR ($2::text IS NOT NULL AND (m.name ILIKE $2 OR m.id = $2))
+        LIMIT 1
+      `, [masterId || '', masterName || null]);
+      if (mRes.rows.length > 0) {
+        const m = mRes.rows[0];
+        masterId = m.id;
+        masterName = m.name;
+        tenantId = tenantId || m.tenant_id;
+      }
+    }
+
+    // Set clean hierarchy defaults
+    tenantId = tenantId || 'TNT-001';
+    subBrokerName = subBrokerName || (subBrokerId ? 'Sub-Broker Admin' : 'Unassigned');
+    brokerName = brokerName || 'Apex Broking';
+    masterName = masterName || 'Alpha Prime Master';
 
     const clientCode = data.client_code || `CLT${id.replace(/[^0-9]/g, '').slice(-3) || '999'}`;
 
@@ -2303,22 +2348,26 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
               ? parseFloat(String((data as any).initialBalance))
               : 0.00));
     const initialMargin = data.available_margin !== undefined ? parseFloat(String(data.available_margin)) : initialBalance;
-    const resolvedMasterName = (data as any).master || (data as any).masterName || (data as any).master_name || parentMasterName || 'Alpha Prime Master';
-    const resolvedBrokerName = (data as any).broker || (data as any).brokerName || (data as any).broker_name || parentBrokerName || 'Apex Broking';
+    const resolvedMasterName = masterName;
+    const resolvedBrokerName = brokerName;
     const resolvedStatus = (data.status || (data as any).account || 'ACTIVE').toString().toUpperCase() === 'ACTIVE' ? 'ACTIVE' : 'SUSPENDED';
     const resolvedKycStatus = (data.kyc_status || (data as any).kyc || 'APPROVED').toString().toUpperCase() === 'PENDING' ? 'PENDING' : 'APPROVED';
 
     const res = await this.executeQuery(`
       INSERT INTO clients (
-        id, tenant_id, sub_broker_id, sub_broker_name, client_code, name, email, phone,
-        status, kyc_status, balance, equity, margin_used, total_trades
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        id, tenant_id, sub_broker_id, sub_broker_name, broker_id, broker_name, master_id, master_name,
+        client_code, name, email, phone, status, kyc_status, balance, equity, margin_used, total_trades
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
       RETURNING *
     `, [
       id,
       tenantId,
       subBrokerId,
-      subBrokerName || (subBrokerId ? 'Sub-Broker Admin' : 'Unassigned'),
+      subBrokerName,
+      brokerId,
+      resolvedBrokerName,
+      masterId,
+      resolvedMasterName,
       clientCode,
       data.name || 'New Client',
       data.email || 'client@tradematrix.io',
@@ -2346,7 +2395,9 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       name: data.name || r.name,
       phone: data.phone || r.phone,
       email: data.email || r.email,
+      masterId,
       masterName: resolvedMasterName,
+      brokerId,
       brokerName: resolvedBrokerName,
       subBrokerId,
       subBrokerName
@@ -2375,10 +2426,18 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
       client_code: r.client_code,
       sub_broker_id: r.sub_broker_id,
       sub_broker_name: r.sub_broker_name,
+      broker_id: r.broker_id || brokerId,
       broker_name: resolvedBrokerName,
       broker: resolvedBrokerName,
+      master_id: r.master_id || masterId,
       master_name: resolvedMasterName,
       master: resolvedMasterName,
+      subBrokerId: r.sub_broker_id,
+      subBrokerName: r.sub_broker_name,
+      brokerId: r.broker_id || brokerId,
+      brokerName: resolvedBrokerName,
+      masterId: r.master_id || masterId,
+      masterName: resolvedMasterName,
       tenant_id: r.tenant_id,
       tenant_name: 'Alpha Prime Capital',
       name: r.name,
@@ -2410,12 +2469,61 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
 
   async updateClient(id: string, data: Partial<Client>): Promise<Client | null> {
     const existing = this.clientOverrides.get(id) || this.clientOverrides.get(id.replace('-', '')) || {};
-    const masterIdVal = (data as any).master_id !== undefined ? (data as any).master_id : (data as any).masterId;
-    const masterNameVal = (data as any).master_name || (data as any).masterName || (data as any).master;
-    const brokerIdVal = (data as any).broker_id !== undefined ? (data as any).broker_id : (data as any).brokerId;
-    const brokerNameVal = (data as any).broker_name || (data as any).brokerName || (data as any).broker;
-    const subBrokerIdVal = data.sub_broker_id !== undefined ? data.sub_broker_id : (data as any).subBrokerId;
-    const subBrokerNameVal = (data as any).sub_broker_name || (data as any).subBrokerName;
+    let masterIdVal = (data as any).master_id !== undefined ? (data as any).master_id : (data as any).masterId;
+    let masterNameVal = (data as any).master_name || (data as any).masterName || (data as any).master;
+    let brokerIdVal = (data as any).broker_id !== undefined ? (data as any).broker_id : (data as any).brokerId;
+    let brokerNameVal = (data as any).broker_name || (data as any).brokerName || (data as any).broker;
+    let subBrokerIdVal = data.sub_broker_id !== undefined ? data.sub_broker_id : (data as any).subBrokerId;
+    let subBrokerNameVal = (data as any).sub_broker_name || (data as any).subBrokerName;
+
+    // Resolve missing hierarchy names or IDs from database
+    if (subBrokerIdVal || subBrokerNameVal) {
+      const sbRes = await this.executeQuery(`
+        SELECT sb.id, sb.name, sb.broker_id, b.name as broker_name, b.master_id, m.name as master_name
+        FROM sub_brokers sb
+        LEFT JOIN brokers b ON sb.broker_id = b.id
+        LEFT JOIN masters m ON b.master_id = m.id
+        WHERE sb.id = $1 OR sb.name = $1 OR ($2::text IS NOT NULL AND (sb.name ILIKE $2 OR sb.id = $2))
+        LIMIT 1
+      `, [subBrokerIdVal || '', subBrokerNameVal || null]);
+      if (sbRes.rows[0]) {
+        if (!subBrokerIdVal) subBrokerIdVal = sbRes.rows[0].id;
+        if (!subBrokerNameVal) subBrokerNameVal = sbRes.rows[0].name;
+        if (!brokerIdVal) brokerIdVal = sbRes.rows[0].broker_id;
+        if (!brokerNameVal) brokerNameVal = sbRes.rows[0].broker_name;
+        if (!masterIdVal) masterIdVal = sbRes.rows[0].master_id;
+        if (!masterNameVal) masterNameVal = sbRes.rows[0].master_name;
+      }
+    }
+
+    if (brokerIdVal || brokerNameVal) {
+      const bRes = await this.executeQuery(`
+        SELECT b.id, b.name, b.master_id, m.name as master_name
+        FROM brokers b
+        LEFT JOIN masters m ON b.master_id = m.id
+        WHERE b.id = $1 OR b.name = $1 OR ($2::text IS NOT NULL AND (b.name ILIKE $2 OR b.id = $2))
+        LIMIT 1
+      `, [brokerIdVal || '', brokerNameVal || null]);
+      if (bRes.rows[0]) {
+        if (!brokerIdVal) brokerIdVal = bRes.rows[0].id;
+        if (!brokerNameVal) brokerNameVal = bRes.rows[0].name;
+        if (!masterIdVal) masterIdVal = bRes.rows[0].master_id;
+        if (!masterNameVal) masterNameVal = bRes.rows[0].master_name;
+      }
+    }
+
+    if (masterIdVal || masterNameVal) {
+      const mRes = await this.executeQuery(`
+        SELECT m.id, m.name
+        FROM masters m
+        WHERE m.id = $1 OR m.name = $1 OR ($2::text IS NOT NULL AND (m.name ILIKE $2 OR m.id = $2))
+        LIMIT 1
+      `, [masterIdVal || '', masterNameVal || null]);
+      if (mRes.rows[0]) {
+        if (!masterIdVal) masterIdVal = mRes.rows[0].id;
+        if (!masterNameVal) masterNameVal = mRes.rows[0].name;
+      }
+    }
 
     const updatedOverrides = {
       ...existing,
@@ -2442,15 +2550,21 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     if (data.status) { params.push(data.status); fields.push(`status = $${params.length}`); }
     if (subBrokerIdVal !== undefined) {
       params.push(subBrokerIdVal); fields.push(`sub_broker_id = $${params.length}`);
-      if (subBrokerNameVal) { params.push(subBrokerNameVal); fields.push(`sub_broker_name = $${params.length}`); }
+    }
+    if (subBrokerNameVal) {
+      params.push(subBrokerNameVal); fields.push(`sub_broker_name = $${params.length}`);
     }
     if (brokerIdVal !== undefined) {
       params.push(brokerIdVal); fields.push(`broker_id = $${params.length}`);
-      if (brokerNameVal) { params.push(brokerNameVal); fields.push(`broker_name = $${params.length}`); }
+    }
+    if (brokerNameVal) {
+      params.push(brokerNameVal); fields.push(`broker_name = $${params.length}`);
     }
     if (masterIdVal !== undefined) {
       params.push(masterIdVal); fields.push(`master_id = $${params.length}`);
-      if (masterNameVal) { params.push(masterNameVal); fields.push(`master_name = $${params.length}`); }
+    }
+    if (masterNameVal) {
+      params.push(masterNameVal); fields.push(`master_name = $${params.length}`);
     }
     if (data.wallet_balance !== undefined) { params.push(data.wallet_balance); fields.push(`balance = $${params.length}`); }
 
@@ -2463,6 +2577,154 @@ export class PostgresTradingDataProvider implements ITradingDataProvider {
     }
     const list = await this.getClients();
     return list.find(c => c.id === id || c.client_code === id || c.id === id.replace('-', '')) || null;
+  }
+
+  async getHierarchyClients(filters?: {
+    masterId?: string;
+    brokerId?: string;
+    subBrokerId?: string;
+    masterName?: string;
+    tenantId?: string;
+  }): Promise<any[]> {
+    const defaultTenants = new Set(['vertex-default', 'default', 'TNT-001', 'ALL', 'ALL_TENANTS', '']);
+    let sql = `
+      SELECT c.*, t.name as tenant_name,
+             COALESCE(c.sub_broker_name, sb.name) as parent_sub_broker_name,
+             COALESCE(c.broker_name, b.name) as parent_broker_name,
+             COALESCE(c.master_name, m.name) as parent_master_name,
+             COALESCE(c.sub_broker_id, sb.id) as resolved_sub_broker_id,
+             COALESCE(c.broker_id, sb.broker_id, b.id) as resolved_broker_id,
+             COALESCE(c.master_id, b.master_id, m.id) as resolved_master_id
+      FROM clients c
+      LEFT JOIN tenants t ON c.tenant_id = t.id
+      LEFT JOIN sub_brokers sb ON (c.sub_broker_id = sb.id OR (c.sub_broker_name IS NOT NULL AND LOWER(c.sub_broker_name) = LOWER(sb.name)))
+      LEFT JOIN brokers b ON (COALESCE(c.broker_id, sb.broker_id) = b.id OR (c.broker_name IS NOT NULL AND LOWER(c.broker_name) = LOWER(b.name)))
+      LEFT JOIN masters m ON (COALESCE(c.master_id, b.master_id) = m.id OR (c.master_name IS NOT NULL AND LOWER(c.master_name) = LOWER(m.name)))
+      WHERE 1=1
+    `;
+    const params: any[] = [];
+    const tenantId = filters?.tenantId;
+    if (tenantId && !defaultTenants.has(tenantId)) {
+      params.push(tenantId);
+      sql += ` AND c.tenant_id = $${params.length}`;
+    }
+
+    sql += ' ORDER BY c.created_at ASC';
+    const res = await this.executeQuery(sql, params).catch(() => ({ rows: [] }));
+
+    const dbClients = res.rows.map(r => {
+      const mId = r.master_id || r.resolved_master_id || null;
+      const mName = r.master_name || r.parent_master_name || 'Alpha Prime Master';
+      const bId = r.broker_id || r.resolved_broker_id || null;
+      const bName = r.broker_name || r.parent_broker_name || 'Apex Broking';
+      const sId = r.sub_broker_id || r.resolved_sub_broker_id || null;
+      const sName = r.sub_broker_name || r.parent_sub_broker_name || (sId ? 'Sub-Broker Admin' : 'Unassigned');
+      const rawBal = parseFloat(String(r.balance || '0').replace(/[^0-9.-]/g, '')) || 0;
+
+      return {
+        id: r.id,
+        userId: r.user_id || r.id,
+        clientCode: r.client_code || r.id,
+        name: r.name,
+        email: r.email,
+        phone: r.phone || '',
+        status: (r.status || 'ACTIVE').toUpperCase() === 'ACTIVE' ? 'ACTIVE' : 'SUSPENDED',
+        balance: rawBal,
+        wallet_balance: rawBal,
+        available_margin: parseFloat(r.equity || '0'),
+        masterId: mId,
+        masterName: mName,
+        brokerId: bId,
+        brokerName: bName,
+        subBrokerId: sId,
+        subBrokerName: sName,
+        master_id: mId,
+        master_name: mName,
+        broker_id: bId,
+        broker_name: bName,
+        sub_broker_id: sId,
+        sub_broker_name: sName,
+        client_code: r.client_code || r.id,
+        tenantId: r.tenant_id,
+        tenant_id: r.tenant_id,
+      };
+    });
+
+    // Actively merge with live Trading Platform wallet balances
+    try {
+      const liveRes = await tradingPlatformClient.getLiveClients(tenantId);
+      const remoteClients = Array.isArray(liveRes.data?.clients)
+        ? liveRes.data.clients
+        : (Array.isArray(liveRes.data?.items) ? liveRes.data.items : (Array.isArray(liveRes.data) ? liveRes.data : []));
+
+      if (liveRes.success && remoteClients && remoteClients.length > 0) {
+        const remoteClientMap = new Map<string, any>();
+        for (const rc of remoteClients) {
+          const keys = [rc.id, rc.userId, rc.user_id, rc.clientCode, rc.client_code, rc.email].filter(Boolean);
+          for (const k of keys) {
+            remoteClientMap.set(String(k).toLowerCase().trim(), rc);
+          }
+        }
+
+        for (const c of dbClients) {
+          const cId = String(c.id || '').toLowerCase().trim();
+          const cCode = String(c.clientCode || '').toLowerCase().trim();
+          const cEmail = String(c.email || '').toLowerCase().trim();
+          const rc = remoteClientMap.get(cId) || (cCode && remoteClientMap.get(cCode)) || (cEmail && remoteClientMap.get(cEmail));
+          if (rc) {
+            const rawLiveBal = rc.balance ?? rc.availableBalance ?? rc.available_balance ?? rc.walletBalance ?? rc.wallet_balance;
+            if (rawLiveBal !== undefined && rawLiveBal !== null && rawLiveBal !== '') {
+              const liveBal = parseCleanNumber(rawLiveBal);
+              c.balance = liveBal;
+              c.wallet_balance = liveBal;
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+      console.warn('[getHierarchyClients] Live balance fetch notice:', err?.message || err);
+    }
+
+    // Apply hierarchy filters
+    let filtered = dbClients;
+    const filterMasterId = filters?.masterId ? String(filters.masterId).toLowerCase().trim() : '';
+    const filterMasterName = filters?.masterName ? String(filters.masterName).toLowerCase().trim() : '';
+    const filterBrokerId = filters?.brokerId ? String(filters.brokerId).toLowerCase().trim() : '';
+    const filterSubBrokerId = filters?.subBrokerId ? String(filters.subBrokerId).toLowerCase().trim() : '';
+
+    if (filterMasterId) {
+      filtered = filtered.filter(c => {
+        const mId = String(c.masterId || '').toLowerCase().trim();
+        const mName = String(c.masterName || '').toLowerCase().trim();
+        return mId === filterMasterId || mName === filterMasterId || (c.id && c.id.toLowerCase() === filterMasterId);
+      });
+    }
+
+    if (filterMasterName) {
+      filtered = filtered.filter(c => {
+        const mName = String(c.masterName || '').toLowerCase().trim();
+        const mId = String(c.masterId || '').toLowerCase().trim();
+        return mName.includes(filterMasterName) || mName === filterMasterName || mId === filterMasterName;
+      });
+    }
+
+    if (filterBrokerId) {
+      filtered = filtered.filter(c => {
+        const bId = String(c.brokerId || '').toLowerCase().trim();
+        const bName = String(c.brokerName || '').toLowerCase().trim();
+        return bId === filterBrokerId || bName === filterBrokerId || (c.id && c.id.toLowerCase() === filterBrokerId);
+      });
+    }
+
+    if (filterSubBrokerId) {
+      filtered = filtered.filter(c => {
+        const sId = String(c.subBrokerId || '').toLowerCase().trim();
+        const sName = String(c.subBrokerName || '').toLowerCase().trim();
+        return sId === filterSubBrokerId || sName === filterSubBrokerId || (c.id && c.id.toLowerCase() === filterSubBrokerId);
+      });
+    }
+
+    return filtered;
   }
 
   async deleteClient(id: string): Promise<{ success: boolean; error?: string }> {
